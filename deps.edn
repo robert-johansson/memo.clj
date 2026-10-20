@@ -5,7 +5,7 @@
         ;; GenGDT's (GenGDT depends on both projects and tools.deps resolves one
         ;; gen.clj, so move the two pins together). :dev uses the working copy.
         gen.clj/gen.clj {:git/url "file:///Users/robert/code/gen.clj"
-                         :git/sha "c152f727ef3aab23906a887c3605fc25587b8080"}}
+                         :git/sha "f646e97080cd6a505a835919fc4d31562c20f430"}}
 
  :aliases
  {;; clojure -X:test          every test
