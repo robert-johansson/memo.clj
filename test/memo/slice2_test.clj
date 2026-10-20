@@ -173,15 +173,7 @@
 (def fixture (ts/fixture "slice2.edn"))
 
 (deftest results-match-python-memo
-  (doseq [{:keys [model args shape value]} (:cases fixture)]
-    (testing (str (name model) " " args)
-      (let [f @(ns-resolve 'memo.slice2-test (symbol (name model)))
-            result (try (apply f args) (catch Exception e e))]
-        (if (instance? Exception result)
-          (is false (str "threw: " (ex-message result)))
-          (do (is (= shape (array/shape result)))
-              (is (ts/close? value (ts/host result))
-                  (str "python " (pr-str value) "\nmemo.clj " (pr-str (ts/host result))))))))))
+  (ts/check-cases 'memo.slice2-test fixture))
 
 (def error-forms
   {:obs-unmodeled

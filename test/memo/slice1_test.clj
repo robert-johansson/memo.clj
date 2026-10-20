@@ -98,15 +98,7 @@
 
 (deftest results-match-python-memo
   (is (= "711e4cdde9cb1764815c17a0b3204122bc3873d3" (get-in fixture [:oracle :commit])))
-  (doseq [{:keys [model args shape value]} (:cases fixture)]
-    (testing (str (name model) " " args)
-      (let [f @(ns-resolve 'memo.slice1-test (symbol (name model)))
-            result (try (apply f args) (catch Exception e e))]
-        (if (instance? Exception result)
-          (is false (str "threw: " (ex-message result)))
-          (do (is (= shape (array/shape result)))
-              (is (ts/close? value (ts/host result))
-                  (str "python " (pr-str value) "\nmemo.clj " (pr-str (ts/host result))))))))))
+  (ts/check-cases 'memo.slice1-test fixture))
 
 (def error-forms
   {:return-uncertain

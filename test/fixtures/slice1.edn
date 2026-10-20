@@ -76,4 +76,5 @@
  :name-conflict "Name conflict"
  :other-agent-unknown "Unknown choice bob.m"}
  :runtime-errors {}
- :grads []}
+ :grads []
+ :ledger []}

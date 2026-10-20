@@ -356,14 +356,29 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
   - `stack`, for several returns.
 
   All are in gen.array's v1 surface.
-- **The FFI.** Host functions of scalars, such as `(denotes u n)`, are
-  tabulated over the finite domains once per value of their static
-  parameters, and cached, as memo-clj does.
-  - A host function of a differentiable parameter needs a gen.array
-    expression, which is traced, or a `custom-vjp`. Otherwise its gradient is
-    zero, and that is a loud error, not a silent zero (proposed). Python
-    memo gives exactly that silent zero, for a host call whose arguments
-    are all parameters and for a call of a memo without axes (§2.4).
+- **Host functions** (built in slice 4; proposed). A host function, such as
+  `(denotes u r)`, is a Clojure function of scalars, as Python memo's are
+  jitted functions of scalars.
+  - **By default it is tabulated:** called on host numbers at every element
+    of its dynamic arguments (its static ones passed whole), which is
+    Python memo's vmap. Any Clojure function works, `bit-and` and `if`
+    included. Caching the table per value of the static arguments, as
+    memo-clj did, is not built yet.
+  - **A function marked `^:memo/vectorized`** (written with gen.array's
+    operators, elementwise, branching with `where`; or a `custom-vjp`) is
+    called once on whole arrays, and so differentiated.
+  - **A value being differentiated that reaches an unmarked function is a
+    loud error.** Python memo gives a silent zero gradient for a host call
+    whose arguments are all parameters (§2.4).
+  - **A memo without axes,** which can only be called this way, is called
+    directly, so differentiated, and only when the path conditions around
+    the call hold, as a memo call is. Python memo gives its call a zero
+    gradient, and a recursive one never terminates.
+  - **Keyword arguments** reach the function as a trailing map.
+  - gen.array's batch tracer (vmap) would run a vectorized function per
+    element safely, but it does not compose with gradients yet: a
+    differentiated parameter in a batched run fails ("arrays from different
+    backends (:batch and :tape)").
 - **Parameters:**
   - *Path-condition* parameters (recursion depth, `(if (= t 0) …)`) must be
     host values at call time.
@@ -564,7 +579,9 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
   the correct answer derived by hand or by brute-force enumeration, and the
   upstream issue once filed. A disagreement found by the parity suite or by
   fuzzing goes into the ledger or is fixed in memo.clj; it is never
-  accepted silently.
+  accepted silently. (Since slice 4, a fixture's `:ledger` entries record
+  Python memo's value and the correct one, from a twin that Python memo
+  computes correctly, and the tests require the correct one.)
 - **Comparing tables.** memo returns size-1 axes where a return does not
   depend on an axis (§2.4), so results are broadcast to their declared
   shape before comparison.

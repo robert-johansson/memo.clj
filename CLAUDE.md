@@ -77,3 +77,7 @@ Java binding).
    and compare with `close?` (float32 aware). Never call `array/item` inside a
    function being differentiated: it reads the primal and drops the gradient.
 7. **A test must be able to fail.** Check new tests against a planted bug.
+8. **Host functions** are tabulated on host numbers unless marked
+   `^:memo/vectorized` (gen.array operators, elementwise); only those are
+   differentiated, and an unmarked one given a differentiated value is a
+   loud error (DESIGN.md §5).

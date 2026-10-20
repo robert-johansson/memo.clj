@@ -25,6 +25,21 @@
 
 (def unary-ops #{:exp :abs :log :uadd :neg :inv})
 
+(defn assign-inline-ids
+  "The AST with each inline escape hatch #{form} numbered (:idx in place of
+  :form), in a fixed order, and the forms: [ast forms]."
+  [ast]
+  (let [forms (atom [])
+        ast' (walk/postwalk
+              (fn [x]
+                (if (and (map? x) (= :inline (:node x)) (contains? x :form))
+                  (let [idx (count @forms)]
+                    (swap! forms conj (:form x))
+                    (-> x (dissoc :form) (assoc :idx idx)))
+                  x))
+              ast)]
+    [ast' @forms]))
+
 (defn collect
   "External references of an AST: {:ffi-names #{} :memo-names #{} :domain-names #{}}."
   [ast]

@@ -32,18 +32,24 @@
      :guards [s…] :dims [d…] :domains [dom…]}
         the memo f's table (its return k, when it has several), with its axes
         on the dims given; called only when every guard (a path condition)
-        is true, and zeros otherwise"
+        is true, and zeros otherwise
+    {:i :ffi :out s :name f :args [s…] :statics [bool…]
+     :kwargs [[k s static?]…] :guards [s…]}
+        the host function f, of scalars, at every element of its dynamic
+        arguments (the static ones passed whole), as Python memo's vmap
+    {:i :inline :out s :idx k}                 the k-th #{…} form's value"
   (:require [clojure.string :as str]))
 
 (def kinds
   #{:const :param :domain :ones :op :where :sum :max :nan-to-num :posterior-align
-    :swap-dims :alias :call-memo})
+    :swap-dims :alias :call-memo :ffi :inline})
 
 (defn inputs
   "The symbols an instruction reads."
   [instr]
   (case (:i instr)
-    (:const :param :domain :ones) []
+    (:const :param :domain :ones :inline) []
+    :ffi (concat (:args instr) (map second (:kwargs instr)) (:guards instr))
     (:op :where) (:args instr)
     (:sum :max :nan-to-num :posterior-align :swap-dims :alias) [(:arg instr)]
     :call-memo (concat (:args instr) (map second (:kwargs instr)) (:guards instr))))

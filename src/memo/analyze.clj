@@ -378,6 +378,28 @@
       :known (every? :known chs)
       :deps (set (map (fn [[_ sw si]] [sw si]) ids))}]))
 
+(defn- eval-ffi
+  "(f args...): the host function f at every element of its dynamic
+  arguments. Known when all its arguments are; static when all are static."
+  [state {:keys [name args kwargs]}]
+  (let [[state arg-vals] (reduce (fn [[st acc] a] (let [[st v] (eval-expr st a)] [st (conj acc v)]))
+                                 [state []] args)
+        [state kw-vals] (reduce (fn [[st acc] [k a]]
+                                  (let [[st v] (eval-expr st a)] [st (conj acc [k v (:static a)])]))
+                                [state []] kwargs)
+        vals (into arg-vals (map second kw-vals))
+        [state out] (fresh state (str "ffi_" name))]
+    [(emit state {:i :ffi :out out :name name
+                  :args (mapv :tag arg-vals) :statics (mapv :static args)
+                  :kwargs (mapv (fn [[k v static]] [k (:tag v) static]) kw-vals)
+                  :guards (:path-conds state)})
+     {:tag out :known (every? :known vals) :deps (reduce into #{} (map :deps vals))}]))
+
+(defn- eval-inline [state {:keys [idx]}]
+  (let [[state out] (fresh state "inline")]
+    [(emit state {:i :inline :out out :idx idx})
+     {:tag out :known true :deps #{}}]))
+
 (defn eval-expr [state e]
   (case (:node e)
     :lit (eval-lit state e)
@@ -385,12 +407,12 @@
     :op (eval-op state e)
     :with (eval-with state e)
     :expect (eval-expect state e)
-    :ffi (unsupported "A host function call" (:loc e))
+    :ffi (eval-ffi state e)
     :memo (eval-memo-call state e)
     :entropy (unsupported "(H ...)" (:loc e))
     :kl (unsupported "(KL ...)" (:loc e))
     :imagine (unsupported "(imagine ...)" (:loc e))
-    :inline (unsupported "The inline escape hatch #{...}" (:loc e))
+    :inline (eval-inline state e)
     :predict (unsupported "(Predict ...)" (:loc e))
     :util (unsupported "(EU ...)" (:loc e))
     (err/raise (str "Unknown expression node " (:node e)) {:user false :loc (:loc e)})))

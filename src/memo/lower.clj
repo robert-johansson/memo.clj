@@ -20,6 +20,7 @@
     entropies."
   (:refer-clojure :exclude [+ - * / < > <= >= == abs])
   (:require [gen.array :as array :refer [+ - * / < > <= >= == exp log abs where]]
+            [gen.array.tape :as tape]
             [memo.errors :as err]))
 
 ;; -----------------------------------------------------------------------------
@@ -186,6 +187,108 @@
     (place table dims)))
 
 ;; -----------------------------------------------------------------------------
+;; host functions
+
+(defn- broadcast-shape
+  "The NumPy broadcast of shapes (right-aligned)."
+  [shapes]
+  (let [r (reduce max 0 (map count shapes))]
+    (if (zero? r)
+      []
+      (apply mapv (fn [& ds]
+                    (let [big (distinct (remove #(= 1 %) ds))]
+                      (when (clojure.core/> (count big) 1)
+                        (err/raise (str "Arguments of a host function do not broadcast: "
+                                        (pr-str shapes)) {:user false}))
+                      (or (first big) 1)))
+             (map #(into (vec (repeat (clojure.core/- r (count %)) 1)) %) shapes)))))
+
+(defn- elements
+  "x's values at every element of shape, on the host, in row-major order."
+  [x shape]
+  (if (empty? shape)
+    [(array/item x)]
+    (let [x (if (array/host? x) (array/array x) x)]
+      (vec (flatten (array/->clj (array/broadcast-to (pad x (count shape)) shape)))))))
+
+(defn- not-scalar [name]
+  (err/raise (str "The function " name "(...) is not scalar-in-scalar-out. memo can "
+                  "only handle host functions that take scalars as input and return "
+                  "a single scalar as output.")))
+
+(defn- scalar [name r]
+  (cond
+    (or (number? r) (boolean? r)) r
+    (and (array/array? r) (empty? (array/shape r))) (array/item r)
+    :else (not-scalar name)))
+
+(defn- tabulate
+  "f at every element of its dynamic arguments, on the host (Python memo's
+  vmap of a function of scalars): any Clojure function works, and none is
+  differentiated."
+  [name f pos statics kwargs]
+  (let [slots (concat (map vector pos statics) (map (fn [[_ v s]] [v s]) kwargs))
+        dyn (keep (fn [[v s]] (when-not s v)) slots)
+        shape (broadcast-shape (map array/shape dyn))
+        cols (mapv #(elements % shape) dyn)
+        n (reduce clojure.core/* 1 shape)
+        call (fn [i]
+               (let [vals (first (reduce (fn [[out d] [v s]]
+                                           (if s
+                                             [(conj out v) d]
+                                             [(conj out (nth (nth cols d) i)) (inc d)]))
+                                         [[] 0] slots))
+                     args (subvec vals 0 (count pos))
+                     kw (zipmap (map (comp keyword first) kwargs) (subvec vals (count pos)))]
+                 (scalar name (apply f (cond-> args (seq kwargs) (conj kw))))))]
+    (if (empty? shape)
+      (call 0)
+      (array/reshape (array/array (mapv call (range n))) shape))))
+
+(defn- host-call
+  "The :ffi instruction. A function marked :memo/vectorized (written with
+  gen.array's operators, elementwise) is called once on whole arrays, and so
+  differentiated; any other is tabulated on the host, and a value being
+  differentiated reaching it is a loud error (Python memo gives a silent zero
+  gradient there). A memo called this way (one without axes) is called
+  directly, under its path conditions, as a memo call is."
+  [{:keys [fns resolve-memo]} env {:keys [name args statics kwargs guards]}]
+  (let [v (get fns name)
+        f (if v @v (resolve-memo name))
+        pos (mapv #(get env %) args)
+        kws (mapv (fn [[k s static]] [k (get env s) static]) kwargs)
+        kw-map (zipmap (map (comp keyword first) kws) (map second kws))
+        direct #(apply f (cond-> pos (seq kws) (conj kw-map)))
+        vals (concat pos (map second kws))
+        dyn-shape (broadcast-shape (map array/shape (concat (keep (fn [[x s]] (when-not s x))
+                                                                  (map vector pos statics))
+                                                            (keep (fn [[_ x s]] (when-not s x)) kws))))]
+    (cond
+      (and (:memo/call (meta f)) (every? true? statics) (every? #(nth % 2) kws))
+      (if (every? #(array/truthy? (get env %)) guards)
+        (direct)
+        (array/zeros dyn-shape))
+
+      (or (:memo/vectorized (meta v)) (:memo/vectorized (meta f)))
+      ;; elementwise: its result has at most the arguments' extent
+      (let [r (direct)
+            rs (array/shape r)]
+        (when-not (and (clojure.core/<= (count rs) (count dyn-shape))
+                       (every? true? (map #(or (= 1 %1) (= %1 %2)) (rseq rs) (rseq dyn-shape))))
+          (not-scalar name))
+        r)
+
+      (some tape/tracked? vals)
+      (err/raise (str "Cannot differentiate through the host function " name)
+                 {:hint (str "Its arguments depend on a parameter being differentiated, and "
+                             name " runs on host numbers. Write it with gen.array's operators "
+                             "(branching with where) and mark it ^:memo/vectorized, or give it "
+                             "a gradient with gen.array/custom-vjp and mark that. (Python memo "
+                             "gives a silent zero gradient here.)")})
+
+      :else (tabulate name f pos statics kws))))
+
+;; -----------------------------------------------------------------------------
 ;; programs
 
 (defn- step [ctx env instr]
@@ -205,7 +308,9 @@
              :swap-dims (let [{:keys [d1 d2]} instr]
                           (swap-axes (pad (arg (:arg instr)) (inc (max d1 d2))) (axis d1) (axis d2)))
              :alias (arg (:arg instr))
-             :call-memo (call-memo (:resolve-memo ctx) env instr)))))
+             :call-memo (call-memo (:resolve-memo ctx) env instr)
+             :ffi (host-call ctx env instr)
+             :inline (apply (nth (:inlines ctx) (:idx instr)) (map env (:param-order ctx)))))))
 
 (defn- table
   "A result value as the table over the memo's axes: the axes in declaration

@@ -79,4 +79,5 @@
  :no-thinks-err "Unknown syntactic construct `thinks`"
  :no-knows-err "Unknown syntactic construct `knows`"}
  :runtime-errors {}
- :grads []}
+ :grads []
+ :ledger []}

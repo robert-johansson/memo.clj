@@ -113,17 +113,8 @@
 
 (def fixture (ts/fixture "slice3.edn"))
 
-(defn- model [k] @(ns-resolve 'memo.slice3-test (symbol (name k))))
-
 (deftest results-match-python-memo
-  (doseq [{:keys [model args shape value] :as c} (:cases fixture)]
-    (testing (str (name model) " " args)
-      (let [result (try (apply (memo.slice3-test/model model) args) (catch Exception e e))]
-        (if (instance? Exception result)
-          (is false (str "threw: " (ex-message result)))
-          (do (is (= shape (array/shape result)))
-              (is (ts/close? value (ts/host result))
-                  (str "python " (pr-str value) "\nmemo.clj " (pr-str (ts/host result))))))))))
+  (ts/check-cases 'memo.slice3-test fixture))
 
 (def error-forms
   {:call-not-static
@@ -158,23 +149,12 @@
 (deftest runtime-errors-match-python-memo
   (doseq [[k message] (:runtime-errors fixture)]
     (testing (name k)
-      (let [e (try ((model k)) nil (catch clojure.lang.ExceptionInfo e e))]
+      (let [e (try (@(ns-resolve 'memo.slice3-test (symbol (name k)))) nil (catch clojure.lang.ExceptionInfo e e))]
         (is (err/memo-error? e) "compiles, and fails when called")
         (is (= (get runtime-messages k message) (some-> e ex-message)))))))
 
 (deftest gradients-match-jax
-  (doseq [{:keys [model args weights value]} (:grads fixture)]
-    (testing (str (name model) " " args)
-      (let [f (memo.slice3-test/model model)
-            w (array/array weights)
-            g ((array/grad (fn [a0] (array/sum (array/* w (apply f a0 (rest args))))))
-               (first args))]
-        ;; jax.grad computes in float32. Its NaN (exp of alpha times the log
-        ;; of a zero probability; DESIGN.md §2.4) is matched, not repaired.
-        (is (if (Double/isNaN value)
-              (Double/isNaN (double (ts/host g)))
-              (< (Math/abs (- value (ts/host g))) (+ 1e-5 (* 1e-4 (Math/abs value)))))
-            (str "jax " value " memo.clj " (ts/host g)))))))
+  (ts/check-grads 'memo.slice3-test fixture))
 
 (deftest calls
   (testing "keyword arguments, and a call that gives one both ways"

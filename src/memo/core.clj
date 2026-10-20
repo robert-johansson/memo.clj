@@ -79,16 +79,22 @@
                                " to be a defmemo, defined by the time it is called.")})))))
 
 (defn make-memo
-  "Analyze and lower a parsed memo; the callable model. Called by defmemo."
-  [{:keys [name ns parsed domains defaults opts]}]
+  "Analyze and lower a parsed memo; the callable model. Called by defmemo.
+  fns maps each host function's name to its var (nil for the memo itself,
+  resolved when called); inlines are the #{...} forms as functions of the
+  parameters."
+  [{:keys [name ns parsed domains defaults opts fns inlines]}]
   (let [domain-values (into {} (map (fn [[k d]] [k (domains/values d)])) domains)
         compiled (analyze/analyze parsed domain-values opts)
         problems (ir/check compiled)
         _ (when (seq problems)
             (err/raise (str "memo.clj built an ill-formed program for " name)
                        {:user false :hint (str/join "; " problems)}))
-        run (lower/program compiled {:resolve-memo (memo-resolver ns)})
         params (:params parsed)
+        run (lower/program compiled {:resolve-memo (memo-resolver ns)
+                                     :fns fns
+                                     :inlines inlines
+                                     :param-order (mapv :name params)})
         call (fn [args kwargs] (run (bind-params name params defaults args kwargs)))]
     (with-meta
       (fn [& args]
@@ -132,7 +138,21 @@
         [axes params & forms] body
         parsed (parse/parse-defmemo mname axes params (vec forms)
                                     {:resolve-member (member-resolver *ns*)})
-        domain-syms (sort (into (:domain-names (ast/collect parsed)) (map second axes)))
+        [parsed inline-forms] (ast/assign-inline-ids parsed)
+        refs (ast/collect parsed)
+        domain-syms (sort (into (:domain-names refs) (map second axes)))
+        param-syms (mapv :name (:params parsed))
+        fn-ref (fn [f]
+                 (let [v (resolve f)]
+                   (cond
+                     (var? v) (list 'var (symbol (str (.ns ^clojure.lang.Var v))
+                                                 (str (.sym ^clojure.lang.Var v))))
+                     (= f mname) nil
+                     :else (err/raise (str "Unknown function " f)
+                                      {:hint (str "Host functions must be defined before the "
+                                                  "defmemo that calls them. Or should this be "
+                                                  "a memo call, (" f " [axes ...] args ...)?")
+                                       :loc {:name mname}}))))
         defaults (into {} (keep (fn [p]
                                   (when (some? (:default p))
                                     [(list 'quote (:name p)) (:default p)])))
@@ -143,7 +163,9 @@
                    :parsed '~parsed
                    :opts '~opts
                    :defaults ~defaults
-                   :domains ~(into {} (map (fn [d] [(list 'quote d) d])) domain-syms)}))))
+                   :domains ~(into {} (map (fn [d] [(list 'quote d) d])) domain-syms)
+                   :fns ~(into {} (map (fn [f] [(list 'quote f) (fn-ref f)])) (:ffi-names refs))
+                   :inlines ~(mapv (fn [form] `(fn [~@param-syms] ~form)) inline-forms)}))))
 
 (defn program
   "A memo's compiled IR program, as text (Python memo's debug_print_compiled)."
