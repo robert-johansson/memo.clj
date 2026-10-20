@@ -35,10 +35,14 @@
     :else false))
 
 (defn host
-  "A result read on the host: a number, or nested vectors."
+  "A result read on the host: a number, or nested vectors, with booleans as
+  1.0 and 0.0 (as the fixtures record Python memo's bool results)."
   [x]
-  (let [v (array/->clj x)]
-    (if (boolean? v) (if v 1.0 0.0) v)))
+  (let [num (fn num [v]
+              (cond (boolean? v) (if v 1.0 0.0)
+                    (sequential? v) (mapv num v)
+                    :else v))]
+    (num (array/->clj x))))
 
 (defn compile-error
   "The memo error from evaluating form (a defmemo) in namespace ns, or nil

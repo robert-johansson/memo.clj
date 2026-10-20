@@ -101,10 +101,12 @@
   (doseq [{:keys [model args shape value]} (:cases fixture)]
     (testing (str (name model) " " args)
       (let [f @(ns-resolve 'memo.slice1-test (symbol (name model)))
-            result (apply f args)]
-        (is (= shape (array/shape result)))
-        (is (ts/close? value (ts/host result))
-            (str "python " (pr-str value) "\nmemo.clj " (pr-str (ts/host result))))))))
+            result (try (apply f args) (catch Exception e e))]
+        (if (instance? Exception result)
+          (is false (str "threw: " (ex-message result)))
+          (do (is (= shape (array/shape result)))
+              (is (ts/close? value (ts/host result))
+                  (str "python " (pr-str value) "\nmemo.clj " (pr-str (ts/host result))))))))))
 
 (def error-forms
   {:return-uncertain
@@ -167,7 +169,7 @@
     (is (re-find #"not supported in memo.clj yet"
                  (ex-message (ts/compile-error 'memo.slice1-test
                                                '(defmemo later [] []
-                                                  (alice :thinks (bob :chooses [n N] :uniformly))
+                                                  (alice :snapshots-self-as past-alice)
                                                   (return 1)))))))
   (testing "a parameter must be a scalar"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"was not a numeric scalar"

@@ -55,6 +55,46 @@
   (vec (distinct (keep (fn [[_ c]] (when-not (:known c) (:idx c)))
                        (:choices (fr/get-frame state))))))
 
+(defn- deps->dims
+  "The dims, in frame frm, of the choices a value depends on."
+  [frm deps]
+  (set (keep #(get-in frm [:choices % :idx]) deps)))
+
+(defn- read-ll
+  "The current frame's belief array, for a computation that reads it. An
+  observation that scrambled it (eval-show) makes that a compile error:
+  Python memo crashes there, with a shape error."
+  [state loc]
+  (let [frm (fr/get-frame state)]
+    (when-let [{:keys [source target]} (:scrambled frm)]
+      (err/raise "Observation against an already-used value"
+                 (assoc (frame-err-opts state loc)
+                        :hint (str (:name frm) "'s beliefs already varied with " source
+                                   " when " (:name frm) " observed " target " to be it: "
+                                   "memo represents an observed value by sharing its axis, "
+                                   "and one axis cannot carry two of " (:name frm)
+                                   "'s beliefs, so they are scrambled from there on. "
+                                   "Condition on the equality instead: (" (:name frm)
+                                   " :observes-that (= " target " " source ")). (Python memo "
+                                   "fails here with a shape error.)"))))
+    (:ll frm)))
+
+(defn- repoint
+  "The state with every choice in the frame tree whose value is the symbol
+  old given the value new instead. An observation does this to the observed
+  choice: the frames that share its value (the observer's, the observed
+  agent's, the knows-copies made earlier) see the observed value from here
+  on, as Python memo's rebinding makes them. Copies made by snapshots and
+  imagined worlds have values of their own, so they never share it."
+  [state old new]
+  (letfn [(walk [f]
+            (-> f
+                (update :choices #(reduce-kv (fn [acc k ch]
+                                               (assoc acc k (if (= old (:tag ch)) (assoc ch :tag new) ch)))
+                                             {} %))
+                (update :children #(reduce-kv (fn [acc k c] (assoc acc k (walk c))) {} %))))]
+    (update state :root walk)))
+
 ;; -----------------------------------------------------------------------------
 ;; expressions
 
@@ -170,15 +210,16 @@
   re-indexed by x, instead of the comparison over both dims (core.py's
   EPosterior). Required, not an optimization: some models do not fit in
   memory without it."
-  [state {:keys [query var]}]
+  [state {:keys [query var loc]}]
   (let [frm (fr/get-frame state)
+        ll (read-ll state loc)
         var-idxs (set (map #(get-in frm [:choices % :idx]) var))
         marg-dims (vec (distinct (keep (fn [[_ c]]
                                          (when-not (or (:known c) (var-idxs (:idx c)))
                                            (:idx c)))
                                        (:choices frm))))
         [state out] (fresh state "posterior")
-        state (emit state {:i :sum :out out :arg (:ll frm) :dims marg-dims})
+        state (emit state {:i :sum :out out :arg ll :dims marg-dims})
         [state out] (reduce (fn [[st prev] [knw-addr var-addr]]
                               (let [[st o] (fresh st "posterior")]
                                 [(emit st {:i :posterior-align :out o :arg prev
@@ -230,7 +271,7 @@
                                             pairs)]
                            (= (count (set idxs)) (count idxs))))]
     (if (and pairs distinct-axes?)
-      (eval-posterior state {:query (mapv first pairs) :var (mapv second pairs)})
+      (eval-posterior state {:query (mapv first pairs) :var (mapv second pairs) :loc (:loc e)})
       (let [[state val] (eval-expr state expr)
             frm (fr/get-frame state)
             all-known? (every? #(get-in frm [:choices % :known]) (:deps val))]
@@ -238,12 +279,23 @@
           (err/warn "Redundant " (name reduction) ", not marginalizing..."))
         ;; a redundant expectation is the value itself, without the frame's
         ;; beliefs: after an impossible observation that is not the same
-        ;; number (DESIGN.md §2.4), so it is semantics, not an optimization
-        (if (and all-known? (= reduction :expectation))
+        ;; number (DESIGN.md §2.4), so it is semantics, not an optimization.
+        ;; A redundant variance is zeros like the value (core.py).
+        (cond
+          (and all-known? (= reduction :expectation))
           [state val]
+
+          all-known?
+          (let [[state zero] (fresh state "lit")
+                state (emit state {:i :const :out zero :value 0})
+                [state out] (fresh state "var")]
+            [(emit state {:i :op :op :mul :out out :args [(:tag val) zero]})
+             {:tag out :known true :deps (:deps val)}])
+
+          :else
           (let [dims (unknown-dims state)
-                [state ll] (if (:ll frm)
-                             [state (:ll frm)]
+                [state ll] (if-let [ll (read-ll state (:loc e))]
+                             [state ll]
                              (let [[st one] (fresh state "ll")]
                                [(emit st {:i :const :out one :value 1.0}) one]))
                 [state lv] (fresh state "llval")
@@ -255,14 +307,19 @@
                  {:tag out :known true :deps (known-deps state)}])
               ;; centered, E[(X - E[X])^2], as memo-clj: Python memo's
               ;; E[X^2] - E[X]^2 is the same number without float32's
-              ;; cancellation
+              ;; cancellation. X is made a float first: JAX has no - on
+              ;; booleans, and Python memo never subtracts X itself.
               :variance
               (let [[state two] (fresh state "lit")
                     state (emit state {:i :const :out two :value 2})
                     [state mean] (fresh state "exp")
                     state (emit state {:i :sum :out mean :arg lv :dims dims})
+                    [state one] (fresh state "lit")
+                    state (emit state {:i :const :out one :value 1.0})
+                    [state x] (fresh state "x")
+                    state (emit state {:i :op :op :mul :out x :args [(:tag val) one]})
                     [state dev] (fresh state "dev")
-                    state (emit state {:i :op :op :sub :out dev :args [(:tag val) mean]})
+                    state (emit state {:i :op :op :sub :out dev :args [x mean]})
                     [state sq] (fresh state "sq")
                     state (emit state {:i :op :op :pow :out sq :args [dev two]})
                     [state lv2] (fresh state "llval")
@@ -396,20 +453,198 @@
                        (let [[st one] (fresh state "ll")]
                          [(emit st {:i :const :out one :value 1.0}) one]))
         [state new-ll] (fresh state "ll")
-        state (emit state {:i :op :op :mul :out new-ll :args [nrm prev]})]
-    (fr/update-frame state assoc :ll new-ll)))
+        state (emit state {:i :op :op :mul :out new-ll :args [nrm prev]})
+        ;; the beliefs now vary along the chosen dims and every dim the
+        ;; weights depended on
+        ll-dims (into (set dims) (deps->dims (get-in (fr/get-frame state) [:children who])
+                                             (:deps w)))]
+    (fr/update-frame state #(-> % (assoc :ll new-ll) (update :ll-dims into ll-dims)))))
+
+(declare eval-stmt)
+
+(defn- eval-with-stmt
+  "(who :thinks stmt): stmt, in who's frame as the current frame models it."
+  [state {:keys [who stmt loc]}]
+  (let [frm (fr/get-frame state)]
+    (case (:variant frm)
+      :child (err/raise "Using `thinks` with variant CHILD"
+                        (assoc (frame-err-opts state loc)
+                               :hint (str (:name frm) " has variant CHILD, which does not have "
+                                          "a `thinks` statement. Hence, " (:name frm)
+                                          " cannot model (" who " :thinks ...).")))
+      :no-thinks (err/raise "Unknown syntactic construct `thinks`"
+                            (assoc (frame-err-opts state loc) :hint "There is no such construct."))
+      nil)
+    (-> state (fr/ensure-child who) (fr/enter who) (eval-stmt stmt) (fr/leave))))
+
+(defn- eval-observe
+  "The current frame observes its model of who's choice id: the choice becomes
+  known, and the beliefs are conditioned on it."
+  [state {:keys [who id loc]}]
+  (let [frm (fr/get-frame state)
+        ch (get-in frm [:choices [who id]])]
+    (when-not ch
+      (err/raise "Observation of unmodeled choice"
+                 (assoc (frame-err-opts state loc)
+                        :hint (str (:name frm) " does not have " who "'s choice of " id
+                                   " in their mental model. Perhaps you meant to write ("
+                                   (:name frm) " :thinks (" who " :chooses [" id
+                                   " ...])) somewhere earlier in this memo?"))))
+    (when (:known ch)
+      (err/raise "Observation of already-known choice"
+                 (assoc (frame-err-opts state loc)
+                        :hint (str (:name frm) " already knows " who "'s choice of " id
+                                   ". It doesn't make sense for " (:name frm)
+                                   " to re-observe that same choice again."))))
+    (let [state (fr/update-frame state assoc-in [:choices [who id] :known] true)
+          ll (:ll (fr/get-frame state))
+          [state total] (fresh state "total")
+          state (emit state {:i :sum :out total :arg ll :dims (unknown-dims state)})
+          [state q] (fresh state "ratio")
+          state (emit state {:i :op :op :div :out q :args [ll total]})
+          [state nll] (fresh state "ll")
+          state (emit state {:i :nan-to-num :out nll :arg q})]
+      (fr/update-frame state assoc :ll nll))))
+
+(defn- eval-show
+  "(who :observes target-who.target-id :is source): who conditions on the
+  target being the source's value. who's beliefs move the target onto the
+  source's dim, and the target's value becomes the source's."
+  [state {:keys [who target-who target-id source-who source-id loc]}]
+  (let [state (fr/ensure-child state who)
+        frm (fr/get-frame state)
+        target [target-who target-id]
+        source [source-who source-id]]
+    (when-not (get-in frm [:children who :choices target])
+      (err/raise "Observation of unmodeled choice"
+                 (assoc (frame-err-opts state loc)
+                        :hint (str (:name frm) " does not yet think that " who
+                                   " is modeling " target-who "'s choice of " target-id
+                                   ", so it doesn't make sense for " who " to observe "
+                                   "that choice. Perhaps you meant to write (" who
+                                   " :thinks (" target-who " :chooses [" target-id
+                                   " ...])) somewhere earlier in " (:name frm) "'s memo?"))))
+    (when-not (get-in frm [:choices source])
+      (err/raise "Observation of unknown choice"
+                 (assoc (frame-err-opts state loc)
+                        :hint (str (:name frm) " does not yet think that " source-who
+                                   " has chosen " source-id ", so cannot model " who
+                                   " observing that value. Perhaps you misspelled "
+                                   source-id "?"))))
+    (let [state (eval-stmt state {:node :with-stmt :who who :loc loc
+                                  :stmt {:node :observe :who target-who :id target-id :loc loc}})
+          frm (fr/get-frame state)
+          child (get-in frm [:children who])
+          target-ch (get-in child [:choices target])
+          source-ch (get-in frm [:choices source])]
+      (when (not= (:domain target-ch) (:domain source-ch))
+        (err/raise "Domain mismatch"
+                   (assoc (frame-err-opts state loc)
+                          :hint (str target-who "." target-id " is from domain "
+                                     (:domain target-ch) ", while " source-who "." source-id
+                                     " is from domain " (:domain source-ch) "."))))
+      (let [tidx (:idx target-ch)
+            sidx (:idx source-ch)
+            label (fn [[w i]] (if (= 'self w) (str i) (str w "." i)))
+            ;; who's beliefs already vary along the source's dim: the swap
+            ;; puts two of them on one axis (read-ll reports it, where
+            ;; Python memo would crash)
+            scrambled (when (and (not= sidx tidx) (contains? (:ll-dims child) sidx))
+                        {:source (label source) :target (label target)})
+            [state sw] (fresh state "ll")
+            state (emit state {:i :swap-dims :out sw :arg (:ll child) :d1 sidx :d2 tidx})
+            [state value] (fresh state (str target-who "_" target-id))
+            state (emit state {:i :alias :out value :arg (:tag source-ch)})
+            state (fr/update-frame state update-in [:children who]
+                                   (fn [c]
+                                     (-> c
+                                         (assoc :ll sw)
+                                         (update :ll-dims #(conj (disj % tidx) sidx))
+                                         (update :scrambled #(or % scrambled))
+                                         (assoc-in [:conditions target] source)
+                                         (assoc-in [:choices target :idx] sidx)
+                                         (assoc-in [:children target-who :choices ['self target-id] :idx] sidx))))]
+        (repoint state (:tag target-ch) value)))))
+
+(defn- eval-observes-factor
+  "(who :observes-that e) and (who :observes-event :wpp e): who's beliefs
+  weighted by e (as 0 or 1 for observes-that), and renormalized."
+  [state {:keys [who what how]}]
+  (let [state (-> state (fr/ensure-child who) (fr/enter who))
+        [state ll] (if-let [ll (:ll (fr/get-frame state))]
+                     [state ll]
+                     (let [[st one] (fresh state "ll")]
+                       [(emit st {:i :const :out one :value 1.0}) one]))
+        [state v] (eval-expr state what)
+        [state w] (if (= how :boolean)
+                    ;; jnp.bool(x) * 1.0
+                    (let [[st z] (fresh state "lit")
+                          st (emit st {:i :const :out z :value 0})
+                          [st b] (fresh st "event")]
+                      [(emit st {:i :op :op :neq :out b :args [(:tag v) z]}) b])
+                    [state (:tag v)])
+        [state f] (fresh state "factor")
+        state (emit state {:i :op :op :mul :out f :args [ll w]})
+        [state total] (fresh state "total")
+        state (emit state {:i :sum :out total :arg f :dims (unknown-dims state)})
+        [state q] (fresh state "ratio")
+        state (emit state {:i :op :op :div :out q :args [f total]})
+        [state nll] (fresh state "ll")
+        state (emit state {:i :nan-to-num :out nll :arg q})
+        dims (deps->dims (fr/get-frame state) (:deps v))]
+    (-> state
+        (fr/update-frame #(-> % (assoc :ll nll) (update :ll-dims into dims)))
+        (fr/leave))))
+
+(defn- eval-knows
+  "(who :knows source): who models the source choice, as the current frame
+  does, and knows it."
+  [state {:keys [who source-who source-id loc]}]
+  (when (= :no-knows (:variant (fr/get-frame state)))
+    (err/raise "Unknown syntactic construct `knows`"
+               (assoc (frame-err-opts state loc) :hint "There is no such construct.")))
+  (let [state (fr/ensure-child state who)
+        frm (fr/get-frame state)
+        source [source-who source-id]
+        src (get-in frm [:choices source])]
+    (when-not src
+      (err/raise "Knowing unknown choice"
+                 (assoc (frame-err-opts state loc)
+                        :hint (str (:name frm) " does not yet model " source-who
+                                   "'s choice of " source-id ". So, it doesn't make "
+                                   "sense for " (:name frm) " to model " who
+                                   " as knowing that choice."))))
+    (let [state (fr/update-frame state update-in [:children who]
+                                 #(-> %
+                                      (assoc-in [:choices source] (assoc src :known true))
+                                      (assoc-in [:conditions source] source)))]
+      (if (= 'self source-who)
+        (fr/update-frame state #(-> %
+                                    (assoc-in [:choices [who source-id]] src)
+                                    (assoc-in [:conditions [who source-id]] [(:name frm) source-id])))
+        (let [state (-> state (fr/enter who) (fr/ensure-child source-who) (fr/leave))]
+          (fr/update-frame state update-in [:children who :children source-who]
+                           #(-> %
+                                (assoc-in [:choices ['self source-id]] (assoc src :known true))
+                                (assoc-in [:conditions ['self source-id]] source))))))))
+
+(defn- eval-variant [state {:keys [who variant]}]
+  (-> state
+      (fr/ensure-child who)
+      (fr/update-frame assoc-in [:children who :variant] variant)))
 
 (defn eval-stmt [state s]
   (case (:node s)
     :pass state
     :forall (eval-forall state s)
     :choose (eval-choose state s)
-    :with-stmt (unsupported "thinks" (:loc s))
-    :show (unsupported "observes" (:loc s))
-    :observes-factor (unsupported "observes-that and observes-event" (:loc s))
-    :knows (unsupported "knows" (:loc s))
+    :with-stmt (eval-with-stmt state s)
+    :observe (eval-observe state s)
+    :show (eval-show state s)
+    :observes-factor (eval-observes-factor state s)
+    :knows (eval-knows state s)
     :snapshot (unsupported "snapshots-self-as" (:loc s))
-    :variant (unsupported "has-theory" (:loc s))
+    :variant (eval-variant state s)
     :trace (unsupported "inspect" (:loc s))
     :wants (unsupported "wants" (:loc s))
     :forgets-about (unsupported "forgets-about" (:loc s))

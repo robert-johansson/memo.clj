@@ -179,6 +179,18 @@ depends on them.
 - **Memo calls need brackets.** `f[x](…)` is a memo call. `f(…)` is parsed
   as a host-function call, and it is the only way to call a memo without
   axes.
+- **An observation against an already-used value** (slice 2). When the
+  observer's beliefs already vary along the source's dim (it knows the
+  source, and a choice it models depends on it), the observation swaps two
+  live axes. A query that later reads those beliefs fails in Python memo
+  with a shape error; a query that does not (a redundant expectation)
+  still answers correctly. memo.clj makes the same swap, marks the frame,
+  and makes a later read a compile error that names the cause and the
+  repair, `observes-that`. (memo-clj rejected the observation itself,
+  which loses Python memo's valid answers.)
+- **Var** is computed centered, E[(X − E[X])²], as memo-clj does: Python
+  memo's E[X²] − E[X]² is the same number but cancels in float32. A
+  redundant Var (everything known) is zeros, as in Python memo.
 - **Booleans follow JAX, not gen.array** (found in slice 1). In JAX, as in
   NumPy, `True + True` is `True` (bool `+` is logical or, `*` logical and),
   and `bool - bool` and `-bool` are TypeErrors. gen.array converts booleans
@@ -217,7 +229,10 @@ kept in the upstream ledger (§9).
   `alice: observes [bob.x] is x`, `alice[charlie[bob.x]]` must give x, as
   it does in 1.3.2. Immutable frames give the second half for free, not
   the first: the observation has to reach the live aliases explicitly.
-  Both cases are tests. memo-clj had the same bug until 2026-10-20; its
+  Both cases are tests. (Done in slice 2: an observation emits a fresh
+  alias of the source's value and, in the frame tree at compile time,
+  repoints every choice that shared the target's value; the IR stays
+  single-assignment.) memo-clj had the same bug until 2026-10-20; its
   fix (`fresh-tags` in `compile.cljc`, the same one tested against Python
   memo) and its test `copies-keep-their-own-values` are what memo.clj
   lifts.

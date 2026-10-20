@@ -7,7 +7,9 @@
    :children {name frame}
    :conditions {[who id] [who id]}   ; aliases into the parent frame
    :goals {id expr}
-   :ll sym-or-nil}                   ; the frame's belief array
+   :ll sym-or-nil                    ; the frame's belief array
+   :ll-dims #{dim}                   ; the dims it varies along
+   :scrambled nil-or-info}           ; set when an observation scrambled it
 
   The tree lives in the analysis state under :root, and :path (child names
   from the root) addresses the current frame. Frames are immutable values, so
@@ -18,7 +20,7 @@
 
 (defn frame [name variant]
   {:name name :variant variant
-   :choices {} :children {} :conditions {} :goals {} :ll nil})
+   :choices {} :children {} :conditions {} :goals {} :ll nil :ll-dims #{} :scrambled nil})
 
 (defn frame-path [path]
   (vec (mapcat (fn [k] [:children k]) path)))

@@ -149,7 +149,10 @@
              :sum (reduce-dims array/sum (arg (:arg instr)) (:dims instr))
              :max (reduce-dims array/max (arg (:arg instr)) (:dims instr))
              :nan-to-num (nan-to-num (arg (:arg instr)))
-             :posterior-align (posterior-align (arg (:arg instr)) (:knw instr) (:var instr))))))
+             :posterior-align (posterior-align (arg (:arg instr)) (:knw instr) (:var instr))
+             :swap-dims (let [{:keys [d1 d2]} instr]
+                          (swap-axes (pad (arg (:arg instr)) (inc (max d1 d2))) (axis d1) (axis d2)))
+             :alias (arg (:arg instr))))))
 
 (defn- table
   "A result value as the table over the memo's axes: the axes in declaration

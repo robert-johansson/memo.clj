@@ -25,11 +25,14 @@
     {:i :posterior-align :out s :arg s :knw d :var d}
         the marginal over dim var, re-indexed by the known dim knw: var's
         extent moves onto knw (or, where the value already varies along
-        knw, its diagonal is taken)"
+        knw, its diagonal is taken)
+    {:i :swap-dims :out s :arg s :d1 d :d2 d}  dims d1 and d2 exchanged
+    {:i :alias :out s :arg s}                  the same value, a new name"
   (:require [clojure.string :as str]))
 
 (def kinds
-  #{:const :param :domain :ones :op :where :sum :max :nan-to-num :posterior-align})
+  #{:const :param :domain :ones :op :where :sum :max :nan-to-num :posterior-align
+    :swap-dims :alias})
 
 (defn inputs
   "The symbols an instruction reads."
@@ -37,7 +40,7 @@
   (case (:i instr)
     (:const :param :domain :ones) []
     (:op :where) (:args instr)
-    (:sum :max :nan-to-num :posterior-align) [(:arg instr)]))
+    (:sum :max :nan-to-num :posterior-align :swap-dims :alias) [(:arg instr)]))
 
 (defn check
   "The problems of a program, as strings: unknown kinds, symbols read before
