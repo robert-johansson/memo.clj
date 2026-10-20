@@ -1,0 +1,36 @@
+# Clojure / JVM
+.cpcache/
+.nrepl-port
+.lsp/
+.clj-kondo/.cache/
+target/
+classes/
+
+# Python memo, the oracle (a local clone and its environment)
+venv/
+.venv/
+__pycache__/
+
+# Papers and other binaries kept locally
+*.pdf
+
+# Environment / secrets
+.env
+
+# Claude Code (local agent config + hooks)
+.claude/
+.mcp.json
+
+# Local scratch
+tmp/
+
+# OS
+.DS_Store
+
+# beans: kept in a separate private repo (see .beans/hooks/)
+.beans/
+.beans.yml
+
+# memo-mcp: the owner's MCP server, with Python memo (the oracle) as its
+# submodule. Kept out of this repository; fixtures record the memo commit.
+memo-mcp/
