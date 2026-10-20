@@ -191,6 +191,15 @@ depends on them.
 - **Var** is computed centered, E[(X − E[X])²], as memo-clj does: Python
   memo's E[X²] − E[X]² is the same number but cancels in float32. A
   redundant Var (everything known) is zeros, as in Python memo.
+- **NaN gradients where the values are right** (slice 3). A speaker written
+  `exp(alpha * log(L0))`, the usual RSA form, gets NaN from jax.grad
+  wherever L0 has a zero: log 0 is -inf, and the chain rule multiplies 0 by
+  -inf. Its values are right, and `L0 ** alpha` has the same values with a
+  finite gradient, but only for moderate alpha: it does not get the stable
+  softmax that `wpp=exp(…)` does, and its weights underflow, so a referent's
+  row becomes all zeros (silently; alpha = 200 in float32, against 100 still
+  agreeing). memo.clj differentiates the same computation and matches JAX's
+  NaN (§13 asks whether it should).
 - **Booleans follow JAX, not gen.array** (found in slice 1). In JAX, as in
   NumPy, `True + True` is `True` (bool `+` is logical or, `*` logical and),
   and `bool - bool` and `-bool` are TypeErrors. gen.array converts booleans
@@ -637,3 +646,7 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
    that for parity, warn, or make it an error outside a parity mode? This
    is where principle 1 (same semantics) meets principle 6 (no silent wrong
    numbers).
+10. **NaN gradients where the values are right** (§2.4): match JAX, as now;
+    warn when a gradient is NaN; or differentiate with the convention that
+    a zero-probability term contributes 0 (which makes fitting the usual RSA
+    form work, and departs from JAX)?

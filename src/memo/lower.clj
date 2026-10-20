@@ -134,9 +134,61 @@
                                   "e.g. (= x 0).")}))))
 
 ;; -----------------------------------------------------------------------------
+;; memo calls
+
+(defn- check-which [n which]
+  (if (= 1 n)
+    (when (some? which)
+      (err/raise (str "You are calling a memo model with only one return value, so you "
+                      "do not have to specify which return value you want.")))
+    (do (when (nil? which)
+          (err/raise (str "You are calling a memo model that has multiple return values, "
+                          "but you have not specified which return value you want. Try "
+                          "writing (model 0 [...] ...) to get the first return value.")))
+        (when-not (clojure.core/< -1 which n)
+          (err/raise "Your memo model does not have enough return values.")))))
+
+(defn- check-domains [callee caller]
+  (when (clojure.core/> (count callee) (count caller))
+    (err/raise "Not enough arguments to memo call!"))
+  (when (clojure.core/> (count caller) (count callee))
+    (err/raise "Too many arguments to memo call!"))
+  (doseq [[i t s] (map vector (range) callee caller)]
+    (when (not= t s)
+      (err/raise (str "Domain mismatch in memo call argument " (inc i) ": " t " != " s ".")))))
+
+(defn- place
+  "A table whose axis i belongs on dim (dims i), laid out on the dims."
+  [table dims]
+  (if (empty? dims)
+    table
+    (let [k (count dims)
+          r (inc (apply max dims))
+          x (array/reshape table (into (vec (array/shape table)) (repeat (clojure.core/- r k) 1)))
+          at (into {} (map-indexed (fn [i d] [(clojure.core/- r 1 d) i]) dims))
+          perm (loop [p 0 filler k out []]
+                 (cond
+                   (= p r) out
+                   (contains? at p) (recur (inc p) filler (conj out (at p)))
+                   :else (recur (inc p) (inc filler) (conj out filler))))]
+      (array/transpose x perm))))
+
+(defn- call-memo [resolve-memo env {:keys [name which args kwargs guards dims domains]}]
+  (let [f (resolve-memo name)
+        {:memo/keys [num-results domain-names shape call]} (meta f)
+        _ (check-which num-results which)
+        _ (check-domains domain-names domains)
+        table (if (every? #(array/truthy? (get env %)) guards)
+                (let [res (call (mapv #(get env %) args)
+                                (into {} (map (fn [[k s]] [k (get env s)])) kwargs))]
+                  (if (some? which) (array/take res which 0) res))
+                (array/zeros shape))]
+    (place table dims)))
+
+;; -----------------------------------------------------------------------------
 ;; programs
 
-(defn- step [env instr]
+(defn- step [ctx env instr]
   (let [arg #(get env %)]
     (assoc env (:out instr)
            (case (:i instr)
@@ -152,7 +204,8 @@
              :posterior-align (posterior-align (arg (:arg instr)) (:knw instr) (:var instr))
              :swap-dims (let [{:keys [d1 d2]} instr]
                           (swap-axes (pad (arg (:arg instr)) (inc (max d1 d2))) (axis d1) (axis d2)))
-             :alias (arg (:arg instr))))))
+             :alias (arg (:arg instr))
+             :call-memo (call-memo (:resolve-memo ctx) env instr)))))
 
 (defn- table
   "A result value as the table over the memo's axes: the axes in declaration
@@ -168,10 +221,11 @@
 (defn program
   "The function computing a compiled memo's result: from a map of parameter
   values to its table, or, for several returns, their tables stacked on a
-  leading axis."
-  [compiled]
+  leading axis. ctx: :resolve-memo, from a memo's name to the memo, at call
+  time (so a memo may call itself)."
+  [compiled ctx]
   (let [{:keys [instrs results]} compiled]
     (fn [params]
-      (let [env (reduce step params instrs)
+      (let [env (reduce (partial step ctx) params instrs)
             tables (mapv #(table (get env %) compiled) results)]
         (if (= 1 (count tables)) (first tables) (array/stack tables))))))

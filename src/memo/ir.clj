@@ -27,12 +27,17 @@
         extent moves onto knw (or, where the value already varies along
         knw, its diagonal is taken)
     {:i :swap-dims :out s :arg s :d1 d :d2 d}  dims d1 and d2 exchanged
-    {:i :alias :out s :arg s}                  the same value, a new name"
+    {:i :alias :out s :arg s}                  the same value, a new name
+    {:i :call-memo :out s :name f :which k :args [s…] :kwargs [[p s]…]
+     :guards [s…] :dims [d…] :domains [dom…]}
+        the memo f's table (its return k, when it has several), with its axes
+        on the dims given; called only when every guard (a path condition)
+        is true, and zeros otherwise"
   (:require [clojure.string :as str]))
 
 (def kinds
   #{:const :param :domain :ones :op :where :sum :max :nan-to-num :posterior-align
-    :swap-dims :alias})
+    :swap-dims :alias :call-memo})
 
 (defn inputs
   "The symbols an instruction reads."
@@ -40,7 +45,8 @@
   (case (:i instr)
     (:const :param :domain :ones) []
     (:op :where) (:args instr)
-    (:sum :max :nan-to-num :posterior-align :swap-dims :alias) [(:arg instr)]))
+    (:sum :max :nan-to-num :posterior-align :swap-dims :alias) [(:arg instr)]
+    :call-memo (concat (:args instr) (map second (:kwargs instr)) (:guards instr))))
 
 (defn check
   "The problems of a program, as strings: unknown kinds, symbols read before

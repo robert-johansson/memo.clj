@@ -8,7 +8,8 @@
     (alice :chooses [c Coin] :wpp (if (= c Coin.HEADS) p (- 1 p)))
     (return (Pr (= alice.c c))))
 
-  (flip 0.3)   ; a gen.array array of shape [2]: the table over c
+  (flip 0.3)           ; a gen.array array of shape [2]: the table over c
+  (flip {:p 0.3})      ; parameters by name, in a trailing map
 
   Parsing happens when the macro expands; analysis and lowering when the def
   is evaluated, so domains must be defined first (Python memo compiles when
@@ -39,41 +40,70 @@
   v)
 
 (defn- bind-params
-  "The parameter environment of a call: positional arguments, then defaults."
-  [mname params defaults args]
+  "The parameter environment of a call: positional arguments, then keyword
+  arguments (a map from names, as keywords or symbols), then defaults."
+  [mname params defaults args kwargs]
   (when (> (count args) (count params))
     (err/raise (str "Too many arguments to memo " mname
                     " (it takes " (count params) ")")))
-  (into {}
-        (map-indexed
-         (fn [i {pname :name :as p}]
-           (let [v (cond
-                     (< i (count args)) (nth args i)
-                     (contains? defaults pname) (get defaults pname)
-                     :else (err/raise (str "Missing parameter " pname " in call to memo " mname)))]
-             [pname (check-param mname p v)])))
-        params))
+  (let [kwargs (into {} (map (fn [[k v]] [(symbol (name k)) v])) kwargs)]
+    (doseq [k (keys kwargs)]
+      (when-not (some #(= k (:name %)) params)
+        (err/raise (str "memo " mname " has no parameter " k))))
+    (into {}
+          (map-indexed
+           (fn [i {pname :name :as p}]
+             (let [v (cond
+                       (< i (count args))
+                       (if (contains? kwargs pname)
+                         (err/raise (str "Parameter " pname " of memo " mname
+                                         " passed both positionally and by name"))
+                         (nth args i))
+                       (contains? kwargs pname) (get kwargs pname)
+                       (contains? defaults pname) (get defaults pname)
+                       :else (err/raise (str "Missing parameter " pname " in call to memo " mname)))]
+               [pname (check-param mname p v)])))
+          params)))
+
+(defn- memo-resolver
+  "From a memo's name to the memo, in namespace ns, when it is called (so a
+  memo may call itself, or memos defined after it)."
+  [ns]
+  (fn [sym]
+    (let [v (ns-resolve (the-ns ns) sym)
+          f (some-> v deref)]
+      (if (:memo/call (meta f))
+        f
+        (err/raise (str "Unknown memo " sym)
+                   {:hint (str "A memo call (" sym " [axes ...] args ...) needs " sym
+                               " to be a defmemo, defined by the time it is called.")})))))
 
 (defn make-memo
   "Analyze and lower a parsed memo; the callable model. Called by defmemo."
-  [{:keys [name parsed domains defaults opts]}]
+  [{:keys [name ns parsed domains defaults opts]}]
   (let [domain-values (into {} (map (fn [[k d]] [k (domains/values d)])) domains)
         compiled (analyze/analyze parsed domain-values opts)
         problems (ir/check compiled)
         _ (when (seq problems)
             (err/raise (str "memo.clj built an ill-formed program for " name)
                        {:user false :hint (str/join "; " problems)}))
-        run (lower/program compiled)
-        params (:params parsed)]
+        run (lower/program compiled {:resolve-memo (memo-resolver ns)})
+        params (:params parsed)
+        call (fn [args kwargs] (run (bind-params name params defaults args kwargs)))]
     (with-meta
-      (fn [& args] (run (bind-params name params defaults args)))
+      (fn [& args]
+        (if (map? (last args))
+          (call (butlast args) (last args))
+          (call args {})))
       {:memo/name name
        :memo/doc (:doc parsed)
        :memo/params (mapv :name params)
        :memo/axes (:axes compiled)
        :memo/domain-names (:domains compiled)
        :memo/domains (mapv domains (:domains compiled))
+       :memo/shape (:shape compiled)
        :memo/num-results (count (:results compiled))
+       :memo/call call
        :memo/compiled compiled})))
 
 (defn- member-resolver
@@ -109,6 +139,7 @@
                        (:params parsed))]
     `(def ~mname
        (make-memo {:name '~mname
+                   :ns '~(ns-name *ns*)
                    :parsed '~parsed
                    :opts '~opts
                    :defaults ~defaults

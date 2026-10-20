@@ -328,6 +328,56 @@
                 [(emit state {:i :sum :out out :arg lv2 :dims dims})
                  {:tag out :known true :deps (known-deps state)}]))))))))
 
+(def ^:private not-static-hint
+  (str "When calling a memo, you can only pass in parameters that are fixed (\"static\") "
+       "values that memo can compute without reasoning about agents. Such values cannot "
+       "depend on any agents' choices -- only on literal numeric values and other "
+       "parameters. This constraint is what enables memo to help you fit/optimize "
+       "parameters fast by gradient descent."))
+
+(defn- eval-memo-call
+  "(f [x agent.y] args...): the memo f's table, with its axes on the dims of
+  the choices given. Its arguments are static, so they are known before any
+  agent reasons; it is called only when the path conditions around it hold,
+  which is what lets a memo recurse."
+  [state {:keys [name which-retval args kwargs ids loc]}]
+  (let [[state arg-vals]
+        (reduce (fn [[st acc] a]
+                  (let [[st v] (eval-expr st a)]
+                    (when-not (:static a)
+                      (err/raise "parameter not statically known"
+                                 (assoc (frame-err-opts st (:loc a)) :hint not-static-hint)))
+                    [st (conj acc v)]))
+                [state []] args)
+        [state kw-vals]
+        (reduce (fn [[st acc] [k a]]
+                  (let [[st v] (eval-expr st a)]
+                    (when-not (:static a)
+                      (err/raise (str "keyword argument " k " not statically known")
+                                 (assoc (frame-err-opts st (:loc a)) :hint not-static-hint)))
+                    [st (conj acc [k (:tag v)])]))
+                [state []] kwargs)
+        frm (fr/get-frame state)
+        chs (mapv (fn [[_ sw si]]
+                    (or (get-in frm [:choices [sw si]])
+                        (err/raise "Unknown choice referenced in a memo call"
+                                   (assoc (frame-err-opts state loc)
+                                          :hint (str (:name frm) " does not yet model " sw
+                                                     "'s choice of " si ".")))))
+                  ids)
+        dims (mapv :idx chs)
+        _ (when (not= (count (set dims)) (count dims))
+            (err/raise "The same choice is passed twice in a memo call"
+                       (assoc (frame-err-opts state loc)
+                              :hint "Each axis of the memo called needs a choice of its own.")))
+        [state out] (fresh state (str "result_" name))]
+    [(emit state {:i :call-memo :out out :name name :which which-retval
+                  :args (mapv :tag arg-vals) :kwargs kw-vals
+                  :guards (:path-conds state) :dims dims :domains (mapv :domain chs)})
+     {:tag out
+      :known (every? :known chs)
+      :deps (set (map (fn [[_ sw si]] [sw si]) ids))}]))
+
 (defn eval-expr [state e]
   (case (:node e)
     :lit (eval-lit state e)
@@ -336,7 +386,7 @@
     :with (eval-with state e)
     :expect (eval-expect state e)
     :ffi (unsupported "A host function call" (:loc e))
-    :memo (unsupported "A memo call" (:loc e))
+    :memo (eval-memo-call state e)
     :entropy (unsupported "(H ...)" (:loc e))
     :kl (unsupported "(KL ...)" (:loc e))
     :imagine (unsupported "(imagine ...)" (:loc e))

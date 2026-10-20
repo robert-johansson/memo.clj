@@ -77,4 +77,6 @@
  :child-thinks-err "Using `thinks` with variant CHILD"
  :child-toplevel-err "Using `thinks` with variant CHILD"
  :no-thinks-err "Unknown syntactic construct `thinks`"
- :no-knows-err "Unknown syntactic construct `knows`"}}
+ :no-knows-err "Unknown syntactic construct `knows`"}
+ :runtime-errors {}
+ :grads []}
