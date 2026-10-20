@@ -441,11 +441,18 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
   needs a large stack (the demo tests run calls on a 1 GB-stack thread, as
   Python memo needs a higher recursion limit).
 - **Memory on the JVM backend** (2026-10-20, from demo-empowerment).
-  gen.array's JVM backend materializes every intermediate in float64,
-  with no fusion. demo-empowerment's tables have 3125 x 169 x 169 cells,
-  714 MB each, and do not fit even in a 16 GB heap; MLX computes the demo
-  in 8 s. Its test runs on MLX and skips, loudly, on the JVM backend: the
-  one exception to "tests run on every backend".
+  gen.array's JVM backend is eager and stores every dtype as doubles, so
+  it holds in memory every value the lowering keeps. demo-empowerment's
+  tables have 3125 x 169 x 169 cells, 714 MB each. Its model q's values,
+  kept to the end of the model, peak at 10.7 GB; and the spot-check of a
+  vectorized function built its arguments and result whole on the host
+  (four times 89M numbers for Tr). The demo ran out of a 16 GB heap. Both
+  were memo.lower's: it now drops each value after its last use (a peak
+  of 2.9 GB) and spot-checks the sampled elements only. The demo then
+  runs on the JVM backend in 89 s with an 8 GB heap, which the :test alias
+  sets (-Xmx8g; the JVM's default is a quarter of the machine's memory);
+  it fails at 6 GB, a gap to the 2.9 GB not yet explained. MLX takes 19 s on its CPU in float64 and 6 s on
+  Metal; Python memo about 28 s.
 - **Speed (to measure, not promise):** benchmarks against Python memo on JAX
   and against memo-clj, on small recursive models (RSA depth 5, Sally-Anne)
   and dense ones (Penelope). `array/compile` for repeated calls on MLX.

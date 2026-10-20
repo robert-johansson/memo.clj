@@ -34,8 +34,8 @@ repository synced by hooks; see `.beans/hooks/README.txt`).
 
 ```
 clojure -X:test                       # every test, on the JVM backend
-clojure -X:test:fast                  # without the ^:slow tests (three demos, minutes on the JVM;
-                                      #   demo-empowerment runs on MLX only; the Python round trip, a fuzz campaign)
+clojure -X:test:fast                  # without the ^:slow tests (three demos, minutes on the JVM,
+                                      #   demo-empowerment needing the 8 GB heap :test sets; the Python round trip, a fuzz campaign)
 clojure -X:test:mlx                   # on MLX (Metal, float32)
 clojure -J-Dgen.mlx.device=cpu -J-Dgen.mlx.dtypes=64 -X:test:mlx   # MLX's CPU, float64
 clojure -X:dev:test                   # against gen.clj's working copy

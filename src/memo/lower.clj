@@ -258,13 +258,35 @@
       (call 0)
       (array/reshape (array/array (mapv call (range n))) shape))))
 
+(defn- samples
+  "x's values at the row-major indices idxs of shape (x broadcast to it), on
+  the host: only those elements are read."
+  [x shape idxs]
+  (let [s (array/shape x)]
+    (if (empty? s)
+      (vec (repeat (count idxs) (array/->clj x)))
+      (let [r (count shape)
+            s (into (vec (repeat (clojure.core/- r (count s)) 1)) s)
+            strides (vec (reverse (reductions clojure.core/* 1 (reverse (rest s)))))
+            flat (fn [i]
+                   (loop [d (dec r), i i, at 0]
+                     (if (neg? d)
+                       at
+                       (recur (dec d) (quot i (nth shape d))
+                              (if (= 1 (nth s d))
+                                at
+                                (clojure.core/+ at (clojure.core/* (rem i (nth shape d)) (nth strides d))))))))]
+        (array/->clj (array/take (array/reshape x [(array/size x)])
+                                 (array/array (mapv flat idxs) {:dtype :int32})))))))
+
 (defn- spot-check
   "A vectorized function's result r against f on host numbers, at up to 32
   evenly spaced elements of its dynamic arguments (all of them, for most
   memo domains). An if or case on a value inside f takes one branch for a
   whole array, silently; this makes that loud, as gen.clj spot-checks its
   batched runs. Values are read on the host, primal values for those being
-  differentiated."
+  differentiated, and only at those elements: read whole, demo-empowerment's
+  Tr would be four times 89M host numbers."
   [name f pos statics kws r]
   (let [on-host (fn [v] (if (or (tape/tracked? v) (array/array? v)) (array/->clj v) v))
         slots (concat (map vector pos statics) (map (fn [[_ v s]] [v s]) kws))
@@ -272,19 +294,19 @@
         shape (broadcast-shape (map array/shape dyn))
         n (reduce clojure.core/* 1 shape)
         k (min n 32)
-        idxs (distinct (map #(long (Math/floor (clojure.core/* % (/ (dec n) (double (max 1 (dec k)))))))
-                            (range k)))
-        cols (mapv #(elements % shape) dyn)
-        got (elements r shape)
+        idxs (vec (distinct (map #(long (Math/floor (clojure.core/* % (/ (dec n) (double (max 1 (dec k)))))))
+                                 (range k))))
+        cols (mapv #(samples % shape idxs) dyn)
+        got (samples r shape idxs)
         num (fn [v] (double (if (boolean? v) (if v 1 0) v)))]
-    (doseq [i idxs]
+    (doseq [[j i] (map-indexed vector idxs)]
       (let [vals (first (reduce (fn [[out d] [v s]]
-                                  (if s [(conj out (on-host v)) d] [(conj out (nth (nth cols d) i)) (inc d)]))
+                                  (if s [(conj out (on-host v)) d] [(conj out (nth (nth cols d) j)) (inc d)]))
                                 [[] 0] slots))
             args (subvec vals 0 (count pos))
             kw (zipmap (map (comp keyword first) kws) (subvec vals (count pos)))
             want (num (scalar name (apply f (cond-> args (seq kws) (conj kw)))))
-            have (num (nth got i))]
+            have (num (nth got j))]
         (when-not (or (= want have) (and (Double/isNaN want) (Double/isNaN have))
                       (clojure.core/<= (Math/abs (clojure.core/- want have))
                                        (clojure.core/* 1e-9 (clojure.core/+ 1.0 (Math/abs want)))))
@@ -394,15 +416,32 @@
                     seen))]
     (into (filterv #(hoisted (:out %)) instrs) (remove #(hoisted (:out %))) instrs)))
 
+(defn- drops
+  "For each of instrs, the values to drop once it has run: those it reads
+  for the last time, and its own when nothing reads it. The results are
+  kept. An eager backend holds every value kept in memory: kept to the end,
+  demo-empowerment's values peak at 10.7 GB in float64, dropped after their
+  last use at 2.9 GB."
+  [instrs results]
+  (let [kept (set results)
+        last-use (into {} (for [[k instr] (map-indexed vector instrs), s (ir/inputs instr)] [s k]))
+        at-last-use (reduce-kv (fn [v s k] (cond-> v (not (kept s)) (update k conj s)))
+                               (vec (repeat (count instrs) [])) last-use)]
+    (reduce (fn [v [k {s :out}]] (cond-> v (not (or (kept s) (last-use s))) (update k conj s)))
+            at-last-use (map-indexed vector instrs))))
+
 (defn program
   "The function computing a compiled memo's result: from a map of parameter
   values to its table, or, for several returns, their tables stacked on a
   leading axis. ctx: :resolve-memo, from a memo's name to the memo, at call
-  time (so a memo may call itself). Memo calls run first (calls-first)."
+  time (so a memo may call itself). Memo calls run first (calls-first), and
+  no value is kept past its last use (drops)."
   [compiled ctx]
   (let [{:keys [results]} compiled
-        instrs (calls-first (:instrs compiled))]
+        instrs (calls-first (:instrs compiled))
+        dead (drops instrs results)]
     (fn [params]
-      (let [env (reduce (partial step ctx) params instrs)
+      (let [env (reduce (fn [env [instr dead]] (apply dissoc (step ctx env instr) dead))
+                        params (map vector instrs dead))
             tables (mapv #(table (get env %) compiled) results)]
         (if (= 1 (count tables)) (first tables) (array/stack tables))))))

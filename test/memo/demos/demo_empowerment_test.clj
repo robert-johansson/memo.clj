@@ -62,10 +62,10 @@
   (return (C [s] t)))
 
 (deftest ^:slow demo-empowerment
-  ;; Its tables have 3125 x 169 x 169 cells: 714 MB each in float64. gen.array's
-  ;; JVM backend materializes every intermediate and runs out of memory even
-  ;; with a 16 GB heap; MLX (8 s on Metal) computes it. On the JVM backend the
-  ;; test is skipped, loudly.
-  (if (= "mlx" (System/getProperty "gen.backend"))
-    (ts/check-demo 'memo.demos.demo-empowerment-test "demo-empowerment")
-    (println "\nSKIPPED memo.demos.demo-empowerment-test: its tables do not fit in the JVM backend's memory; run it on MLX (clojure -X:test:mlx)\n")))
+  ;; Its tables have 3125 x 169 x 169 cells: 714 MB each in float64. On the
+  ;; JVM backend, which holds every value it computes, it fits in memory
+  ;; because memo.lower keeps no value past its last use and spot-checks Tr
+  ;; at sampled elements only (memo.lower-test); without either, it ran out
+  ;; of a 16 GB heap. With them it needs the 8 GB heap the :test alias sets
+  ;; (it fails at 6 GB).
+  (ts/check-demo 'memo.demos.demo-empowerment-test "demo-empowerment"))
