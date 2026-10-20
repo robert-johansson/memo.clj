@@ -468,27 +468,32 @@
                {:hint "You can only supply names of choices (e.g. x or alice.y) to :knows."
                 :loc loc})))
 
-(defn- parse-observes [who kw args form pctxt]
+(defn- parse-observes
+  "A malformed observes is Python memo's \"Unknown statement syntax\" (its
+  parser matches no statement); the hint says what is wrong."
+  [who kw args form pctxt]
   (let [loc (loc-of form pctxt)]
     (when-not (and (= 3 (count args)) (= :is (second args)))
-      (err/raise "Malformed observes statement"
+      (err/raise "Unknown statement syntax"
                  {:hint (str "Expected (" who " :observes target.x :is source), where "
                              "source is a choice name or another agent's choice.")
                   :loc loc}))
     (let [[target _ source] args
           tparts (dotted-parts target)]
       (when (or (nil? tparts) (not= 2 (count tparts)))
-        (err/raise "Malformed observes statement"
+        (err/raise "Unknown statement syntax"
                    {:hint "The observed value must be another agent's choice, e.g. speaker.u."
                     :loc loc}))
       (let [[tw ti] tparts
             [sw si] (if-let [sparts (dotted-parts source)]
                       (if (= 2 (count sparts))
                         sparts
-                        (err/raise "Malformed observes statement" {:loc loc}))
+                        (err/raise "Unknown statement syntax"
+                                   {:hint "The observed value must be a choice name, e.g. x or speaker.u."
+                                    :loc loc}))
                       (if (symbol? source)
                         ['self source]
-                        (err/raise "Malformed observes statement"
+                        (err/raise "Unknown statement syntax"
                                    {:hint "The observed value cannot be an arbitrary value; it must be the name of a choice. For conditioning on expressions, use :observes-that or :observes-event."
                                     :loc loc})))]
         [{:node :show :who who :target-who tw :target-id ti

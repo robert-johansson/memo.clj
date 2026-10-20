@@ -274,6 +274,21 @@ kept in the upstream ledger (§9).
 - `to_maximize` ties: 0.1 + 0.2 ties with 0.3 under float32, not under
   float64.
 
+**The Handbook, checked entry by entry** (the parity corpus, 2026-10-20).
+Every code block and code-led table row has a twin run in both
+(`handbook.py`, `handbook_test.clj`). Where the Handbook and Python memo
+disagree, memo.clj follows Python memo:
+- `~x` is listed as bitwise inversion; memo computes `True ^ x`, so `~2`
+  is 3, not -3 (memo.clj: `not` on booleans only, §5).
+- `observes [alice.x] is y` with `y` "the observer's own choice": a bare
+  `y` names the enclosing frame's choices, and an agent's own choice is
+  rejected ("Observation of unknown choice"); it is written `bob.y`.
+- The `imagine` example, `imagine[…, alice[Pr[bob.x == 7]]]`, fails at
+  the top level ("trying to imagine an unknown value"): alice's answer
+  depends on the imagined `bob.y`. It needs `E[alice[…]]`.
+- `jax.value_and_grad(f)(a, b)` differentiates with respect to `a` only
+  (JAX's `argnums=0`), not "the parameters `a` and `b`".
+
 ## 3. Principles (decided, 2026-10-20)
 
 1. **The exact core is memo.** Same semantics as Python memo at the pinned
@@ -589,6 +604,14 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
   `^{:variant :child}`; a parameter marked `^:array` (Python's `p: ...`)
   takes a Clojure vector or a gen.array array, passed whole to host
   functions and memo calls.
+- **The inline escape hatch** (2026-10-20): `#{form}` is Clojure, a
+  function of the memo's parameters (Python memo's `{...}`). An enum member
+  in it, `#{Action.WAIT}`, is its value, as in memo expressions. An
+  `agent.choice` there is a compile error, the Handbook's rule that braces
+  cannot reference memo constructs (Python memo raises a `NameError` when
+  the memo is called).
+- **A malformed `observes`** is Python memo's "Unknown statement syntax",
+  with a hint saying what is wrong.
 
 ## 9. Verification
 

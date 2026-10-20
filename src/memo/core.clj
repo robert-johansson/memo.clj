@@ -18,6 +18,7 @@
   a leading axis. A memo without axes returns a 0-d value: on the JVM backend,
   a number."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [gen.array :as array]
             [memo.analyze :as analyze]
             [memo.ast :as ast]
@@ -154,6 +155,28 @@
                (err/raise (ex-message e) {:hint (str "Its members are "
                                                      (str/join ", " (:members @v)) ".")})))))))
 
+(defn- inline-members
+  "An inline form with each Enum.MEMBER in it replaced by the member's value,
+  as in memo expressions: Python memo's {Action.WAIT} is Python, where
+  Action.WAIT is a value. Any other agent.choice-shaped symbol is an error
+  (Clojure would read it as a class name); dotted symbols that name classes
+  are left to Clojure."
+  [mname form resolve-member]
+  (walk/postwalk (fn [x]
+                   (let [parts (when (and (symbol? x) (nil? (namespace x))) (parse/dotted-parts x))
+                         v (when (= 2 (count parts)) (resolve-member (first parts) (second parts)))]
+                     (cond
+                       (some? v) v
+                       (and (= 2 (count parts))
+                            (not (class? (try (resolve x) (catch Exception _ nil)))))
+                       (err/raise (str "Cannot reference " x " inside the inline escape hatch #{...}")
+                                  {:hint (str "#{...} is Clojure, evaluated with the memo's parameters "
+                                              "only: it cannot reference memo constructs (agents or "
+                                              "their choices).")
+                                   :loc {:name mname}})
+                       :else x)))
+                 form))
+
 (defmacro defmemo
   "Define a memo.
 
@@ -171,8 +194,9 @@
   [mname & body]
   (let [opts (select-keys (meta mname) [:variant :cache])
         [axes params & forms] body
+        resolve-member (member-resolver *ns*)
         parsed (parse/parse-defmemo mname axes params (vec forms)
-                                    {:resolve-member (member-resolver *ns*)})
+                                    {:resolve-member resolve-member})
         [parsed inline-forms] (ast/assign-inline-ids parsed)
         refs (ast/collect parsed)
         domain-syms (sort (into (:domain-names refs) (map second axes)))
@@ -200,7 +224,8 @@
                    :defaults ~defaults
                    :domains ~(into {} (map (fn [d] [(list 'quote d) d])) domain-syms)
                    :fns ~(into {} (map (fn [f] [(list 'quote f) (fn-ref f)])) (:ffi-names refs))
-                   :inlines ~(mapv (fn [form] `(fn [~@param-syms] ~form)) inline-forms)}))))
+                   :inlines ~(mapv (fn [form] `(fn [~@param-syms] ~(inline-members mname form resolve-member)))
+                                   inline-forms)}))))
 
 (defn program
   "A memo's compiled IR program, as text (Python memo's debug_print_compiled)."
