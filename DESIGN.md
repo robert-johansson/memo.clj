@@ -173,7 +173,11 @@ depends on them.
 - **The posterior shortcut is required.** `E[x == agent.y]`, with x known
   and agent.y uncertain over the same domain, moves an axis of the marginal
   (or takes its diagonal) instead of computing the comparison. memo's own
-  `post_optim` test does not fit in memory without it.
+  `post_optim` test does not fit in memory without it (10^12 cells; the
+  parity corpus runs it at full size). Where the shortcut does not apply,
+  both build the whole table: `post_optim_distinctness`'s 10^9 cells take
+  4 GB at float32 (JAX, MLX) and more than 14 GB at float64 on gen.array's
+  JVM backend, which fuses nothing, so the corpus runs it over 30 values.
 - **Results keep size-1 axes.** An axis the return does not depend on comes
   back with length 1: shape (3, 1) for `return x` over `[x: X, y: Y]`.
   Several returns are broadcast only against each other.

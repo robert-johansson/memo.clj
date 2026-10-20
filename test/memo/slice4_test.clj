@@ -153,6 +153,18 @@
                           #"Cannot differentiate through the host function gauss-host"
                           ((array/grad host-param) 4.3)))))
 
+(defn picks [x] (nth [1.0 2.0] x))
+
+(defmemo picks-out-of-range [] []
+  (alice :chooses [x X] :wpp (picks x))
+  (return (E alice.x)))
+
+(deftest a-failing-host-function-is-a-memo-error
+  (let [e (try (picks-out-of-range) nil (catch Exception e e))]
+    (is (err/memo-error? e))
+    (is (= "The host function picks failed on [2]: IndexOutOfBoundsException" (ex-message e)))
+    (is (instance? IndexOutOfBoundsException (ex-cause e)))))
+
 (defn ^:memo/vectorized step-if [x] (if (array/< x 2) 1.0 0.0))
 (defn ^:memo/vectorized step-where [x] (array/where (array/< x 2) 1.0 0.0))
 

@@ -239,8 +239,20 @@
                                              [(conj out (nth (nth cols d) i)) (inc d)]))
                                          [[] 0] slots))
                      args (subvec vals 0 (count pos))
-                     kw (zipmap (map (comp keyword first) kwargs) (subvec vals (count pos)))]
-                 (scalar name (apply f (cond-> args (seq kwargs) (conj kw))))))]
+                     kw (zipmap (map (comp keyword first) kwargs) (subvec vals (count pos)))
+                     call-args (cond-> args (seq kwargs) (conj kw))]
+                 (scalar name
+                         (try (apply f call-args)
+                              (catch Exception e
+                                (throw (if (err/memo-error? e)
+                                         e
+                                         (err/memo-error
+                                          (str "The host function " name " failed on "
+                                               (pr-str call-args) ": "
+                                               (or (ex-message e) (.getSimpleName (class e))))
+                                          {:hint (str "It is called on host numbers, one element "
+                                                      "at a time, with its static arguments whole.")
+                                           :cause e}))))))))]
     (if (empty? shape)
       (call 0)
       (array/reshape (array/array (mapv call (range n))) shape))))

@@ -11,14 +11,16 @@
 (defn memo-error
   "A memo error (not thrown). opts: :hint, :user (false marks a suspected bug
   in memo.clj, Python's `user=False`), :loc {:line n :name memo-name},
-  :frame-ctxt (a description of the frame the error was found in)."
-  [message {:keys [hint user loc frame-ctxt] :or {user true}}]
+  :frame-ctxt (a description of the frame the error was found in), :cause
+  (the exception behind it)."
+  [message {:keys [hint user loc frame-ctxt cause] :or {user true}}]
   (ex-info message
            {:memo/error true
             :memo/hint hint
             :memo/user user
             :memo/loc loc
-            :memo/frame-ctxt frame-ctxt}))
+            :memo/frame-ctxt frame-ctxt}
+           cause))
 
 (defn raise
   ([message] (raise message {}))
