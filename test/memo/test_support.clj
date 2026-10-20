@@ -83,14 +83,23 @@
         (is (grad-close? value g) (str "jax " value " memo.clj " g))))))
 
 (defn check-ledger
-  "Each upstream-ledger entry (DESIGN.md §9): memo.clj's gradient is the
-  correct one, where Python memo's is not."
+  "Each upstream-ledger entry (DESIGN.md §9): memo.clj's gradient (entries
+  with :weights) or value is the correct one, where Python memo's is not (a
+  string :python is the error Python memo raised)."
   [ns fixture]
   (doseq [{:keys [model args weights python correct why]} (:ledger fixture)]
     (testing (str (name model) " " args ": " why)
-      (let [g (gradient (memo.test-support/model ns model) weights args)]
-        (is (grad-close? correct g) (str "correct " correct " memo.clj " g))
-        (is (not (grad-close? python correct)) "the ledger records a real difference")))))
+      (let [f (memo.test-support/model ns model)]
+        (if weights
+          (let [g (gradient f weights args)]
+            (is (grad-close? correct g) (str "correct " correct " memo.clj " g))
+            (is (not (grad-close? python correct)) "the ledger records a real difference"))
+          (let [v (try (host (apply f args)) (catch Exception e e))]
+            (if (instance? Exception v)
+              (is false (str "threw: " (ex-message v)))
+              (is (close? correct v) (str "correct " (pr-str correct) " memo.clj " (pr-str v))))
+            (is (or (string? python) (not (close? python correct)))
+                "the ledger records a real difference")))))))
 
 (defn compile-error
   "The memo error from evaluating form (a defmemo) in namespace ns, or nil

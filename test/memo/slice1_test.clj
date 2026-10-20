@@ -161,7 +161,7 @@
     (is (re-find #"not supported in memo.clj yet"
                  (ex-message (ts/compile-error 'memo.slice1-test
                                                '(defmemo later [] []
-                                                  (alice :snapshots-self-as past-alice)
+                                                  (alice :forgets-about x)
                                                   (return 1)))))))
   (testing "a parameter must be a scalar"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"was not a numeric scalar"

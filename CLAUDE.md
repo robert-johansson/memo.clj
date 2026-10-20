@@ -80,4 +80,6 @@ Java binding).
 8. **Host functions** are tabulated on host numbers unless marked
    `^:memo/vectorized` (gen.array operators, elementwise); only those are
    differentiated, and an unmarked one given a differentiated value is a
-   loud error (DESIGN.md §5).
+   loud error (DESIGN.md §5). Inside a vectorized function, branch with
+   `where`, never `if`: an `if` on an array takes one branch for all of it.
+   Each call is spot-checked against host numbers on eager backends.

@@ -153,6 +153,27 @@
                           #"Cannot differentiate through the host function gauss-host"
                           ((array/grad host-param) 4.3)))))
 
+(defn ^:memo/vectorized step-if [x] (if (array/< x 2) 1.0 0.0))
+(defn ^:memo/vectorized step-where [x] (array/where (array/< x 2) 1.0 0.0))
+
+(defmemo uses-step-if [] []
+  (alice :chooses [x X] :wpp (step-if x))
+  (return (E alice.x)))
+
+(defmemo uses-step-where [] []
+  (alice :chooses [x X] :wpp (step-where x))
+  (return (E alice.x)))
+
+(deftest vectorized-functions-are-spot-checked
+  (testing "an if inside a vectorized function takes one branch for every element: loud, not silent"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"vectorized function step-if gives other values on whole arrays"
+                          (uses-step-if))))
+  (testing "where is the way to branch there"
+    ;; (a differentiated call is checked too, on primal values: gauss in
+    ;; gradients-match-jax)
+    (is (ts/close? 0.5 (ts/host (uses-step-where))))))
+
 (defmemo rec-no-axes [] [t]
   (alice :chooses [x X] :wpp 1)
   (return (if (> t 0) (+ (rec-no-axes (- t 1)) (E alice.x)) 0)))

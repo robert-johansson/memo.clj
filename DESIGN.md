@@ -244,7 +244,9 @@ kept in the upstream ledger (§9).
   single-assignment.) memo-clj had the same bug until 2026-10-20; its
   fix (`fresh-tags` in `compile.cljc`, the same one tested against Python
   memo) and its test `copies-keep-their-own-values` are what memo.clj
-  lifts.
+  lifts. (Done in slice 5: snapshots and imagined worlds take fresh value
+  names; the ledger's snapshot and imagine entries require the correct
+  values, and a planted bug that drops the renaming fails them.)
 - **Silent zero gradients.** A host call whose arguments are all static is
   evaluated outside `jit` and converted with `.item()`, so its gradient
   with respect to a parameter is 0 (0 against 0.246 in the probe). A memo
@@ -366,7 +368,13 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
     memo-clj did, is not built yet.
   - **A function marked `^:memo/vectorized`** (written with gen.array's
     operators, elementwise, branching with `where`; or a `custom-vjp`) is
-    called once on whole arrays, and so differentiated.
+    called once on whole arrays, and so differentiated. An `if` on a value
+    inside it would take one branch for every element, silently, so each
+    call is spot-checked against the function on host numbers at up to 32
+    evenly spaced elements (all of them, for most memo domains), and a
+    mismatch is a loud error. The check runs on eager backends; on MLX it
+    would force evaluation, so vectorized functions are best validated
+    once on the JVM backend.
   - **A value being differentiated that reaches an unmarked function is a
     loud error.** Python memo gives a silent zero gradient for a host call
     whose arguments are all parameters (§2.4).

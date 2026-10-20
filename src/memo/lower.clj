@@ -245,6 +245,43 @@
       (call 0)
       (array/reshape (array/array (mapv call (range n))) shape))))
 
+(defn- spot-check
+  "A vectorized function's result r against f on host numbers, at up to 32
+  evenly spaced elements of its dynamic arguments (all of them, for most
+  memo domains). An if or case on a value inside f takes one branch for a
+  whole array, silently; this makes that loud, as gen.clj spot-checks its
+  batched runs. Values are read on the host, primal values for those being
+  differentiated."
+  [name f pos statics kws r]
+  (let [on-host (fn [v] (if (or (tape/tracked? v) (array/array? v)) (array/->clj v) v))
+        slots (concat (map vector pos statics) (map (fn [[_ v s]] [v s]) kws))
+        dyn (keep (fn [[v s]] (when-not s v)) slots)
+        shape (broadcast-shape (map array/shape dyn))
+        n (reduce clojure.core/* 1 shape)
+        k (min n 32)
+        idxs (distinct (map #(long (Math/floor (clojure.core/* % (/ (dec n) (double (max 1 (dec k)))))))
+                            (range k)))
+        cols (mapv #(elements % shape) dyn)
+        got (elements r shape)
+        num (fn [v] (double (if (boolean? v) (if v 1 0) v)))]
+    (doseq [i idxs]
+      (let [vals (first (reduce (fn [[out d] [v s]]
+                                  (if s [(conj out (on-host v)) d] [(conj out (nth (nth cols d) i)) (inc d)]))
+                                [[] 0] slots))
+            args (subvec vals 0 (count pos))
+            kw (zipmap (map (comp keyword first) kws) (subvec vals (count pos)))
+            want (num (scalar name (apply f (cond-> args (seq kws) (conj kw)))))
+            have (num (nth got i))]
+        (when-not (or (= want have) (and (Double/isNaN want) (Double/isNaN have))
+                      (clojure.core/<= (Math/abs (clojure.core/- want have))
+                                       (clojure.core/* 1e-9 (clojure.core/+ 1.0 (Math/abs want)))))
+          (err/raise (str "The vectorized function " name " gives other values on whole arrays "
+                          "than on single values (" have " where " want " at element " i ")")
+                     {:hint (str "Inside a function marked ^:memo/vectorized, branch with gen.array's "
+                                 "where, not if or case: an if on an array takes one branch for every "
+                                 "element. Or remove the mark, so that memo.clj calls it on each value "
+                                 "(and cannot differentiate it).")}))))))
+
 (defn- host-call
   "The :ffi instruction. A function marked :memo/vectorized (written with
   gen.array's operators, elementwise) is called once on whole arrays, and so
@@ -276,6 +313,9 @@
         (when-not (and (clojure.core/<= (count rs) (count dyn-shape))
                        (every? true? (map #(or (= 1 %1) (= %1 %2)) (rseq rs) (rseq dyn-shape))))
           (not-scalar name))
+        ;; on an eager backend; a lazy one (MLX) would evaluate here
+        (when (array/concrete? r)
+          (spot-check name f pos statics kws r))
         r)
 
       (some tape/tracked? vals)

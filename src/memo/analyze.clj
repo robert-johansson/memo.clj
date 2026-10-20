@@ -15,7 +15,8 @@
 
   Lifted from memo-clj's compile after review against core.py. It covers the
   constructs built so far (M1, slice 1); the others are errors that say so."
-  (:require [memo.errors :as err]
+  (:require [clojure.string :as str]
+            [memo.errors :as err]
             [memo.frames :as fr]))
 
 ;; -----------------------------------------------------------------------------
@@ -29,6 +30,32 @@
 
 (defn- frame-err-opts [state loc]
   {:loc loc :frame-ctxt (fr/frame-context state)})
+
+(defn- fresh-tags
+  "Every choice in frame and the frames inside it with a value symbol of its
+  own, an :alias of the old one: [state frame']. A copy (a snapshot, an
+  imagined world) must not share value symbols with its original, or an
+  observation in one would reach the other (repoint follows the symbol):
+  Python memo 1.3.2's snapshot bug (DESIGN.md §2.4)."
+  [state frame]
+  (let [tags-in (fn tags-in [f]
+                  (concat (keep :tag (vals (:choices f)))
+                          (mapcat tags-in (vals (:children f)))))
+        [state renamed]
+        (reduce (fn [[st m] old]
+                  (let [n (:sym-n st)
+                        new (symbol (str (first (str/split (str old) #"\$")) "$" n))
+                        st (-> st
+                               (assoc :sym-n (inc n))
+                               (update :instrs conj {:i :alias :out new :arg old}))]
+                    [st (assoc m old new)]))
+                [state {}]
+                (sort-by str (distinct (tags-in frame))))
+        rename (fn rename [f]
+                 (-> f
+                     (update :choices #(reduce-kv (fn [acc k ch] (assoc acc k (update ch :tag (fn [t] (get renamed t t))))) {} %))
+                     (update :children #(reduce-kv (fn [acc k c] (assoc acc k (rename c))) {} %))))]
+    [state (rename frame)]))
 
 (defn- domain-values [state dom loc]
   (or (get-in state [:domains dom])
@@ -98,7 +125,7 @@
 ;; -----------------------------------------------------------------------------
 ;; expressions
 
-(declare eval-expr)
+(declare eval-expr eval-stmt)
 
 (defn- eval-lit [state e]
   (let [v (:value e)
@@ -400,6 +427,119 @@
     [(emit state {:i :inline :out out :idx idx})
      {:tag out :known true :deps #{}}]))
 
+(defn- eval-imagine
+  "(imagine stmts... e): e in a hypothetical world, the current frame's copy
+  (named imagined_<name>, with value symbols of its own) after stmts. The
+  copy is discarded afterwards; e's value must be known to the frame."
+  [state {:keys [do then loc]}]
+  (let [who (:name (fr/get-frame state))
+        {old-root :root old-path :path old-cont :continuation} state
+        old-frame (fr/get-frame state)
+        imagined-name (symbol (str "imagined_" who))
+        state (fr/update-frame state assoc :name imagined-name)
+        [state imagined] (fresh-tags state (fr/get-frame state))
+        state (fr/update-frame state (constantly imagined))
+        state (reduce (fn [st [i s]] (eval-stmt (assoc st :continuation (subvec do (inc i))) s))
+                      state (map-indexed vector do))
+        [state val] (eval-expr state then)]
+    (when-not (:known val)
+      (err/raise "trying to imagine an unknown value"
+                 (assoc (frame-err-opts state (:loc then))
+                        :hint (str "In this hypothetical imagined world, " who " won't be able "
+                                   "to compute the return value you requested. Perhaps you "
+                                   "meant to wrap the return value in (E ...)?"))))
+    (let [imagined-frame (fr/get-frame state)
+          deps (reduce (fn [acc dep]
+                         (let [c (get (:conditions imagined-frame) dep)]
+                           (cond
+                             (contains? (:choices old-frame) dep) (conj acc dep)
+                             ;; a statement like (env :knows x) in the copy
+                             (= imagined-name (first c)) (conj acc ['self (second c)])
+                             :else (err/raise "Internal error mapping imagined dependencies"
+                                              {:user false :loc loc}))))
+                       #{} (:deps val))]
+      [(assoc state :root old-root :path old-path :continuation old-cont)
+       (assoc val :deps deps)])))
+
+(defn- predict-prefix
+  "The frame names from the outermost one below the root (or an imagined
+  frame) down to the current one: the agents whose statements a Predict
+  replays are the last of them, as modeled by the others."
+  [state]
+  (loop [i (count (:path state)), prefix ()]
+    (if (zero? i)
+      (vec prefix)
+      (let [f (fr/get-frame state (subvec (:path state) 0 i))]
+        (if (str/starts-with? (str (:name f)) "imagined_")
+          (vec prefix)
+          (recur (dec i) (cons (:name f) prefix)))))))
+
+(defn- retarget-continuation
+  "The rest of the program, as the current agent's future self would live it:
+  the agent's own statements (inside the thinks of the agents modeling it),
+  addressed to the future self, with each later observation becoming a guess
+  of the value from the agent's current beliefs and an observation of the
+  guess (core.py's EPredict)."
+  [state prefix future loc]
+  (reduce
+   (fn [[st acc] stmt]
+     (let [s (loop [s stmt, ws (butlast prefix)]
+               (cond
+                 (empty? ws) s
+                 (and (= :with-stmt (:node s)) (= (:who s) (first ws))) (recur (:stmt s) (rest ws))
+                 :else nil))]
+       (cond
+         (nil? s) [st acc]
+         (= :pass (:node s)) [st (conj acc s)]
+         (= :forall (:node s))
+         (err/raise "forall cannot appear after a wants statement or a (Predict ...) expression" {:loc loc})
+         (not= (:who s) (last prefix)) [st acc]
+         (= :knows (:node s))
+         (err/raise "A 'knows' statement cannot appear after a 'wants' statement or a 'Predict' expression."
+                    (assoc (frame-err-opts st loc)
+                           :hint (str "This is because " (last prefix) " cannot evaluate utilities "
+                                      "without knowing all of the relevant variables. Can you move "
+                                      "the knows statement before the wants statement?")))
+         (= :show (:node s))
+         (let [[st id] (fresh st (str (:target-id s)))]
+           [st (conj acc
+                     {:node :guess :who future :id id :target-who (:target-who s)
+                      :target-id (:target-id s) :loc (:loc s)}
+                     (assoc s :who future :source-who future :source-id id))])
+         :else [st (conj acc (assoc s :who future))])))
+   [state []]
+   (:continuation state)))
+
+(defn- eval-predict
+  "(Predict e): the expected value of e in the current agent's imagined
+  future, the rest of the program replayed by a snapshot of the agent."
+  [state {:keys [expr loc]}]
+  (when (empty? (:path state))
+    (err/raise "(Predict ...) and (EU ...) cannot be used at the top level of a memo"
+               {:hint (str "They evaluate an agent's goal in its imagined future, and the "
+                           "observer has none. Use them in an agent's choice, e.g. "
+                           "(alice :chooses [a A] :to-maximize (EU goal)).")
+                :loc loc}))
+  (let [[state future] (fresh state (str "future_" (:name (fr/get-frame state))))
+        path (:path state)
+        state (-> state
+                  (assoc :path (pop path))
+                  (eval-stmt {:node :snapshot :who (peek path) :alias future :loc loc})
+                  (assoc :path path))
+        [state to-imagine] (retarget-continuation state (predict-prefix state) future loc)]
+    (eval-expr state {:node :imagine :do to-imagine :loc loc :static false
+                      :then {:node :expect :reduction :expectation :warn false :loc loc :static false
+                             :expr {:node :with :who future :expr expr :loc loc :static false}}})))
+
+(defn- eval-util
+  "(EU goal): the expected value of the agent's goal, as Predict."
+  [state {:keys [goal loc]}]
+  (let [g (get-in (fr/get-frame state) [:goals goal])]
+    (when-not g
+      (err/raise (str "Unknown goal " goal)
+                 (assoc (frame-err-opts state loc) :hint (str "Did you misspell " goal "?"))))
+    (eval-predict state {:expr g :loc loc})))
+
 (defn eval-expr [state e]
   (case (:node e)
     :lit (eval-lit state e)
@@ -411,10 +551,10 @@
     :memo (eval-memo-call state e)
     :entropy (unsupported "(H ...)" (:loc e))
     :kl (unsupported "(KL ...)" (:loc e))
-    :imagine (unsupported "(imagine ...)" (:loc e))
+    :imagine (eval-imagine state e)
     :inline (eval-inline state e)
-    :predict (unsupported "(Predict ...)" (:loc e))
-    :util (unsupported "(EU ...)" (:loc e))
+    :predict (eval-predict state e)
+    :util (eval-util state e)
     (err/raise (str "Unknown expression node " (:node e)) {:user false :loc (:loc e)})))
 
 ;; -----------------------------------------------------------------------------
@@ -700,6 +840,63 @@
                                 (assoc-in [:choices ['self source-id]] (assoc src :known true))
                                 (assoc-in [:conditions ['self source-id]] source))))))))
 
+(defn- eval-snapshot
+  "(who :snapshots-self-as alias): who keeps a copy of its present self, with
+  value symbols of its own, which later statements about who do not reach."
+  [state {:keys [who alias]}]
+  (let [state (fr/ensure-child state who)
+        path (conj (:path state) who)
+        current (fr/get-frame state path)
+        future (reduce (fn [f [addr _]] (assoc-in f [:conditions addr] addr))
+                       (assoc current :name alias)
+                       (:choices current))
+        [state future] (fresh-tags state future)
+        current' (reduce (fn [cur [[nm id] _]]
+                           (if (= 'self nm)
+                             (-> cur
+                                 (assoc-in [:choices [alias id]] (get-in future [:choices ['self id]]))
+                                 (assoc-in [:conditions [alias id]] [who id]))
+                             cur))
+                         current
+                         (:choices current))]
+    (fr/update-frame* state path (constantly (assoc-in current' [:children alias] future)))))
+
+(defn- eval-wants
+  "(who :wants goal e): who's goal, an expectation evaluated by (EU goal) in
+  who's imagined future."
+  [state {:keys [who what how loc]}]
+  (when (= :no-wants (:variant (fr/get-frame state)))
+    (err/raise "Unknown syntactic construct `wants`"
+               (assoc (frame-err-opts state loc) :hint "There is no such construct.")))
+  (let [state (fr/ensure-child state who)
+        frm (fr/get-frame state)]
+    (when (get-in frm [:children who :goals what])
+      (err/raise (str who " already wants " what)
+                 (assoc (frame-err-opts state loc) :hint "Pick a new name for this goal?")))
+    (when (get-in frm [:choices ['self what]])
+      (err/raise (str "The goal name " what " is already the name of a choice")
+                 (assoc (frame-err-opts state loc) :hint "Pick a new name for this goal?")))
+    (fr/update-frame state assoc-in [:children who :goals what]
+                     {:node :expect :expr how :reduction :expectation :warn false
+                      :loc loc :static false})))
+
+(defn- eval-guess
+  "The future self's guess of the value it will observe: a choice weighted by
+  its current belief in each value (core.py's SGuess)."
+  [state {:keys [who id target-who target-id loc]}]
+  (let [ch (get-in (fr/get-frame state) [:children who :choices [target-who target-id]])]
+    (when-not ch
+      (err/raise "Observing unknown choice"
+                 (assoc (frame-err-opts state loc)
+                        :hint (str who " does not model " target-who "'s choice of " target-id "."))))
+    (eval-stmt state
+               {:node :choose :who who :choices [[id (:domain ch)]] :reduction :normalize :loc loc
+                :wpp {:node :expect :reduction :expectation :warn false :loc loc :static false
+                      :expr {:node :op :op :eq :loc loc :static false
+                             :args [{:node :choice :id id :loc loc :static false}
+                                    {:node :with :who target-who :loc loc :static false
+                                     :expr {:node :choice :id target-id :loc loc :static false}}]}}})))
+
 (defn- eval-variant [state {:keys [who variant]}]
   (-> state
       (fr/ensure-child who)
@@ -715,10 +912,11 @@
     :show (eval-show state s)
     :observes-factor (eval-observes-factor state s)
     :knows (eval-knows state s)
-    :snapshot (unsupported "snapshots-self-as" (:loc s))
+    :snapshot (eval-snapshot state s)
+    :guess (eval-guess state s)
     :variant (eval-variant state s)
     :trace (unsupported "inspect" (:loc s))
-    :wants (unsupported "wants" (:loc s))
+    :wants (eval-wants state s)
     :forgets-about (unsupported "forgets-about" (:loc s))
     (err/raise (str "Unknown statement node " (:node s)) {:user false :loc (:loc s)})))
 

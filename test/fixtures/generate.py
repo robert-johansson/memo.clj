@@ -123,6 +123,20 @@ def ledger(wrong, right, weights, *args, why):
             Kw("correct"): g_right[Kw("value")], Kw("why"): why}
 
 
+def ledger_value(wrong, right, *args, why):
+    """An upstream-ledger entry for values: Python memo's value of wrong (or
+    its error) is not right, and right is a twin whose value is the correct
+    one for wrong (computed correctly by Python memo)."""
+    shape = tuple(wrong._shape) if wrong._num_retvals == 1 else (wrong._num_retvals,) + tuple(wrong._shape)
+    try:
+        python = tolist(np.broadcast_to(np.asarray(wrong(*args)), shape))
+    except Exception as e:
+        python = f"{type(e).__name__}: {str(e).splitlines()[0]}"
+    correct = tolist(np.broadcast_to(np.asarray(right(*args)), shape))
+    return {Kw("model"): kebab(wrong.__name__), Kw("args"): [float(a) for a in args],
+            Kw("python"): python, Kw("correct"): correct, Kw("why"): why}
+
+
 def write(name, cases, errors, runtime_errors=(), grads=(), ledger=()):
     """errors: functions, or (function, memo options) pairs, that must not
     compile; runtime_errors: (memo, args) that compile and must fail when
@@ -1077,3 +1091,374 @@ write("slice4.edn",
               ledger(calls_h, calls_h_ref, 1.0, 0.3,
                      why="a memo without axes can only be called as a host function, so "
                          "the call's gradient is 0")])
+
+
+# --- slice 5: imagine, snapshots, wants/EU/Predict -------------------------------
+
+@memo
+def observes_other_imagine():
+    alice: thinks[ bob: chooses(x in X, wpp=1) ]
+    charlie: chooses(x in X, wpp=1)
+    alice: observes [bob.x] is charlie.x
+    return E[alice[imagine[env: knows(bob.x), bob.x + 1]]]
+
+
+@memo
+def imagine_ok():
+    return alice[imagine[bob: chooses(y in X, wpp=1), E[bob.y]]]
+
+
+@memo
+def imagine_knows():
+    alice: chooses(x in X, wpp=1)
+    return E[alice[imagine[world: knows(x), world.x]]]
+
+
+@memo
+def imagine_knows_other[z: X]():
+    alice: chooses(x in X, wpp=1)
+    alice: thinks[ bob: chooses(z in X, wpp=1) ]
+    alice: observes [bob.z] is z
+    return alice[imagine[world: knows(bob.z), world[bob.z]]]
+
+
+@memo
+def imagine_future_stress():
+    alice: chooses(x in X, wpp=1)
+    alice: thinks[ bob: chooses(z in X, wpp=1) ]
+    alice: snapshots_self_as(future_alice)
+    return E[alice[imagine[
+        world: knows(x, bob.z),
+        world: chooses(z in X, wpp=1),
+        future_alice: chooses(y in X, wpp=x + y),
+        future_alice: thinks[ world: chooses(z in X, wpp=1) ],
+        future_alice: observes [world.z] is world.z,
+        E[future_alice.y + future_alice[world.z + y] + world.z + world[bob.z]]
+    ]]]
+
+
+@memo
+def imagine_toplevel():
+    return imagine[alice: chooses(x in X, wpp=1), E[alice.x]]
+
+
+@memo
+def predict_own():
+    alice: chooses(x in X, to_maximize=Predict[x])
+    return E[alice.x]
+
+
+@memo
+def predict():
+    bob: chooses(z in X, wpp=1)
+    bob: thinks[
+        alice: chooses(x in X, to_maximize=Predict[z]),
+        alice: chooses(y in X, to_maximize=Predict[z]),
+        alice: thinks[ world: knows(x, y), world: chooses(z in X, wpp=z + x + y) ],
+        alice: observes [world.z] is z,
+        alice: chooses(z in X, wpp=world.z + z)
+    ]
+    return E[bob[E[alice.x]]]
+
+
+@memo
+def two_goals[x: X, y: X]():
+    bob: thinks[
+        alice: wants(u=x + y),
+        alice: wants(v=x - y),
+        alice: chooses(x in X, to_maximize=EU[u]),
+        alice: chooses(y in X, to_maximize=EU[v])
+    ]
+    bob: knows(x, y)
+    return bob[Pr[alice.x == x, alice.y == y]]
+
+
+class Cups(IntEnum):
+    Near_Vizzini = 0
+    Near_Westley = 1
+
+
+@memo
+def vizzini_pick[cup: Cups](level):
+    vizzini: wants(survive=my_cup != westley.poison)
+    vizzini: thinks[
+        westley: wants(kill=vizzini.my_cup == poison),
+        westley: chooses(poison in Cups, to_maximize=EU[kill]),
+        westley: thinks[
+            vizzini: chooses(my_cup in Cups,
+                             wpp=vizzini_pick[my_cup](level - 1) if level > 0 else my_cup == {Cups.Near_Vizzini})
+        ]
+    ]
+    vizzini: chooses(my_cup in Cups, to_maximize=EU[survive])
+    return Pr[vizzini.my_cup == cup]
+
+
+from jax.scipy.stats.bernoulli import pmf as ber  # noqa: E402
+
+Value = np.linspace(0, 1, 101)
+
+
+@memo
+def lemons_buyer():
+    buyer: wants(payoff=(seller.quality * 1.5 - bid) if seller.sell else 0)
+    buyer: chooses(bid in Value, to_maximize=EU[payoff])
+    buyer: thinks[
+        seller: given(quality in Value, wpp=1),
+        seller: knows(bid),
+        seller: chooses(sell in Bool, wpp=ber(sell, bid >= quality))
+    ]
+    return E[buyer.bid]
+
+
+class Box(IntEnum):
+    FST_BOX = 0
+    SND_BOX = 1
+
+
+class FoodStatus(IntEnum):
+    EMPTY_BOX = 0
+    FOODY_BOX = 1
+
+
+class EvidenceType(IntEnum):
+    CRUMBS = 0
+    NOISES = 1
+    VISUAL = 2
+
+
+def p_evidence(et, fs):
+    return np.array([[0.5, 0.6], [0.3, 0.6], [0.01, 0.9]])[et, fs]
+
+
+@memo
+def first_choice[et1: EvidenceType, b: Box]():
+    chimp: knows(et1)
+    chimp: wants(get_food=(world.box1_fs if b == {Box.FST_BOX} else world.box2_fs) == {FoodStatus.FOODY_BOX})
+    chimp: thinks[
+        world: chooses(box1_fs in FoodStatus, wpp=1),
+        world: chooses(box2_fs in FoodStatus, wpp=1),
+        world: knows(et1),
+        world: chooses(e1 in FoodStatus, wpp=ber(e1, p_evidence(et1, box1_fs))),
+    ]
+    chimp: observes_that [world.e1 == {FoodStatus.FOODY_BOX}]
+    chimp: chooses(b in Box, wpp=exp(10.0 * EU[get_food]))
+    return Pr[chimp.b == b]
+
+
+class Vocab(IntEnum):
+    Ball = 0
+    Bear = 1
+    Duck = 2
+    Milk = 3
+    Shoe = 4
+
+
+@memo
+def novel_event_inform[fixed_event: Vocab, novel_event: Vocab, utterance: Vocab](beta):
+    baby: knows(fixed_event, novel_event)
+    baby: wants(inform=Pr[parent.referent_guess == novel_event])
+    baby: thinks[
+        parent: thinks[
+            scene: chooses(fixed_event in Vocab, wpp=1),
+            scene: chooses(novel_event in Vocab, wpp=1)
+        ],
+        parent: observes [scene.fixed_event] is fixed_event,
+        parent: thinks[
+            baby: knows(scene.fixed_event, scene.novel_event),
+            baby: chooses(referent in Vocab, wpp=referent == scene.fixed_event or referent == scene.novel_event),
+            baby: chooses(utterance in Vocab, wpp=(utterance == referent) + 0.25)
+        ]
+    ]
+    baby: chooses(utterance in Vocab, wpp=exp(beta * EU[inform]))
+    baby: thinks[
+        parent: observes [baby.utterance] is utterance,
+        parent: guesses(referent_guess in Vocab, wpp=Pr[referent_guess == baby.referent])
+    ]
+    return Pr[baby.utterance == utterance]
+
+
+class Sp(IntEnum):
+    Hungry = 0
+    Sated = 1
+
+
+class Ap(IntEnum):
+    Feed = 0
+    Sing = 1
+    Ignore = 2
+
+
+class Op(IntEnum):
+    Crying = 0
+    Quiet = 1
+
+
+Bp = np.linspace(0, 1, 50)
+
+
+@jax.jit
+def get_belief(b, s):
+    return np.array([b, 1 - b])[s]
+
+
+@jax.jit
+def tr(s, a, s_):
+    z = np.array([[0.0, 1.0, 1.0], [0.0, 0.1, 0.1]])[s, a]
+    return np.array([z, 1 - z])[s_]
+
+
+@jax.jit
+def obs_p(o, s, a):
+    z = np.array([[0.8, 0.9, 0.8], [0.1, 0.0, 0.1]])[s, a]
+    return np.array([z, 1 - z])[o]
+
+
+@jax.jit
+def reward(s, a):
+    return np.array([-10, 0])[s] + np.array([-5, -0.5, 0])[a]
+
+
+# demo-pomdp.ipynb (its names changed: S, A, O and R are taken in this file)
+@memo
+def Q_pomdp[b: Bp, a: Ap](t):
+    alice: knows(b, a)
+    alice: thinks[
+        env: knows(b, a),
+        env: chooses(s in Sp, wpp=get_belief(b, s)),
+        env: chooses(s_ in Sp, wpp=tr(s, a, s_)),
+        env: chooses(o in Op, wpp=obs_p(o, s_, a))
+    ]
+    alice: snapshots_self_as(future_alice)
+    return alice[E[reward(env.s, a)] + (0.0 if t <= 0 else 0.9 * imagine[
+        future_alice: observes [env.o] is env.o,
+        future_alice: chooses(b_ in Bp, wpp=exp(-100.0 * abs(E[env.s_ == 0] - b_))),
+        future_alice: chooses(a_ in Ap, to_maximize=Q_pomdp[b_, a_](t - 1)),
+        E[future_alice[Q_pomdp[b_, a_](t - 1)]]
+    ])]
+
+
+# the snapshot bug (DESIGN.md §2.4): a snapshot is unaffected by its owner's
+# later observation, so each *_ref twin (without the observation) has the
+# correct value of its model
+@memo
+def snap_f[x: X]():
+    alice: thinks[ bob: chooses(x in X, wpp=1) ]
+    alice: snapshots_self_as(past_alice)
+    alice: observes [bob.x] is x
+    return alice[past_alice[E[bob.x]]]
+
+
+@memo
+def snap_f_ref[x: X]():
+    alice: thinks[ bob: chooses(x in X, wpp=1) ]
+    alice: snapshots_self_as(past_alice)
+    return alice[past_alice[E[bob.x]]]
+
+
+@memo
+def snap_g[x: X]():
+    alice: thinks[ bob: chooses(x in X, wpp=1), bob: chooses(y in X, wpp=(y == x)) ]
+    alice: snapshots_self_as(past_alice)
+    alice: observes [bob.x] is x
+    return alice[past_alice[E[bob.x + bob.y]]]
+
+
+@memo
+def snap_g_ref[x: X]():
+    alice: thinks[ bob: chooses(x in X, wpp=1), bob: chooses(y in X, wpp=(y == x)) ]
+    alice: snapshots_self_as(past_alice)
+    return alice[past_alice[E[bob.x + bob.y]]]
+
+
+@memo
+def snap_pr[x: X]():
+    alice: thinks[ bob: chooses(x in X, wpp=1) ]
+    alice: snapshots_self_as(past_alice)
+    alice: observes [bob.x] is x
+    return alice[past_alice[Pr[bob.x == 2]]]
+
+
+@memo
+def snap_pr_ref[x: X]():
+    alice: thinks[ bob: chooses(x in X, wpp=1) ]
+    alice: snapshots_self_as(past_alice)
+    return alice[past_alice[Pr[bob.x == 2]]]
+
+
+@memo
+def eu_leak():
+    world: chooses(s in B2, wpp=1)
+    alice: thinks[ world: chooses(s in B2, wpp=1 + 2 * s) ]
+    alice: wants(win=(world.s == g))
+    alice: chooses(look in B2, to_maximize=EU[win] - 0.1 * look)
+    alice: chooses(m in B2, wpp=exp(E[world.s] * m))
+    alice: observes [world.s] is world.s
+    alice: chooses(g in B2, wpp=Pr[world.s == g])
+    return Pr[alice.m == 1]
+
+
+@memo
+def eu_leak_ref():
+    world: chooses(s in B2, wpp=1)
+    alice: thinks[ world: chooses(s in B2, wpp=1 + 2 * s) ]
+    alice: chooses(m in B2, wpp=exp(E[world.s] * m))
+    alice: observes [world.s] is world.s
+    alice: chooses(g in B2, wpp=Pr[world.s == g])
+    return Pr[alice.m == 1]
+
+
+def imagine_unknown_err():
+    return alice[imagine[bob: chooses(y in X, wpp=1), bob.y]]
+
+
+def predict_fail_knows():
+    bob: chooses(z in X, wpp=1)
+    bob: thinks[
+        alice: chooses(x in X, to_maximize=Predict[x]),
+        alice: knows(z)
+    ]
+    return E[bob[E[alice.x]]]
+
+
+def unknown_goal():
+    alice: chooses(x in X, to_maximize=EU[g])
+    return 1
+
+
+def no_wants_err():
+    alice: wants(g=1)
+    return 0
+
+
+W555 = np.linspace(-1, 1, 125).reshape(5, 5, 5)
+
+write("slice5.edn",
+      [case(observes_other_imagine),
+       case(imagine_ok),
+       case(imagine_knows),
+       case(imagine_knows_other),
+       case(imagine_future_stress),
+       case(imagine_toplevel),
+       case(predict_own),
+       case(predict),
+       case(two_goals),
+       case(vizzini_pick, 0),
+       case(vizzini_pick, 1),
+       case(vizzini_pick, 3),
+       case(lemons_buyer),
+       case(first_choice),
+       case(novel_event_inform, 2.0),
+       case(Q_pomdp, 0),
+       case(Q_pomdp, 1),
+       case(Q_pomdp, 2)],
+      [imagine_unknown_err, predict_fail_knows, unknown_goal,
+       (no_wants_err, {"variant": Variant.NO_WANTS})],
+      grads=[grad(novel_event_inform, W555, 2.0)],
+      ledger=[ledger_value(snap_f, snap_f_ref,
+                           why="the snapshot's E[bob.x] reads bob.x's value as rebound by the owner's observation"),
+              ledger_value(snap_g, snap_g_ref,
+                           why="the snapshot pairs its prior with bob.x's observed value: x + 1"),
+              ledger_value(snap_pr, snap_pr_ref,
+                           why="the snapshot's Pr[bob.x == 2] reads the rebound value"),
+              ledger_value(eu_leak, eu_leak_ref,
+                           why="the observation replayed in EU's imagined future rebinds world.s for the real frame")])
