@@ -161,8 +161,7 @@
     (is (re-find #"not supported in memo.clj yet"
                  (ex-message (ts/compile-error 'memo.slice1-test
                                                '(defmemo later [] []
-                                                  (alice :forgets-about x)
-                                                  (return 1)))))))
+                                                  (return (cost uniform-pick))))))))
   (testing "a parameter must be a scalar"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"was not a numeric scalar"
                           (mean-roll (array/array [0.1 0.2]))))))

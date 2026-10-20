@@ -427,6 +427,81 @@
     [(emit state {:i :inline :out out :idx idx})
      {:tag out :known true :deps #{}}]))
 
+(defn- emit-op
+  "Emit {:i :op :op op :args args} under a fresh symbol: [state out]."
+  [state hint op & args]
+  (let [[state out] (fresh state hint)]
+    [(emit state {:i :op :op op :out out :args (vec args)}) out]))
+
+(defn- eval-entropy
+  "(H a.x ...): the entropy of the frame's joint marginal over the choices
+  named (core.py's EEntropy). nan_to_num makes 0 · log 0 zero."
+  [state {:keys [rvs loc]}]
+  (let [frm (fr/get-frame state)
+        named (set rvs)]
+    (doseq [[w i :as rv] rvs]
+      (let [c (get-in frm [:choices rv])]
+        (when-not c
+          (err/raise "Taking entropy of unknown variable"
+                     (assoc (frame-err-opts state loc)
+                            :hint (str (:name frm) " is not tracking choice " w "." i "."))))
+        (when (:known c)
+          (err/raise "Taking entropy of known variable"
+                     (assoc (frame-err-opts state loc)
+                            :hint (str w "." i " is already known to " (:name frm)
+                                       ", so its entropy is zero."))))))
+    (let [ll (read-ll state loc)
+          dims (fn [pred] (vec (distinct (keep (fn [[addr c]] (when (and (not (:known c)) (pred addr)) (:idx c)))
+                                               (:choices frm)))))
+          [state m] (fresh state "marginal")
+          state (emit state {:i :sum :out m :arg ll :dims (dims (complement named))})
+          [state lg] (emit-op state "log" :log m)
+          [state z] (fresh state "log")
+          state (emit state {:i :nan-to-num :out z :arg lg})
+          [state t] (emit-op state "plogp" :mul m z)
+          [state s] (fresh state "sum")
+          state (emit state {:i :sum :out s :arg t :dims (dims named)})
+          [state out] (emit-op state "entropy" :neg s)]
+      [state {:tag out :known true :deps (known-deps state)}])))
+
+(defn- eval-kl
+  "(KL p.x q.y): the KL divergence from the frame's marginal over q.y to its
+  marginal over p.x, two choices over one domain (core.py's EKL)."
+  [state {:keys [p-who p-id q-who q-id loc]}]
+  (let [frm (fr/get-frame state)
+        p (get-in frm [:choices [p-who p-id]])
+        q (get-in frm [:choices [q-who q-id]])
+        err-opts (frame-err-opts state loc)]
+    (doseq [[c w i] [[p p-who p-id] [q q-who q-id]]]
+      (when-not c
+        (err/raise (str "Unknown choice " w "." i) (assoc err-opts :hint "Did you misspell something?"))))
+    (doseq [[c w i] [[p p-who p-id] [q q-who q-id]]]
+      (when (:known c)
+        (err/raise (str "Cannot take KL-divergence over known variable " w "." i)
+                   (assoc err-opts :hint "It only makes sense to take KL-divergence over uncertain variables."))))
+    (when (not= (:domain p) (:domain q))
+      (err/raise "KL-divergence mismatched support"
+                 (assoc err-opts :hint (str "Domains of " p-who "." p-id " (" (:domain p) ") and "
+                                            q-who "." q-id " (" (:domain q) ") do not match."))))
+    (let [ll (read-ll state loc)
+          others (fn [c] (vec (distinct (keep (fn [[_ c']] (when (and (not (:known c')) (not= c' c)) (:idx c')))
+                                              (:choices frm)))))
+          [state pp] (fresh state "p")
+          state (emit state {:i :sum :out pp :arg ll :dims (others p)})
+          [state qp] (fresh state "q")
+          state (emit state {:i :sum :out qp :arg ll :dims (others q)})
+          [state qs] (fresh state "q")
+          state (emit state {:i :swap-dims :out qs :arg qp :d1 (:idx p) :d2 (:idx q)})
+          [state lp] (emit-op state "log" :log pp)
+          [state lq] (emit-op state "log" :log qs)
+          [state d] (emit-op state "logratio" :sub lp lq)
+          [state z] (fresh state "logratio")
+          state (emit state {:i :nan-to-num :out z :arg d})
+          [state t] (emit-op state "term" :mul pp z)
+          [state out] (fresh state "kl")
+          state (emit state {:i :sum :out out :arg t :dims [(:idx p)]})]
+      [state {:tag out :known true :deps (known-deps state)}])))
+
 (defn- eval-imagine
   "(imagine stmts... e): e in a hypothetical world, the current frame's copy
   (named imagined_<name>, with value symbols of its own) after stmts. The
@@ -549,8 +624,8 @@
     :expect (eval-expect state e)
     :ffi (eval-ffi state e)
     :memo (eval-memo-call state e)
-    :entropy (unsupported "(H ...)" (:loc e))
-    :kl (unsupported "(KL ...)" (:loc e))
+    :entropy (eval-entropy state e)
+    :kl (eval-kl state e)
     :imagine (eval-imagine state e)
     :inline (eval-inline state e)
     :predict (eval-predict state e)
@@ -897,6 +972,76 @@
                                     {:node :with :who target-who :loc loc :static false
                                      :expr {:node :choice :id target-id :loc loc :static false}}]}}})))
 
+(defn- eval-forgets-about
+  "(who :forgets-about x ...): who's own choices summed out of the current
+  frame's beliefs, once, and dropped from scope: later computations need not
+  marginalize them again (core.py's SForgetsAbout)."
+  [state {:keys [who ids loc]}]
+  (let [state (fr/ensure-child state who)
+        frm (fr/get-frame state)
+        child (get-in frm [:children who])
+        idxs (mapv (fn [id]
+                     (when (or (not (contains? (:choices child) ['self id]))
+                               (contains? (:conditions child) ['self id]))
+                       (err/raise (str who " has no such choice " id " to forget")
+                                  (assoc (frame-err-opts state loc)
+                                         :hint (str "forgets-about only applies to " who "'s own "
+                                                    "choices made via chooses/given/etc. " id " is "
+                                                    "either unknown to " who ", or was learned via "
+                                                    "knows/observes rather than chosen."))))
+                     (when-not (contains? (:choices frm) [who id])
+                       (err/raise (str (:name frm) " is not aware that " who " has chosen " id ".")
+                                  (assoc (frame-err-opts state loc) :hint (str "Is there a typo in " id "?"))))
+                     (get-in frm [:choices [who id] :idx]))
+                   ids)
+        state (if-let [ll (:ll frm)]
+                (let [[st m] (fresh state "ll")]
+                  (-> st
+                      (emit {:i :sum :out m :arg ll :dims idxs})
+                      (fr/update-frame assoc :ll m)))
+                state)]
+    (fr/update-frame state
+                     (fn [f]
+                       (reduce (fn [f id]
+                                 (-> f
+                                     (update-in [:children who :choices] dissoc ['self id])
+                                     (update-in [:children who :conditions] dissoc ['self id])
+                                     (update :choices dissoc [who id])
+                                     (update :conditions dissoc [who id])))
+                               (update f :ll-dims #(reduce disj % idxs))
+                               ids)))))
+
+(defn- eval-trace
+  "(who :inspect): what who tracks, printed while the memo compiles (Python
+  memo's INSPECT)."
+  [state {:keys [who loc]}]
+  (let [frm (fr/get-frame state)
+        label (fn [[w i]] (if (= 'self w) (str i) (str w "." i)))]
+    (println (str "** Tracing " who (when (:name loc) (str " in defmemo " (:name loc)))
+                  (when (:line loc) (str ", line " (:line loc)))))
+    (if-let [f (get-in frm [:children who])]
+      (do
+        (when (not= :adult (:variant f))
+          (println (str "-> " who " is using the variant " (name (:variant f)))))
+        (println (str "-> " who " is tracking the following choices:"))
+        (doseq [[addr c] (sort-by (comp str key) (:choices f))]
+          (println (str "   - " (label addr) ": " (:domain c) " (" (if (:known c) "known" "uncertain") ")"))
+          (when-let [src (get (:conditions f) addr)]
+            (println (str "     | (observed to be " (:name frm) "'s " (label src) ")"))))
+        (if (empty? (:children f))
+          (println (str "-> " who " is not yet tracking any agents."))
+          (do (println (str "-> " who " is currently tracking the following agents:"))
+              (doseq [c (sort (map str (keys (:children f))))] (println (str "   + " c)))))
+        (doseq [i (range (count (:path state)) -1 -1)]
+          (let [inner (if (= i (count (:path state))) f (fr/get-frame state (subvec (:path state) 0 (inc i))))
+                outer (fr/get-frame state (subvec (:path state) 0 i))]
+            (println (str "-> " (:name inner) " is being modeled by " (:name outer) ".")))))
+      (println (str "-> From " (:name frm) "'s perspective, there is not yet any model of " who
+                    ". The agents currently modeled by " (:name frm) " are: "
+                    (str/join ", " (sort (map str (keys (:children frm))))) ".")))
+    (println)
+    state))
+
 (defn- eval-variant [state {:keys [who variant]}]
   (-> state
       (fr/ensure-child who)
@@ -915,9 +1060,9 @@
     :snapshot (eval-snapshot state s)
     :guess (eval-guess state s)
     :variant (eval-variant state s)
-    :trace (unsupported "inspect" (:loc s))
+    :trace (eval-trace state s)
     :wants (eval-wants state s)
-    :forgets-about (unsupported "forgets-about" (:loc s))
+    :forgets-about (eval-forgets-about state s)
     (err/raise (str "Unknown statement node " (:node s)) {:user false :loc (:loc s)})))
 
 ;; -----------------------------------------------------------------------------

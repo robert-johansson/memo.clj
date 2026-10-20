@@ -2,9 +2,12 @@
 
 *Draft, 2026-10-20. Written in GenGDT (`~/code/GenGDT/notes/80-gen-memo-integration.md`
 and the discussion behind it) before any code, as gen.clj's DESIGN.md was.
-**Every decision marked (proposed) awaits the owner's confirmation**; the
-two marked (decided) were confirmed on 2026-10-20. Corrected the same day
-after probing Python memo 1.3.2 through memo-mcp (§2.4).*
+Corrected the same day after probing Python memo 1.3.2 through memo-mcp
+(§2.4). **What is marked (decided) was confirmed by the owner on
+2026-10-20:** §1's two decisions; the principles, namespaces, surface
+syntax, dependencies and conventions (§3, §4, §8, §11, §12); the choices
+made while building M1 (§2.4, §5, §8); and §13.7 and §13.10. Everything
+marked (proposed) still awaits confirmation.*
 
 ## 1. Goal
 
@@ -179,7 +182,7 @@ depends on them.
 - **Memo calls need brackets.** `f[x](…)` is a memo call. `f(…)` is parsed
   as a host-function call, and it is the only way to call a memo without
   axes.
-- **An observation against an already-used value** (slice 2). When the
+- **An observation against an already-used value** (slice 2; decided, 2026-10-20). When the
   observer's beliefs already vary along the source's dim (it knows the
   source, and a choice it models depends on it), the observation swaps two
   live axes. A query that later reads those beliefs fails in Python memo
@@ -188,7 +191,7 @@ depends on them.
   and makes a later read a compile error that names the cause and the
   repair, `observes-that`. (memo-clj rejected the observation itself,
   which loses Python memo's valid answers.)
-- **Var** is computed centered, E[(X − E[X])²], as memo-clj does: Python
+- **Var** is computed centered (decided, 2026-10-20), E[(X − E[X])²], as memo-clj does: Python
   memo's E[X²] − E[X]² is the same number but cancels in float32. A
   redundant Var (everything known) is zeros, as in Python memo.
 - **NaN gradients where the values are right** (slice 3). A speaker written
@@ -199,8 +202,8 @@ depends on them.
   softmax that `wpp=exp(…)` does, and its weights underflow, so a referent's
   row becomes all zeros (silently; alpha = 200 in float32, against 100 still
   agreeing). memo.clj differentiates the same computation and matches JAX's
-  NaN (§13 asks whether it should).
-- **Booleans follow JAX, not gen.array** (found in slice 1). In JAX, as in
+  NaN; the M2 bridge makes a NaN gradient a loud error (§13.10, decided).
+- **Booleans follow JAX, not gen.array** (found in slice 1; decided, 2026-10-20). In JAX, as in
   NumPy, `True + True` is `True` (bool `+` is logical or, `*` logical and),
   and `bool - bool` and `-bool` are TypeErrors. gen.array converts booleans
   to integers in arithmetic instead, as Julia does: `(array/+ true true)` is
@@ -214,7 +217,7 @@ depends on them.
     from one to the other should say `logical-or`, or convert booleans to
     numbers, explicitly.
 
-**Upstream bugs.** memo.clj does not reproduce these. Each is a documented
+**Upstream bugs.** memo.clj does not reproduce these (decided, 2026-10-20). Each is a documented
 divergence (principle 1), with its correct value derived independently and
 kept in the upstream ledger (§9).
 - **A snapshot's queries read values its owner observes later.** `observes`
@@ -267,7 +270,7 @@ kept in the upstream ledger (§9).
 - `to_maximize` ties: 0.1 + 0.2 ties with 0.3 under float32, not under
   float64.
 
-## 3. Principles (proposed)
+## 3. Principles (decided, 2026-10-20)
 
 1. **The exact core is memo.** Same semantics as Python memo at the pinned
    release, checked against it. Extensions are marked as such and never
@@ -317,7 +320,7 @@ L1  compiler          read → parse → AST → epistemic analysis (frames, kno
 L0  gen.clj           gen.array (JVM | MLX CPU | Metal | CUDA), GFI, inference
 ```
 
-Namespaces (proposed; root `memo`):
+Namespaces (decided, 2026-10-20; root `memo`):
 - `memo.core`: `defmemo`, calling, results.
 - `memo.domains`: `defenum`, `defdomain`.
 - The front end: `memo.parse`, `memo.ast`, `memo.frames`, `memo.analyze` (the
@@ -358,7 +361,7 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
   - `stack`, for several returns.
 
   All are in gen.array's v1 surface.
-- **Host functions** (built in slice 4; proposed). A host function, such as
+- **Host functions** (built in slice 4; decided, 2026-10-20). A host function, such as
   `(denotes u r)`, is a Clojure function of scalars, as Python memo's are
   jitted functions of scalars.
   - **By default it is tabulated:** called on host numbers at every element
@@ -395,11 +398,11 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
 - **Dtypes:** float64 on the JVM, float32 on MLX. Python memo runs float32
   under JAX, so parity tolerances are set per test. A few constructs give a
   different answer under float64, not a nearby one (§2.4, §13).
-- **Results are full tables** (proposed, slice 1). A call returns the table
+- **Results are full tables** (slice 1; decided, 2026-10-20). A call returns the table
   over the memo's axes in declaration order and at their full sizes; several
   returns are stacked on a leading axis. Python memo leaves size 1 the axes
   a result does not depend on.
-- **No bitwise operators** (slice 1). `&`, `|`, `^` and `not` are logical on
+- **No bitwise operators** (slice 1; decided, 2026-10-20). `&`, `|`, `^` and `not` are logical on
   booleans and on the literals 0 and 1, which covers memo's own uses
   (`to_be` builds `1 & (x == v)`). Python memo computes them bitwise on other
   integers; gen.array cannot, so those are a loud error.
@@ -424,6 +427,9 @@ The contract GenGDT code depends on, so it is settled first (proposed):
     sampled. The others are given as values (conditioning by indexing).
   - **Gradients.** log-prob is differentiable in the array parameters, so
     HMC, MAP and VI reach parameters inside the mind.
+  - **A NaN gradient is a loud error** (decided, 2026-10-20, §13.10). The values keep
+    matching JAX; this only stops fitting from failing silently where they
+    are right and the gradient is NaN (the usual RSA speaker, §2.4).
 - **`(memo/fn model opts & args)` → the table**, as a gen.array value: for
   expectations, utilities and anything else that is not a distribution.
   Called in a model it is plain computation. Wrapped by
@@ -536,7 +542,7 @@ sample from **finite** sets: outcomes, options, other agents' types.
 - **First GenGDT client:** the agent that imagines k outcomes before it
   chooses, with the exact agent (k → ∞) as its limit.
 
-## 8. Surface syntax (proposed)
+## 8. Surface syntax (decided, 2026-10-20)
 
 memo-clj's agent-first syntax, unchanged where the JVM allows:
 
@@ -570,7 +576,15 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
 - **Statements and expressions** are those of Python memo 1.3.2. memo-clj's
   README has the table as of 1.2.26; 1.3.2 adds `time @`, `space @` and
   `size @`, and rejects `is` in expressions. It is to be re-checked against
-  the Handbook.
+  the Handbook. All are built (M1, slices 1-6) except cost reflection
+  (`time @`, `space @`, `size @`), which is M4.
+- **Options and parameters** (slice 6): metadata on the memo's name,
+  `^{:cache true}` (Python's `cache=True`: calls memoized by their host
+  number arguments, never for values being differentiated, and every cache
+  dropped when any memo is (re)defined, since a callee may have changed) and
+  `^{:variant :child}`; a parameter marked `^:array` (Python's `p: ...`)
+  takes a Clojure vector or a gen.array array, passed whole to host
+  functions and memo calls.
 
 ## 9. Verification
 
@@ -623,7 +637,7 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
 | the transpiler (`pygen`) and the round trip, as test tooling | the certification stack and Malli grammar (M4), the JSON AST mirror, the studio, the LLM proposer, synthesis, the Task IR |
 | the IR verifier (`ircheck`) | **the GDT layer** (`memo.gdt`, `loop`, `belief`, `link`, `recover`, `confirm`): untrusted, and outside memo's scope; GDT belongs in GenGDT |
 | op-count cost reflection (M4) | the two-agents page, voice, the archived training arc |
-## 11. Dependencies (proposed)
+## 11. Dependencies (decided, 2026-10-20)
 
 - **The core:** Clojure and gen.clj, pinned to a commit, the same policy as
   GenGDT's. Nothing else.
@@ -632,7 +646,7 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
   environment with the pinned memo release and JAX, for goldens and
   differential fuzzing. Tests that need it skip loudly without it.
 
-## 12. Conventions (proposed)
+## 12. Conventions (decided, 2026-10-20)
 
 - **Namespace root `memo`.**
 - **Domains are values; indices are 0-based internally.**
@@ -663,7 +677,9 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
 6. **The name:** check that "memo.clj" does not collide with an existing
    project ("gen.clj" collided with probcomp's Gen.clj).
 7. **Git and tracking:** a repository and a beans prefix (`memoclj-`?) from
-   the start, as gen.clj has.
+   the start, as gen.clj has. *Decided 2026-10-20:* this repository (no
+   remote yet), beans with the prefix `memoclj-`, set up as gen.clj's (the
+   private remote of the beans repository is pending).
 8. **Float64 against float32 parity** for the constructs where the dtype
    changes the answer (§2.4): run those parity tests in float32, keep them
    out of the fuzzer's grammar, or accept documented differences?
@@ -671,7 +687,8 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
    that for parity, warn, or make it an error outside a parity mode? This
    is where principle 1 (same semantics) meets principle 6 (no silent wrong
    numbers).
-10. **NaN gradients where the values are right** (§2.4): match JAX, as now;
-    warn when a gradient is NaN; or differentiate with the convention that
-    a zero-probability term contributes 0 (which makes fitting the usual RSA
-    form work, and departs from JAX)?
+10. **NaN gradients where the values are right** (§2.4). *Decided
+    2026-10-20:* the values keep matching JAX, and the M2 bridge makes a
+    NaN gradient a loud error, so fitting never fails silently. Repairing
+    such gradients (a zero-probability term contributing 0, which departs
+    from JAX) may come later as an opt-in.

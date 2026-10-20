@@ -27,17 +27,46 @@
             [memo.lower :as lower]
             [memo.parse :as parse]))
 
-(defn- check-param [mname {:keys [name exotic]} v]
-  (when exotic
-    (err/raise (str "Array parameters (^:array " name ") are not supported in memo.clj yet")))
-  (when-not (and (or (number? v) (boolean? v) (array/array? v))
-                 (empty? (array/shape v)))
-    (err/raise (str "Parameter " name " was not a numeric scalar, but rather an array. "
-                    "By default, all memo parameters must be scalars. Annotate this "
-                    "parameter as ^:array " name " if you really did intend to pass in "
-                    "a non-scalar.")
-               {:loc {:name mname}}))
+(defn- check-param
+  "A parameter's value: a scalar, or for a parameter marked ^:array (Python
+  memo's `p: ...`) an array or a Clojure vector, which can only be passed to
+  host functions and memo calls."
+  [mname {:keys [name exotic]} v]
+  (if exotic
+    (when-not (or (sequential? v) (and (array/array? v) (seq (array/shape v))))
+      (err/raise (str "Parameter " name " was not an array, despite being annotated as ^:array "
+                      name ".")
+                 {:loc {:name mname}}))
+    (when-not (and (or (number? v) (boolean? v) (array/array? v))
+                   (empty? (array/shape v)))
+      (err/raise (str "Parameter " name " was not a numeric scalar, but rather an array. "
+                      "By default, all memo parameters must be scalars. Annotate this "
+                      "parameter as ^:array " name " if you really did intend to pass in "
+                      "a non-scalar.")
+                 {:loc {:name mname}})))
   v)
+
+(defonce ^{:doc "Bumped whenever a memo is (re)defined: a cached memo drops its table
+  then, since a memo it calls may have changed (memo-clj's lesson)."}
+  definitions (atom 0))
+
+(defn- cached
+  "call, memoized by its arguments when they are host numbers or booleans
+  (so never for values being differentiated), until any memo is redefined."
+  [call]
+  (let [cache (atom {:epoch -1 :table {}})
+        host? #(or (number? %) (boolean? %))]
+    (fn [args kwargs]
+      (if-not (and (every? host? args) (every? host? (vals kwargs)))
+        (call args kwargs)
+        (let [epoch @definitions
+              k [(vec args) kwargs]
+              c (swap! cache #(if (= epoch (:epoch %)) % {:epoch epoch :table {}}))]
+          (if-let [[_ v] (find (:table c) k)]
+            v
+            (let [v (call args kwargs)]
+              (swap! cache #(if (= epoch (:epoch %)) (assoc-in % [:table k] v) %))
+              v)))))))
 
 (defn- bind-params
   "The parameter environment of a call: positional arguments, then keyword
@@ -95,7 +124,9 @@
                                      :fns fns
                                      :inlines inlines
                                      :param-order (mapv :name params)})
-        call (fn [args kwargs] (run (bind-params name params defaults args kwargs)))]
+        call (cond-> (fn [args kwargs] (run (bind-params name params defaults args kwargs)))
+               (:cache opts) cached)
+        _ (swap! definitions inc)]
     (with-meta
       (fn [& args]
         (if (map? (last args))
@@ -132,9 +163,13 @@
     (return expr) ...)
 
   Options as metadata on the name: :variant (:child, :no-thinks, :no-knows
-  or :no-wants, the theory of the top level)."
+  or :no-wants, the theory of the top level); :cache (memoize calls by their
+  arguments, as Python memo's cache=True).
+
+  A parameter marked ^:array takes an array or a vector, passed whole to
+  host functions and memo calls (Python memo's `p: ...`)."
   [mname & body]
-  (let [opts (select-keys (meta mname) [:variant])
+  (let [opts (select-keys (meta mname) [:variant :cache])
         [axes params & forms] body
         parsed (parse/parse-defmemo mname axes params (vec forms)
                                     {:resolve-member (member-resolver *ns*)})

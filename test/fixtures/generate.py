@@ -1462,3 +1462,285 @@ write("slice5.edn",
                            why="the snapshot's Pr[bob.x == 2] reads the rebound value"),
               ledger_value(eu_leak, eu_leak_ref,
                            why="the observation replayed in EU's imagined future rebinds world.s for the real frame")])
+
+
+# --- slice 6: H, KL, forgets-about, cast, array parameters, cache --------------------
+
+Rkl = np.linspace(-10, 10, 1000)
+
+
+@jax.jit
+def normpdf(x, mu, sigma):
+    return jax.scipy.stats.norm.pdf(x, mu, sigma)
+
+
+@memo
+def kl():
+    alice: chooses(p in Rkl, wpp=normpdf(p, 0, 1))
+    alice: chooses(q in Rkl, wpp=normpdf(q, 0, 2))
+    return KL[alice.p | alice.q]
+
+
+@memo
+def kl_victor[x: X]():
+    bob: thinks[ alice: given(x in X, wpp=1), env: chooses(x in X, wpp=1) ]
+    return bob[KL[alice.x | env.x]]
+
+
+@memo
+def entropy_uniform():
+    alice: thinks[ bob: chooses(x in X, wpp=1) ]
+    return alice[H[bob.x]]
+
+
+@memo
+def entropy_joint(beta):
+    alice: thinks[ bob: chooses(x in X, wpp=exp(beta * x)), bob: chooses(y in X, wpp=(y >= x)) ]
+    return alice[H[bob.x, bob.y]]
+
+
+@memo
+def entropy_marginal():
+    alice: thinks[ bob: chooses(x in X, wpp=1), bob: chooses(y in X, wpp=(y == x)) ]
+    return alice[H[bob.y]]
+
+
+is_prime = np.array([0, 0, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0])
+Qs = [lambda n: n == 7, lambda n: n > 6, lambda n: n % 2 == 0, lambda n: is_prime[n]]
+Ne = np.arange(1, 6 + 1)
+Qe = np.arange(len(Qs))
+Ae = np.array([0, 1])
+
+
+@jax.jit
+def respond(q, a, n):
+    return np.array([q_(n) for q_ in Qs])[q] == a
+
+
+# demo-eig.ipynb (its N, Q, A renamed: taken in this file)
+@memo
+def eig[q: Qe]():
+    alice: knows(q)
+    alice: thinks[
+        bob: chooses(n_red in Ne, wpp=1),
+        bob: chooses(n_blu in Ne, wpp=1),
+        bob: knows(q),
+        bob: chooses(a in Ae, wpp=respond(q, a, n_red + n_blu))
+    ]
+    alice: snapshots_self_as(future_self)
+    return alice[imagine[
+        future_self: observes [bob.a] is bob.a,
+        H[bob.n_red, bob.n_blu] - E[future_self[H[bob.n_red, bob.n_blu]]]
+    ]]
+
+
+@memo
+def forgets_about_1():
+    alice: chooses(x in X, wpp=1)
+    alice: chooses(y in X, wpp=x + y)
+    alice: forgets_about(x)
+    return E[alice.y]
+
+
+@memo
+def forgets_about_multiple():
+    alice: chooses(x in X, uniformly)
+    alice: chooses(y in X, uniformly)
+    alice: forgets_about(x, y)
+    alice: chooses(z in Bool, uniformly)
+    return E[alice.z]
+
+
+@memo
+def with_cast():
+    cast: [alice, bob]
+    alice: chooses(x in X, wpp=1)
+    bob: knows(alice.x)
+    return E[bob[alice.x]]
+
+
+@jax.jit
+def g_sum(n):
+    return n.sum()
+
+
+@jax.jit
+def arr_at(arr, i):
+    return arr[i]
+
+
+@memo
+def exotic_param(x: ... = X):
+    return g_sum(x) + arr_at(x, 0)
+
+
+@jax.jit
+def exotic_kwarg_func(x, arr, scale=1.0):
+    return arr[x] * scale
+
+
+@memo
+def exotic_param_kwarg(arr: ... = np.array([1, 2, 3])):
+    alice: chooses(x in X, wpp=exotic_kwarg_func(x, arr=arr, scale=2.0))
+    return E[alice.x]
+
+
+@memo
+def exotic_kwarg_recursive[x: X](k, arr: ...):
+    alice: chooses(x in X, wpp=exotic_kwarg_func(x, arr=arr, scale=1.0))
+    return exotic_kwarg_recursive[x](k=k - 1, arr=arr) if k > 0 else 1
+
+
+@memo
+def exotic_kwarg(arr: ... = np.array([1, 2, 3])):
+    alice: chooses(x in X, wpp=1)
+    return E[exotic_kwarg_recursive[alice.x](k=2, arr=arr)]
+
+
+class DayAction(IntEnum):
+    SH = 0
+    GO = 1
+
+
+class NightAction(IntEnum):
+    Retire = 0
+    Party = 1
+
+
+class NightType(IntEnum):
+    Responsible = 0
+    Fun = 1
+
+
+Pp = np.linspace(0, 1, 101)
+
+
+def one_night_payoff(night_action):
+    return np.array([1.0, 2.0])[night_action]
+
+
+def one_day_payoff(day_action, night_action):
+    return np.array([[+0, +0], [+1.0, -1.0]])[day_action, night_action]
+
+
+# demo-penelope.ipynb (its P renamed)
+@memo(cache=True)
+def day_model[p: Pp, da: DayAction](n=0):
+    day: knows(p, da)
+    day: thinks[
+        night: knows(p),
+        night: given(t in NightType, wpp=ber(t, p)),
+        night: chooses(na in NightAction,
+                       wpp=(na == {NightAction.Retire}) if t == {NightType.Responsible}
+                       else ber(na, night_model[0][p](n)))
+    ]
+    day: snapshots_self_as(next_day)
+    return day[E[one_day_payoff(da, night.na)] + (0 if n <= 0 else imagine[
+        next_day: observes [night.na] is night.na,
+        next_day: chooses(p_ in Pp, to_minimize=abs(p_ - Pr[night.t == {NightType.Fun}])),
+        next_day: chooses(da_ in DayAction, to_maximize=day_model[p_, da_](n - 1)),
+        E[next_day[day_model[p_, da_](n - 1)]]
+    ])]
+
+
+@memo(cache=True)
+def night_model[p: Pp](n=0):
+    night: knows(p)
+    night: wants(payoff=one_night_payoff(na) +
+                 (0 if n <= 0 else E[night_model[1][p](n - 1) if day.da_ == {DayAction.GO} else 0]))
+    night: chooses(sigma in Pp, to_maximize=EU[payoff])
+    night: chooses(na in NightAction, wpp=ber(na, sigma))
+    night: thinks[
+        day: knows(p, sigma),
+        day: thinks[
+            night: knows(p, sigma),
+            night: given(t in NightType, wpp=ber(t, p)),
+            night: chooses(na in NightAction,
+                           wpp=(na == {NightAction.Retire}) if t == {NightType.Responsible} else ber(na, sigma))
+        ],
+        day: observes [night.na] is na,
+        day: chooses(p_ in Pp, to_minimize=abs(p_ - Pr[night.t == {NightType.Fun}])),
+        day: chooses(da_ in DayAction, to_maximize=1 if n <= 0 else day_model[p_, da_](n - 1))
+    ]
+    return E[night.sigma]
+    return E[night[EU[payoff]]]
+
+
+def kl_fail_unknown():
+    alice: chooses(p in X, wpp=1)
+    alice: chooses(q in X, wpp=1)
+    return KL[alice.r | alice.q]
+
+
+def kl_fail_known[r: X]():
+    alice: knows(r)
+    alice: chooses(q in X, wpp=1)
+    return KL[alice.r | alice.q]
+
+
+def kl_fail_dom():
+    alice: chooses(p in X, wpp=1)
+    alice: chooses(q in Coin, wpp=1)
+    return KL[alice.p | alice.q]
+
+
+def entropy_unknown():
+    return alice[H[bob.x]]
+
+
+def entropy_known():
+    bob: chooses(x in X, wpp=1)
+    alice: knows(bob.x)
+    return alice[H[bob.x]]
+
+
+def forgets_scope_parent():
+    alice: chooses(x in X, wpp=1)
+    alice: forgets_about(x)
+    return E[alice.x]
+
+
+def forgets_scope_self():
+    alice: chooses(x in X, wpp=1)
+    alice: forgets_about(x)
+    alice: chooses(y in X, wpp=x)
+    return 0
+
+
+def forgets_not_own[x: X]():
+    alice: knows(x)
+    alice: forgets_about(x)
+    return 0
+
+
+def cast_err():
+    cast: [alice]
+    alice: chooses(x in X, wpp=1)
+    bob: chooses(y in X, wpp=1)
+    return 1
+
+
+def exotic_misused(arr: ...):
+    return arr
+
+
+write("slice6.edn",
+      [case(kl),
+       case(kl_victor),
+       case(entropy_uniform),
+       case(entropy_joint, 0.4),
+       case(entropy_marginal),
+       case(eig),
+       case(forgets_about_1),
+       case(forgets_about_multiple),
+       case(with_cast),
+       case(exotic_param),
+       case(exotic_param_kwarg),
+       case(exotic_kwarg),
+       case(day_model, 0),
+       case(night_model, 0),
+       case(day_model, 1),
+       case(night_model, 1)],
+      [kl_fail_unknown, kl_fail_known, kl_fail_dom, entropy_unknown, entropy_known,
+       forgets_scope_parent, forgets_scope_self, forgets_not_own, cast_err, exotic_misused],
+      grads=[grad(entropy_joint, 1.0, 0.4)])
