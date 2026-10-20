@@ -48,7 +48,7 @@
               (cond (boolean? v) (if v 1.0 0.0)
                     (sequential? v) (mapv num v)
                     :else v))]
-    (num (array/->clj x))))
+    (num (if (or (number? x) (boolean? x) (sequential? x)) x (array/->clj x)))))
 
 (defn- model [ns k] @(ns-resolve ns (symbol (name k))))
 
@@ -76,11 +76,16 @@
 (defn deep
   "(thunk) on a thread with a 1 GB stack: a model that recurses 1000 levels
   (demo-mdp's Q(1000)) nests its calls that deep, as Python memo needed a
-  higher recursion limit for it. Rethrows what thunk throws."
+  higher recursion limit for it. Rethrows what thunk throws. An
+  OutOfMemoryError can escape the thread's own handling when the heap is
+  full; the thread's uncaught-exception handler delivers it then, so a
+  caller never waits forever."
   [thunk]
   (let [result (promise)
         t (Thread. nil #(deliver result (try [:ok (thunk)] (catch Throwable e [:err e])))
                    "memo-deep" (* 1024 1024 1024))]
+    (.setUncaughtExceptionHandler t (reify Thread$UncaughtExceptionHandler
+                                      (uncaughtException [_ _ e] (deliver result [:err e]))))
     (.start t)
     (let [[k v] @result]
       (if (= k :ok) v (throw v)))))

@@ -16,6 +16,8 @@
                       io.github.cognitect-labs/test-runner {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
          :exec-fn cognitect.test-runner.api/test}
   :fast {:exec-args {:excludes [:slow]}}
+  ;; the differential fuzzer (needs memo-mcp's Python memo): clojure -X:test:fuzz :n 2000 :seed 1
+  :fuzz {:exec-fn memo.fuzz/cli}
 
   ;; gen.clj's MLX backend (Metal by default): clojure -X:test:mlx
   ;; gen.clj looks for its native library relative to the working directory,

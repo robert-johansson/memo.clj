@@ -1521,8 +1521,10 @@ What memo.clj computes differently, on purpose:
     arguments.
 - **The escape hatch is Clojure.** `#{alice.x}` is a compile error; in
   Python memo, `{alice.x}` is a `NameError` when the model is called.
-- **Var** is computed centered, E[(X − E[X])²]. Python memo's
-  E[X²] − E[X]² is the same number but loses precision in float32.
+- **Var** is Python memo's E[X²] − E[X]², computed as the centered
+  E[(X − E[X])²] plus E[X]²(1 − M), M the total mass of the frame's
+  weights: the same number (M is below 1 only when a branch has zero
+  mass), without float32's cancellation when M is 1.
 
 Where the memo Handbook and Python memo 1.3.2 disagree, memo.clj follows
 Python memo:

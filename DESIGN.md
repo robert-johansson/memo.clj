@@ -198,6 +198,13 @@ depends on them.
 - **Var** is computed centered (decided, 2026-10-20), E[(X − E[X])²], as memo-clj does: Python
   memo's E[X²] − E[X]² is the same number but cancels in float32. A
   redundant Var (everything known) is zeros, as in Python memo.
+  *Corrected 2026-10-20 (the differential fuzzer; for the owner's
+  review):* the two are the same number only when the frame's weights sum
+  to 1. Where a branch has zero mass (a `:to-be` or `:such-that` no value
+  satisfies), Python memo's E is over weights of total mass M < 1, and
+  E[X²] − E[X]² differs from the centered form by E[X]²(1 − M). memo.clj
+  now adds that term: Python memo's number always, the centered precision
+  when M is 1. `test/fixtures/fuzz.edn` keeps the finding.
 - **NaN gradients where the values are right** (slice 3). A speaker written
   `exp(alpha * log(L0))`, the usual RSA form, gets NaN from jax.grad
   wherever L0 has a zero: log 0 is -inf, and the chain rule multiplies 0 by
@@ -433,6 +440,12 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
   tables of 1.5M cells. The calls still nest, so a 1000-level recursion
   needs a large stack (the demo tests run calls on a 1 GB-stack thread, as
   Python memo needs a higher recursion limit).
+- **Memory on the JVM backend** (2026-10-20, from demo-empowerment).
+  gen.array's JVM backend materializes every intermediate in float64,
+  with no fusion. demo-empowerment's tables have 3125 x 169 x 169 cells,
+  714 MB each, and do not fit even in a 16 GB heap; MLX computes the demo
+  in 8 s. Its test runs on MLX and skips, loudly, on the JVM backend: the
+  one exception to "tests run on every backend".
 - **Speed (to measure, not promise):** benchmarks against Python memo on JAX
   and against memo-clj, on small recursive models (RSA depth 5, Sally-Anne)
   and dense ones (Penelope). `array/compile` for repeated calls on MLX.
@@ -665,6 +678,19 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
   - Mutated programs must be rejected by both.
   - This is the strongest check available, and the reason the transpiler is
     test tooling from M1.
+  - *Built 2026-10-20* (`memo.fuzz`, `memo.pygen`, `memo.python`, all under
+    `test/`). The transpiler is checked first by round trip: the corpus's
+    twins, transpiled, reproduce the fixtures in Python memo (327 calls).
+    The generator tracks scope (frames, knowledge, minds two deep) over
+    chooses (every spec, several choices at once, calls of a model),
+    knows, thinks, observes, observes-that/-event, wants and EU,
+    forgets-about and snapshots; returns over E, Pr (the posterior
+    shortcut), Var, H, KL, `as` and imagine. Agreement: values within 1e-4
+    relative (float32 accumulation over random tables), or both reject
+    with a memo error (memo.clj may not crash), messages compared.
+    Findings are kept in `test/fixtures/fuzz.edn` and replayed without
+    Python. First campaigns: 2,300 programs, one real disagreement (Var
+    under zero mass, above).
 - **Backend conformance:** the same programs give the same tables on the JVM
   and on MLX, within dtype tolerance.
 - **The bridge (M2):** gen.clj's distribution and GFI laws, finite-difference
@@ -735,6 +761,13 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
 8. **Float64 against float32 parity** for the constructs where the dtype
    changes the answer (§2.4): run those parity tests in float32, keep them
    out of the fuzzer's grammar, or accept documented differences?
+   *What the corpus and the fuzzer do now (2026-10-20, for review):* the
+   fuzzer keeps them out of its grammar (`:to-maximize` only over integer
+   values, `exp` bounded, EU through `:wpp (exp ...)`), and classes KL
+   against a zero as that known difference when both values are past
+   float32's largest number; the demo tests accept documented differences
+   (persuasion's ties, checked to be exact ties; an absolute tolerance
+   where results cancel).
 9. **Zero-mass distributions:** memo returns them silently (§2.4). Keep
    that for parity, warn, or make it an error outside a parity mode? This
    is where principle 1 (same semantics) meets principle 6 (no silent wrong

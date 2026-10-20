@@ -1,0 +1,40 @@
+;; Written by memo.fuzz/record-regressions! from Python memo: do not edit.
+{:oracle {:memo "1.3.2"},
+ :regressions
+ [{:id :var-zero-mass,
+   :why
+   "Var when a branch has zero mass (y cannot be x = 2 or 3, so the frame's total mass is 1/2): Python memo's E[X^2] - E[X]^2 over the unnormalized weights; memo.clj's centered form alone gave another number (found 2026-10-20, seed 3)",
+   :form
+   (defmemo
+    var-zero-mass
+    []
+    []
+    (bob :chooses [x D4] :wpp 1)
+    (bob :chooses [y B2] :to-be x)
+    (bob :chooses [z D4] :wpp (exp (* 0.5 z)))
+    (return (Var bob.z))),
+   :calls [{:args [], :kwargs {}}],
+   :python [{:outcome :ok, :shape [], :value 1.5970906019210815}]}
+  {:id :var-zero-mass-axes,
+   :why
+   "the same, over axes and params, as the fuzzer generated it (m146, seed 2)",
+   :form
+   (defmemo
+    var-zero-mass-axes
+    [[v B2] [u D3]]
+    [p q]
+    (carol :chooses [x D4] [y P3] :to-maximize (- x x))
+    (carol :chooses [z D4] :to-be x)
+    (carol :chooses [w D3] :to-be x)
+    (alice :chooses [x D3] :to-maximize (* x x))
+    (alice :thinks (bob :chooses [x B2] :uniformly))
+    (return (Var carol.y))),
+   :calls [{:args [0.3 0.7], :kwargs {}}],
+   :python
+   [{:outcome :ok,
+     :shape [2 3],
+     :value
+     [[0.12687499821186066 0.12687499821186066 0.12687499821186066]
+      [0.12687499821186066
+       0.12687499821186066
+       0.12687499821186066]]}]}]}

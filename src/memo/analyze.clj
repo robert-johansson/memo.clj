@@ -321,8 +321,9 @@
 
           :else
           (let [dims (unknown-dims state)
-                [state ll] (if-let [ll (read-ll state (:loc e))]
-                             [state ll]
+                frame-ll (read-ll state (:loc e))
+                [state ll] (if frame-ll
+                             [state frame-ll]
                              (let [[st one] (fresh state "ll")]
                                [(emit st {:i :const :out one :value 1.0}) one]))
                 [state lv] (fresh state "llval")
@@ -332,10 +333,13 @@
               (let [[state out] (fresh state "exp")]
                 [(emit state {:i :sum :out out :arg lv :dims dims})
                  {:tag out :known true :deps (known-deps state)}])
-              ;; centered, E[(X - E[X])^2], as memo-clj: Python memo's
-              ;; E[X^2] - E[X]^2 is the same number without float32's
-              ;; cancellation. X is made a float first: JAX has no - on
-              ;; booleans, and Python memo never subtracts X itself.
+              ;; Python memo's E[X^2] - E[X]^2, over the frame's weights w of
+              ;; total mass M (below 1 where a branch has zero mass), computed
+              ;; as sum w (X - m)^2 + m^2 (1 - M), m = E[X]: the same number,
+              ;; without float32's cancellation when M is 1 (the fuzzer found
+              ;; that the centered form alone differs when M < 1). X is made
+              ;; a float first: JAX has no - on booleans, and Python memo
+              ;; never subtracts X itself.
               :variance
               (let [[state two] (fresh state "lit")
                     state (emit state {:i :const :out two :value 2})
@@ -351,9 +355,21 @@
                     state (emit state {:i :op :op :pow :out sq :args [dev two]})
                     [state lv2] (fresh state "llval")
                     state (emit state {:i :op :op :mul :out lv2 :args [ll sq]})
-                    [state out] (fresh state "var")]
-                [(emit state {:i :sum :out out :arg lv2 :dims dims})
-                 {:tag out :known true :deps (known-deps state)}]))))))))
+                    [state centered] (fresh state "var")
+                    state (emit state {:i :sum :out centered :arg lv2 :dims dims})]
+                (if-not frame-ll
+                  [state {:tag centered :known true :deps (known-deps state)}]
+                  (let [[state mass] (fresh state "mass")
+                        state (emit state {:i :sum :out mass :arg ll :dims dims})
+                        [state missing] (fresh state "missing")
+                        state (emit state {:i :op :op :sub :out missing :args [one mass]})
+                        [state m2] (fresh state "sq")
+                        state (emit state {:i :op :op :pow :out m2 :args [mean two]})
+                        [state corr] (fresh state "corr")
+                        state (emit state {:i :op :op :mul :out corr :args [m2 missing]})
+                        [state out] (fresh state "var")]
+                    [(emit state {:i :op :op :add :out out :args [centered corr]})
+                     {:tag out :known true :deps (known-deps state)}]))))))))))
 
 (def ^:private not-static-hint
   (str "When calling a memo, you can only pass in parameters that are fixed (\"static\") "
