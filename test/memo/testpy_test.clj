@@ -490,11 +490,6 @@
 
 (defn- twin [k] (some-> (ns-resolve 'memo.testpy-test (symbol (name k))) deref))
 
-(defn- matches-digest? [{:keys [sum samples]} result]
-  (let [flat (vec (flatten (ts/host result)))]
-    (and (ts/close? sum (reduce + flat))
-         (every? (fn [[i v]] (ts/close? v (nth flat i))) samples))))
-
 (deftest every-case-of-memos-test-suite
   (is (= ["post_optim_distinctness over Z30 = np.arange(30), not Z"] (:changes fixture)))
   (doseq [{k :name :keys [outcome stage message args shape value digest]} (:cases fixture)]
@@ -518,7 +513,7 @@
             (is false (str "threw: " (ex-message r)))
             (do (is (= shape (array/shape r)))
                 (if digest
-                  (is (matches-digest? digest r))
+                  (is (ts/matches-digest? digest r))
                   (is (ts/close? value (ts/host r))
                       (str "python " (pr-str value) "\nmemo.clj " (pr-str (ts/host r))))))))))))
 

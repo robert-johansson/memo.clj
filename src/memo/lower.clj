@@ -21,7 +21,8 @@
   (:refer-clojure :exclude [+ - * / < > <= >= == abs])
   (:require [gen.array :as array :refer [+ - * / < > <= >= == exp log abs where]]
             [gen.array.tape :as tape]
-            [memo.errors :as err]))
+            [memo.errors :as err]
+            [memo.ir :as ir]))
 
 ;; -----------------------------------------------------------------------------
 ;; layout
@@ -375,13 +376,32 @@
         x (if (clojure.core/> (array/ndim x) 1) (array/transpose x) x)]
     (if (empty? shape) x (array/broadcast-to x shape))))
 
+(defn- calls-first
+  "instrs with every memo call, and the instructions it reads (statics: its
+  arguments and path conditions), moved to the front, each group in its own
+  order. Python memo hoists its memo calls out of the kernel the same way,
+  so a recursion holds none of the tables of the levels above it: without
+  this, demo-mdp's Q(1000) keeps each level's tables alive across 1000
+  nested calls and the JVM backend runs out of memory."
+  [instrs]
+  (let [by-out (into {} (map (juxt :out identity)) instrs)
+        hoisted (loop [todo (vec (keep #(when (= :call-memo (:i %)) (:out %)) instrs))
+                       seen #{}]
+                  (if-let [s (peek todo)]
+                    (if (seen s)
+                      (recur (pop todo) seen)
+                      (recur (into (pop todo) (some-> (by-out s) ir/inputs)) (conj seen s)))
+                    seen))]
+    (into (filterv #(hoisted (:out %)) instrs) (remove #(hoisted (:out %))) instrs)))
+
 (defn program
   "The function computing a compiled memo's result: from a map of parameter
   values to its table, or, for several returns, their tables stacked on a
   leading axis. ctx: :resolve-memo, from a memo's name to the memo, at call
-  time (so a memo may call itself)."
+  time (so a memo may call itself). Memo calls run first (calls-first)."
   [compiled ctx]
-  (let [{:keys [instrs results]} compiled]
+  (let [{:keys [results]} compiled
+        instrs (calls-first (:instrs compiled))]
     (fn [params]
       (let [env (reduce (partial step ctx) params instrs)
             tables (mapv #(table (get env %) compiled) results)]

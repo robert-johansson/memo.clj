@@ -59,7 +59,7 @@
 (def ^:private unary-fn-ops '{exp :exp, log :log, abs :abs})
 
 (def reserved-heads
-  (into #{'if 'not 'E 'Pr 'Var 'H 'KL 'EU 'Predict 'imagine 'as 'cost
+  (into #{'if 'not 'E 'Pr 'Var 'H 'KL 'EU 'Predict 'imagine 'as
           'return 'forall 'cast}
         (concat (keys fold-ops) (keys binary-only-ops) (keys bool-ops)
                 (keys unary-fn-ops))))
@@ -361,7 +361,14 @@
                 {:node :with :who who :expr (parse-expr (second args) pctxt)
                  :loc loc :static false}))
 
-          (= head 'cost)
+          ;; Python memo's cost @ f(...), time @, space @, size @: the reader
+          ;; reads (cost @(f ...)) as (cost (clojure.core/deref (f ...))).
+          ;; Any other (cost ...) is a host function call, as cost(...) is in
+          ;; Python memo (demo-trucks has one).
+          (and (#{'cost 'time 'space 'size} head)
+               (= 1 (count args))
+               (seq? (first args))
+               (= 'clojure.core/deref (first (first args))))
           (err/raise "cost reflection is not supported in memo.clj yet (DESIGN.md M4)"
                      {:loc loc})
 

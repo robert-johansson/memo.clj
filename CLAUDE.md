@@ -4,7 +4,8 @@ memo.clj is memo (Chandra et al., PACMPL 2025; github.com/kach/memo) on the
 JVM, built on gen.clj. The design and its open questions are in `DESIGN.md`;
 read it before changing architecture. Its first client is GenGDT
 (`~/code/GenGDT`), whose `notes/81-memo-clj-m1-answers.md` answered the
-questions asked before M1.
+questions asked before M1. `HANDBOOK.md` is the language reference in
+memo.clj's syntax, executable (`test/memo/handbook_doc_test.clj` runs it).
 
 ## The oracle and the references
 
@@ -33,10 +34,12 @@ repository synced by hooks; see `.beans/hooks/README.txt`).
 
 ```
 clojure -X:test                       # every test, on the JVM backend
+clojure -X:test:fast                  # without the ^:slow tests (three demos: minutes on the JVM)
 clojure -X:test:mlx                   # on MLX (Metal, float32)
 clojure -J-Dgen.mlx.device=cpu -J-Dgen.mlx.dtypes=64 -X:test:mlx   # MLX's CPU, float64
 clojure -X:dev:test                   # against gen.clj's working copy
 memo-mcp/venv/bin/python -I test/fixtures/generate.py   # regenerate the fixtures
+MEMO_DEMOS=demo-rsa,demo-fib memo-mcp/venv/bin/python -I test/fixtures/generate.py   # only those demos
 ```
 
 gen.clj is pinned to GenGDT's commit (`deps.edn`); move the two pins together.

@@ -41,6 +41,8 @@ class Kw(str):
 
 
 def edn(x):
+    if x is None:
+        return "nil"
     if isinstance(x, Kw):
         return ":" + x
     if isinstance(x, dict):
@@ -1762,17 +1764,17 @@ import runpy  # noqa: E402
 TESTPY_RECORDS = []
 
 
-def _value_record(g, out):
+def _value_record(g, out, full=4096):
     shape = tuple(g._shape) if g._num_retvals == 1 else (g._num_retvals,) + tuple(g._shape)
-    full = np.broadcast_to(np.asarray(out), shape)
+    values = np.broadcast_to(np.asarray(out), shape)
     rec = {Kw("shape"): list(shape)}
-    if full.size > 4096:
-        flat = np.ravel(full)
+    if values.size > full:
+        flat = np.ravel(values)
         idx = np.linspace(0, flat.size - 1, 64).astype(int)
         rec[Kw("digest")] = {Kw("sum"): float(flat.astype(np.float64).sum()),
                              Kw("samples"): [[int(i), float(flat[i])] for i in idx]}
     else:
-        rec[Kw("value")] = tolist(full)
+        rec[Kw("value")] = tolist(values)
     return rec
 
 
@@ -1956,3 +1958,230 @@ def run_handbook():
 
 
 run_handbook()
+
+
+# --- the parity corpus: memo's 36 demos, as they are --------------------------------
+#
+# Each demo runs as written (a notebook's code cells in order, IPython magics
+# removed, matplotlib headless), with memo replaced by a recorder: each model
+# compiles as memo compiles it, and its calls from the demo's own code (not
+# from other models, not under jax transformations) are recorded: the first
+# DEMO_CALLS - 1 distinct ones and the latest. A model defined again under
+# its name is recorded as name-2, name-3, ... demos/<demo>.edn holds what each demo's
+# models computed; memo.demos.<demo>-test has their Clojure twins.
+# MEMO_DEMOS=demo-rsa,demo-fib limits a run to those demos.
+
+import time  # noqa: E402
+import json as _json  # noqa: E402
+import shutil  # noqa: E402
+import tempfile  # noqa: E402
+import traceback  # noqa: E402
+
+DEMO_CALLS = 4
+DEMO_FULL = 16384  # values recorded in full up to this many; a digest beyond
+DEMO_DIR = os.path.join(MEMO_SRC, "demo")
+
+
+def demo_source(path):
+    """A demo as one Python script: a notebook's code cells, IPython syntax removed."""
+    if not path.endswith(".ipynb"):
+        return open(path, encoding="utf-8").read()
+    cells = [("".join(c["source"])) for c in _json.load(open(path, encoding="utf-8"))["cells"]
+             if c["cell_type"] == "code"]
+    out = []
+    for cell in cells:
+        if cell.lstrip().startswith("%%"):
+            magic, _, body = cell.lstrip().partition("\n")
+            if not magic.startswith(("%%time", "%%timeit")):  # bash, html, ...: not Python
+                continue
+            cell = body  # the timed cell itself
+        for line in cell.splitlines():
+            stripped = line.lstrip()
+            indent = line[:len(line) - len(stripped)]
+            if stripped.startswith(("!", "%matplotlib", "%load_ext", "%config")):
+                continue
+            if stripped.startswith(("%time ", "%timeit ")):
+                words = stripped.split(" ")[1:]
+                while words and words[0].startswith("-"):
+                    words = words[2:] if words[0] in ("-r", "-n") else words[1:]
+                line = indent + " ".join(words)
+            out.append(line)
+        out.append("")
+    return "\n".join(out)
+
+
+def _concrete(x):
+    if isinstance(x, jax.core.Tracer):
+        return False
+    if isinstance(x, (list, tuple)):
+        return all(_concrete(v) for v in x)
+    return True
+
+
+def _arg(a):
+    if isinstance(a, bool):
+        return a
+    if isinstance(a, int):
+        return a
+    a_ = np.asarray(a)
+    return float(a_) if a_.ndim == 0 else tolist(a_)
+
+
+def recording_memo(models):
+    original = memo_pkg.memo
+
+    def wrap(g):
+        name = kebab(g.__name__)
+        n = 1 + sum(1 for m in models if m[Kw("defined-as")] == name)
+        rec = {Kw("name"): Kw(f"{name}-{n}") if n > 1 else name, Kw("defined-as"): name,
+               Kw("calls"): [], Kw("ncalls"): 0}
+        models.append(rec)
+        seen = set()
+
+        def wrapper(*args, **kwargs):
+            out = g(*args, **kwargs)
+            if ("return_aux" in kwargs or "return_cost" in kwargs  # a model's call, or cost @
+                    or not _concrete(list(args) + list(kwargs.values()))):
+                return out
+            opts = {k: v for k, v in kwargs.items() if k in ("print_table", "return_pandas", "return_xarray")}
+            kw = {k: v for k, v in kwargs.items() if k not in opts}
+            call = {Kw("args"): [_arg(a) for a in args], Kw("kwargs"): {Kw(k): _arg(v) for k, v in kw.items()}}
+            key = repr(call)
+            rec[Kw("ncalls")] += 1
+            if key in seen:
+                return out
+            seen.add(key)
+            call.update(_value_record(g, out[0] if isinstance(out, tuple) else out, full=DEMO_FULL))
+            calls = rec[Kw("calls")]
+            if len(calls) == DEMO_CALLS:
+                calls.pop()
+            calls.append(call)
+            return out
+
+        wrapper.__dict__.update(g.__dict__)
+        for attr in ("cache_clear", "cache_info"):  # cache=True
+            if hasattr(g, attr):
+                setattr(wrapper, attr, getattr(g, attr))
+        wrapper.__name__, wrapper.__qualname__, wrapper.__doc__ = g.__name__, g.__qualname__, g.__doc__
+        return wrapper
+
+    def memo_(f=None, **opts):
+        if f is None:
+            return lambda f: memo_(f, **opts)
+
+        def install(src):  # as memo's own exec, into the defining module's globals
+            scope = {}
+            exec(src, f.__globals__, scope)
+            return scope
+        holder = {}
+        theirs = opts.pop("install_module", None)
+
+        def capture(src):
+            scope = theirs(src) if theirs else install(src)
+            holder.update({f.__name__: scope[f.__name__], "__module__": scope})
+            return holder
+        try:
+            original(f, install_module=capture, **opts)
+        except MemoError as e:  # the demo's own (some demos show that a model must not compile)
+            models.append({Kw("name"): kebab(f.__name__), Kw("defined-as"): kebab(f.__name__),
+                           Kw("outcome"): "ce", Kw("message"): e.message})
+            raise
+        w = wrap(holder[f.__name__])
+        if theirs:  # the demo's own module (make_module) calls it from there
+            holder["__module__"][f.__name__] = w
+        return w
+    return memo_
+
+
+def _stand_ins():
+    """Modules some demos import for their notebook UI, which the recorder
+    replaces: tqdm (a progress bar) returns its iterable; ipywidgets'
+    interact calls the function once, with each widget's initial value (an
+    iterable's first element, a (min, max) range's midpoint, a number as is)."""
+    import types
+    tq = types.ModuleType("tqdm")
+    tq.tqdm = lambda it=None, *a, **k: it if it is not None else []
+    tq.trange = lambda *a, **k: range(*a)
+    for sub in ("auto", "notebook"):
+        m = types.ModuleType(f"tqdm.{sub}")
+        m.tqdm, m.trange = tq.tqdm, tq.trange
+        setattr(tq, sub, m)
+        sys.modules[f"tqdm.{sub}"] = m
+    sys.modules["tqdm"] = tq
+
+    def initial(v):
+        if isinstance(v, tuple) and len(v) >= 2:
+            return (v[0] + v[1]) / 2
+        if isinstance(v, (int, float, str, bool)):
+            return v
+        return next(iter(v))
+
+    def interact(f=None, **widgets):
+        if f is None:
+            return lambda f: interact(f, **widgets)
+        import inspect
+        params = inspect.signature(f).parameters
+        f(**{k: initial(widgets.get(k, p.default)) for k, p in params.items()})
+        return f
+    w = types.ModuleType("ipywidgets")
+    w.interact = interact
+    sys.modules["ipywidgets"] = w
+
+
+def run_demo(fn):
+    """Run one demo with the recorder: its models' records and the outcome."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    plt.show = plt.savefig = matplotlib.figure.Figure.savefig = lambda *a, **k: None
+    _stand_ins()
+    models = []
+    original = memo_pkg.memo
+    memo_pkg.memo = recording_memo(models)
+    t0 = time.time()
+    outcome = {Kw("outcome"): "ran"}
+    cwd = os.getcwd()
+    with tempfile.NamedTemporaryFile("w", suffix=".py", dir=DEMO_DIR, prefix=".rec-", delete=False,
+                                     encoding="utf-8") as tmp:
+        tmp.write(demo_source(os.path.join(DEMO_DIR, fn)))
+    limit = sys.getrecursionlimit()
+    try:
+        os.chdir(DEMO_DIR)
+        sys.setrecursionlimit(20000)  # demo-mdp's Q(1000) recurses past Python's default 1000
+        with contextlib.redirect_stdout(io.StringIO()):
+            runpy.run_path(tmp.name, run_name="__main__")
+    except BaseException as e:  # a demo that stops part way still records what ran
+        tb = traceback.extract_tb(e.__traceback__)
+        line = next((fr.lineno for fr in reversed(tb) if fr.filename == tmp.name), None)
+        outcome = {Kw("outcome"): "stopped", Kw("error"): _error_text(e), Kw("line"): line}
+    finally:
+        sys.setrecursionlimit(limit)
+        os.chdir(cwd)
+        os.unlink(tmp.name)
+        memo_pkg.memo = original
+        plt.close("all")
+    outcome[Kw("seconds")] = round(time.time() - t0, 1)
+    return models, outcome
+
+
+def run_demos():
+    only = [d for d in os.environ.get("MEMO_DEMOS", "").split(",") if d]
+    names = sorted(fn for fn in os.listdir(DEMO_DIR)
+                   if (fn.startswith("demo-") or fn == "Memonomicon.ipynb") and fn.endswith((".py", ".ipynb")))
+    out_dir = os.path.join(ROOT, "test", "fixtures", "demos")
+    os.makedirs(out_dir, exist_ok=True)
+    for fn in names:
+        demo = fn.rsplit(".", 1)[0]
+        if only and demo not in only:
+            continue
+        models, outcome = run_demo(fn)
+        path = os.path.join(out_dir, f"{demo}.edn")
+        with open(path, "w") as out:
+            out.write(f";; Generated by test/fixtures/generate.py from memo's demo/{fn}: do not edit.\n")
+            out.write(edn({Kw("oracle"): oracle(), Kw("demo"): fn, **outcome, Kw("models"): models}) + "\n")
+        print(f"wrote {path}: {len(models)} models, {sum(len(m.get(Kw('calls'), [])) for m in models)} calls, "
+              f"{outcome[Kw('outcome')]} in {outcome[Kw('seconds')]} s"
+              + (f" ({outcome[Kw('error')]}, line {outcome[Kw('line')]})" if Kw("error") in outcome else ""))
+
+
+run_demos()

@@ -425,6 +425,14 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
   booleans and on the literals 0 and 1, which covers memo's own uses
   (`to_be` builds `1 & (x == v)`). Python memo computes them bitwise on other
   integers; gen.array cannot, so those are a loud error.
+- **Memo calls run first** (2026-10-20, from demo-mdp). The lowering runs
+  every `:call-memo` instruction, with what it reads (statics), before the
+  rest of the program, as Python memo hoists its calls out of the kernel.
+  A recursion then holds no tables of the levels above it: before, the JVM
+  backend ran out of memory on demo-mdp's Q(1000), whose levels each hold
+  tables of 1.5M cells. The calls still nest, so a 1000-level recursion
+  needs a large stack (the demo tests run calls on a 1 GB-stack thread, as
+  Python memo needs a higher recursion limit).
 - **Speed (to measure, not promise):** benchmarks against Python memo on JAX
   and against memo-clj, on small recursive models (RSA depth 5, Sally-Anne)
   and dense ones (Penelope). `array/compile` for repeated calls on MLX.
@@ -612,6 +620,23 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
   the memo is called).
 - **A malformed `observes`** is Python memo's "Unknown statement syntax",
   with a hint saying what is wrong.
+- **Product domains** (built for the demos, 2026-10-20): `(defdomain S :x 3
+  :y 4)` is Python memo's `S = domain(x=3, y=4)`, members 0 .. 11 packed as
+  Python packs them (the first field most significant). `(S :x s)` reads a
+  field, on a number or an array (so in a `^:memo/vectorized` function);
+  `(S {:x 1 :y 2})` packs; `(memo.domains/fields S s)` is Python's
+  `S._tuple(s)`. Five demos use them.
+- **`Bool` is predefined** (2026-10-20; for the owner's review): every
+  defmemo can name `Bool` (`NO`, `YES`) without defining it, as every
+  Python memo model can (its generated code imports `memo.lib`'s `Bool`;
+  demo-lemons relies on it). A namespace's own `Bool` comes first, by
+  Clojure's scoping, where Python memo ignores the user's `Bool` inside a
+  model: only labels can differ.
+- **Cost reflection's syntax** (2026-10-20; built in M4): `(cost @(f ...))`,
+  which the reader reads as `(cost (clojure.core/deref (f ...)))`, and
+  likewise `time`, `space` and `size`, as Python memo's `cost @ f(...)`.
+  Only that shape is reserved: any other `(cost ...)` is a host function
+  call, as `cost(...)` is in Python memo (demo-trucks defines one).
 
 ## 9. Verification
 

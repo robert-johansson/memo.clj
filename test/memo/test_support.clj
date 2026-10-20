@@ -18,9 +18,14 @@
   [expected]
   (+ 1e-6 (* 2e-6 (Math/abs (double expected)))))
 
+(def ^:dynamic *atol*
+  "An absolute tolerance added to tol's, for results that cancel: a small
+  difference of large float32 values carries their rounding."
+  0.0)
+
 (defn close?
   "Whether two values (numbers or nested vectors of them) agree within the
-  float32 tolerance, NaN matching NaN."
+  float32 tolerance (plus *atol*), NaN matching NaN."
   [expected actual]
   (cond
     (and (sequential? expected) (sequential? actual))
@@ -31,7 +36,7 @@
     (let [e (double expected) a (double actual)]
       (or (and (Double/isNaN e) (Double/isNaN a))
           (= e a)
-          (<= (Math/abs (- e a)) (tol e))))
+          (<= (Math/abs (- e a)) (+ *atol* (tol e)))))
 
     :else false))
 
@@ -59,6 +64,82 @@
           (do (is (= shape (array/shape result)))
               (is (close? value (host result))
                   (str "python " (pr-str value) "\nmemo.clj " (pr-str (host result))))))))))
+
+(defn matches-digest?
+  "A large result against the digest a fixture records in place of its
+  values: their sum, and samples at flat indices."
+  [{:keys [sum samples]} result]
+  (let [flat (vec (flatten (host result)))]
+    (and (close? sum (reduce + flat))
+         (every? (fn [[i v]] (close? v (nth flat i))) samples))))
+
+(defn deep
+  "(thunk) on a thread with a 1 GB stack: a model that recurses 1000 levels
+  (demo-mdp's Q(1000)) nests its calls that deep, as Python memo needed a
+  higher recursion limit for it. Rethrows what thunk throws."
+  [thunk]
+  (let [result (promise)
+        t (Thread. nil #(deliver result (try [:ok (thunk)] (catch Throwable e [:err e])))
+                   "memo-deep" (* 1024 1024 1024))]
+    (.start t)
+    (let [[k v] @result]
+      (if (= k :ok) v (throw v)))))
+
+(defn check-call
+  "f called as Python memo was (positional args, then keyword args in a
+  trailing map) has its shape, and its values or its digest. tie?, given,
+  is a predicate of the call's args and a cell's flat index: such cells
+  (exact ties of :to-maximize, which float32 and float64 break apart
+  differently) may differ, and only those."
+  ([f c] (check-call f c nil))
+  ([f {:keys [args kwargs shape value digest]} tie?]
+   (testing (str (pr-str args) (when (seq kwargs) (str " " (pr-str kwargs))))
+     (let [r (try (deep #(apply f (cond-> (vec args) (seq kwargs) (conj kwargs)))) (catch Throwable e e))]
+       (if (instance? Throwable r)
+         (is false (str "threw: " (ex-message r)))
+         (do (is (= shape (array/shape r)))
+             (cond
+               digest
+               (is (matches-digest? digest r) "the digest")
+
+               tie?
+               (let [differ (keep-indexed (fn [i [e a]] (when-not (close? e a) i))
+                                          (map vector (flatten value) (flatten (host r))))]
+                 (is (every? #(tie? args %) differ)
+                     (str "cells that differ and are not ties: " (vec (remove #(tie? args %) differ)))))
+
+               :else
+               (is (close? value (host r))
+                   (str "python " (pr-str value) "\nmemo.clj " (pr-str (host r)))))))))))
+
+(declare compile-error)
+
+(defn check-demo
+  "Every model of memo's demo (test/fixtures/demos/<demo>.edn) against its
+  twin of the same name in ns: each call the demo made, or, for a model the
+  demo shows must not compile, the form in :compile-forms, whose memo error
+  has Python memo's message (or the one in :messages). :not-ported maps a
+  model's name to the reason it has no twin; :atol widens the tolerance
+  (*atol*) where results cancel; :ties maps a model's name to a tie?
+  predicate (check-call); :renamed maps a model's name to its twin's, where
+  the demo's name cannot be memo.clj's. Returns the fixture."
+  ([ns demo] (check-demo ns demo {}))
+  ([ns demo {:keys [compile-forms messages not-ported atol ties renamed] :or {atol 0.0}}]
+   (binding [*atol* atol]
+   (let [fx (fixture (str "demos/" demo ".edn"))]
+     (doseq [{k :name :keys [calls outcome message]} (:models fx)]
+       (testing (name k)
+         (cond
+           (get not-ported k) (is (string? (get not-ported k)))
+           (= "ce" outcome) (is (= (get messages k message)
+                                   (some-> (compile-error ns (get compile-forms k)) ex-message)))
+           :else (if-let [f (some-> (ns-resolve ns (get renamed k (symbol (name k)))) deref)]
+                   (doseq [c calls] (check-call f c (get ties k)))
+                   (is false (str (name k) " has no twin"))))))
+     (is (every? (set (map :name (:models fx)))
+                 (concat (keys not-ported) (keys compile-forms) (keys messages) (keys renamed)))
+         "a form, message or reason for a model the demo does not have")
+     fx))))
 
 (defn gradient
   "d/d(first argument) of sum(weights * f(args)), by gen.array's grad."

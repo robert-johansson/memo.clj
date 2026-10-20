@@ -148,7 +148,8 @@
   "Resolves Enum.MEMBER when the macro expands, in namespace ns."
   [ns]
   (fn [head member]
-    (let [v (try (ns-resolve ns head) (catch Exception _ nil))]
+    (let [v (or (try (ns-resolve ns head) (catch Exception _ nil))
+                (domains/builtins head))]
       (when (and (var? v) (domains/enum? @v))
         (try (domains/member-value @v member)
              (catch clojure.lang.ExceptionInfo e
@@ -222,7 +223,11 @@
                    :parsed '~parsed
                    :opts '~opts
                    :defaults ~defaults
-                   :domains ~(into {} (map (fn [d] [(list 'quote d) d])) domain-syms)
+                   :domains ~(into {} (map (fn [d] [(list 'quote d)
+                                                    (if (and (not (resolve d)) (domains/builtins d))
+                                                      (symbol "memo.domains" (name d))
+                                                      d)]))
+                                   domain-syms)
                    :fns ~(into {} (map (fn [f] [(list 'quote f) (fn-ref f)])) (:ffi-names refs))
                    :inlines ~(mapv (fn [form] `(fn [~@param-syms] ~(inline-members mname form resolve-member)))
                                    inline-forms)}))))
