@@ -8,7 +8,7 @@
             [clojure.test :refer [deftest is testing]]
             [gen.array :as array]
             [memo.core :as memo :refer [defmemo]]
-            [memo.domains :as domains :refer [defenum]]
+            [memo.domains :as domains :refer [defdomain defenum]]
             [memo.errors :as err]
             [memo.test-support :as ts]))
 
@@ -156,6 +156,29 @@
   (alice :chooses [x X] :wpp (exp (t10-vtake table x)))
   (return (E alice.x)))
 
+;; the second acceptance check (memoclj-a46m)
+
+(defmemo s2-bool-sum [] [a] (return (+ (> a 0) (> a 0))))
+(defmemo s2-bool-neg [] [a] (return (- (> a 0))))
+
+(defmemo s2-bool-expect [] [a]
+  (alice :chooses [x X] :wpp 1)
+  (return (E (* alice.x (+ (> a 0) (> a 0))))))
+
+(defmemo s3-pow0 [] [a]
+  (alice :chooses [x X] :wpp 1)
+  (return (E (** (* a alice.x) 0))))
+
+(defenum Mixed [RED 1] GREEN BLUE)
+
+(defmemo s4-mixed [[c Mixed]] []
+  (alice :chooses [x Mixed] :uniformly)
+  (return (Pr (= alice.x c))))
+
+(defmemo e8-xor3 [[p Bool] [q Bool] [r Bool]] [] (return (xor p q r)))
+(defmemo d2-div0 [] [a] (return (/ a 0)))
+(defmemo d2-mod0 [] [a] (return (% a 0)))
+
 ;; against Python memo
 
 (def fixture (ts/fixture "acceptance.edn"))
@@ -185,7 +208,8 @@
 (deftest runtime-errors-match-python-memo
   (doseq [[k message] (:runtime-errors fixture)]
     (testing (name k)
-      (let [e (thrown @(ns-resolve 'memo.acceptance-test (symbol (name k))))]
+      (let [args (get {:d2-div0 [1.0] :d2-mod0 [1.0]} k [])  ; generate.py's calls
+            e (thrown #(apply @(ns-resolve 'memo.acceptance-test (symbol (name k))) args))]
         (is (err/memo-error? e) "compiles, and fails when called")
         (is (= message (some-> e ex-message)))))))
 
@@ -483,3 +507,124 @@
                  (return (Pr (= alice.b 1)))))
         (is (ts/close? (/ 1.0 3) (ts/host ((resolve 'three-way))))))
       (finally (remove-ns 'memo.acceptance-own-bool)))))
+
+;; the rerun of the pass's models (T32): raw errors there before the fixes
+
+(declare Later)
+(defdomain Cell2 :x 2 :y 3)
+
+(deftest what-the-rerun-found
+  (testing "a defdomain field of size 1 (Python memo: an assertion)"
+    (is (= "defdomain Bad: each field is a keyword and a size above 1, not :x 1"
+           (some-> (thrown #(binding [*ns* (the-ns 'memo.acceptance-test)]
+                              (eval '(defdomain Bad :x 1))))
+                   err/root-memo-error ex-message))))
+  (testing "packing a member with a field missing"
+    (let [e (thrown #(Cell2 {:x 1}))]
+      (is (err/memo-error? e))
+      (is (= "Domain Cell2 packs exactly its fields [:x :y]" (some-> e ex-message)))))
+  (testing "a domain declared but without a value"
+    (is (= "Unknown domain Later"
+           (compile-message '(defmemo t32-later [] [] (alice :chooses [x Later] :wpp 1) (return 1))))))
+  (testing "a default that uses another parameter (Python memo: a NameError)"
+    (is (= "The default of parameter b refers to the parameter a"
+           (compile-message '(defmemo t32-default [] [a (b a)] (return b))))))
+  (testing "an empty Pr has a hint"
+    (is (some? (some-> (ts/compile-error 'memo.acceptance-test '(defmemo t32-pr [] [] (return (Pr))))
+                       ex-data :memo/hint)))))
+
+(defn- in-namespace
+  "body's forms evaluated, in order, in a fresh namespace with memo.clj's
+  forms referred; the last's value. The namespace is removed after."
+  [forms]
+  (let [nm (gensym "memo.acceptance-scratch")
+        ns (create-ns nm)]
+    (try
+      (binding [*ns* ns]
+        (refer-clojure)
+        (eval '(require '[memo.core :refer [defmemo]] '[memo.domains :refer [defenum]]
+                        '[gen.array :as array]))
+        (reduce (fn [_ f] (eval f)) nil forms))
+      (finally (remove-ns nm)))))
+
+(deftest the-second-check
+  (testing "S1 a memo call checks domains by value, not by name"
+    (let [e (thrown #(in-namespace
+                      '[(def X [2 1 0])
+                        (defmemo caller [[x X]] [] (return (memo.acceptance-test/t19-ok1 [x] 10.0)))
+                        (caller)]))]
+      (is (err/memo-error? e))
+      (is (= "Domain mismatch in memo call argument 1: X != X." (some-> e ex-message)))
+      (is (some? (:memo/hint (ex-data e))) "E9: with a hint"))
+    (is (ts/close? [0.0 10.0 20.0]
+                   (ts/host (in-namespace
+                             '[(def Y [0 1 2])
+                               (defmemo caller [[y Y]] [] (return (memo.acceptance-test/t19-ok1 [y] 10.0)))
+                               (caller)])))
+        "the same values under another name"))
+  (testing "S5 domain values beyond 32 bits, on a backend with 32-bit integers"
+    (let [r (try (ts/host (in-namespace '[(def Big [0 10000000000])
+                                         (defmemo big [] []
+                                           (alice :chooses [x Big] :wpp 1)
+                                           (return (E (/ alice.x 10000000000))))
+                                         (big)]))
+                 (catch Exception e e))]
+      (if (= :int32 (gen.array/dtype (gen.array/array [1])))
+        (is (= "Domain value 10000000000 is out of bounds for int32" (some-> (err/root-memo-error r) ex-message)))
+        (is (ts/close? 0.5 r)))))
+  (testing "S6 repeated domain values warn"
+    (let [w (java.io.StringWriter.)]
+      (binding [*err* w err/*warnings?* true]
+        (in-namespace '[(def Dup [1 1 2])
+                        (defmemo dup [[y Dup]] [] (alice :chooses [x Dup] :wpp 1) (return (Pr (= alice.x y))))]))
+      (is (str/includes? (str w) "Domain Dup has repeated values"))))
+  (testing "C1 parameters not in a vector"
+    (is (= "Malformed parameters in defmemo c1" (compile-message '(defmemo c1 [] a (return a))))))
+  (testing "C2 an axis or a choice in #{...}"
+    (is (= "Cannot reference x inside the inline escape hatch #{...}"
+           (compile-message '(defmemo c2 [[x X]] [] (return #{x})))))
+    (is (= "Cannot reference y inside the inline escape hatch #{...}"
+           (compile-message '(defmemo c2b [] [] (alice :chooses [y X] :wpp 1) (return (as alice #{y})))))))
+  (testing "C3 a destructuring parameter"
+    (is (= "The default of parameter a, b, is not defined"
+           (compile-message '(defmemo c3 [] [[a b]] (return a))))))
+  (testing "C4 a vectorized function returning nil"
+    (is (= "The vectorized function c4-nil returned nil, not an array"
+           (some-> (thrown #(in-namespace '[(def X [0 1 2])
+                                            (defn ^:memo/vectorized c4-nil [x] nil)
+                                            (defmemo c4 [] [] (alice :chooses [x X] :wpp (c4-nil x))
+                                              (return (E alice.x)))
+                                            (c4)]))
+                   ex-message))))
+  (testing "C5 print-table of nil"
+    (is (str/starts-with? (str (some-> (thrown #(memo/print-table t2-abs-int nil)) ex-message))
+                          "print-table: the result is nil")))
+  (testing "E1 format-error names an exception that is not a memo error"
+    (is (= "error (not a memo error): RuntimeException: plain"
+           (err/format-error (RuntimeException. "plain")))))
+  (testing "E2 an unknown variant"
+    (is (= "Unknown variant" (compile-message '(defmemo ^{:variant :martian} e2 [] [] (return 1))))))
+  (testing "E3 a repeated axis or parameter (Python memo: a SyntaxError)"
+    (is (= "Duplicate axis x in defmemo e3" (compile-message '(defmemo e3 [[x X] [x X]] [] (return x)))))
+    (is (= "Duplicate parameter a in defmemo e3b" (compile-message '(defmemo e3b [] [a a] (return a))))))
+  (testing "E4 a call of a memo defined before, checked when the caller is"
+    (is (= "Missing parameter a in call to memo t19-ok1"
+           (compile-message '(defmemo e4 [[x X]] [] (return (t19-ok1 [x]))))))
+    (is (= "Too many arguments to memo t19-ok1 (it takes 1)"
+           (compile-message '(defmemo e4b [[x X]] [] (return (t19-ok1 [x] 1 2))))))
+    (is (= "memo t19-ok1 has no parameter d"
+           (compile-message '(defmemo e4c [[x X]] [] (return (t19-ok1 [x] 1 :d 2)))))))
+  (testing "E5 a memo with axes called without them"
+    (is (= "t19-ok1 is a memo with axes, called without them"
+           (compile-message '(defmemo e5 [[x X]] [] (return (t19-ok1 x 1.0)))))))
+  (testing "E6 a Java method"
+    (is (str/includes? (str (some-> (ts/compile-error 'memo.acceptance-test
+                                                      '(defmemo e6 [[x X]] [] (return (Math/sqrt x))))
+                                    ex-data :memo/hint))
+                       "Java method")))
+  (testing "E7 no class names from a ClassCastException"
+    (is (= "The inline form #{(* 2 a)} failed: a gen.array value reached a function that takes numbers"
+           (some-> (thrown #(ts/gradient t11-inline-scaled 1.0 [0.5])) ex-message))))
+  (testing "D3 a parameter beyond 64 bits"
+    (is (= "Parameter a was 100000000000000000000, an integer beyond 64 bits"
+           (some-> (thrown #(t1-param-neg 100000000000000000000N)) ex-message)))))

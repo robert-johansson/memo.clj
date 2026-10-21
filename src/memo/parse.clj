@@ -263,6 +263,10 @@
               :else
               (reduce (fn [acc e] (op-node op [acc e] loc)) parsed)))
 
+          ;; xor folds left, as Python's a ^ b ^ c does
+          (and (= 'xor head) (< 2 (count args)))
+          (reduce (fn [acc e] (op-node :xor [acc e] loc)) (mapv #(parse-expr % pctxt) args))
+
           ;; binary-only operators
           (contains? binary-only-ops head)
           (do (when (not= 2 (count args))
@@ -300,7 +304,9 @@
 
           (= head 'Pr)
           (do (when (empty? args)
-                (err/raise "Incorrect syntax in (Pr ...)" {:loc loc}))
+                (err/raise "Incorrect syntax in (Pr ...)"
+                           {:hint "Pr takes one or more conditions, e.g. (Pr (= alice.x 1))."
+                            :loc loc}))
               (let [parsed (mapv #(parse-expr % pctxt) args)
                     conj-expr (reduce (fn [acc e] (assoc (op-node :and [acc e] loc)
                                                          :what "Pr with several conditions"))
@@ -644,7 +650,16 @@
                                               (every? symbol? %)) axes))
     (err/raise (str "Malformed axes in defmemo " mname)
                {:hint "Axes are a vector of [axis-name Domain] pairs, e.g. [[u Utt] [n Count]]."}))
+  (when-not (vector? params)
+    (err/raise (str "Malformed parameters in defmemo " mname)
+               {:hint "Parameters are a vector after the axes: (defmemo m [[x X]] [a (b 1.0)] ...)."}))
   (let [param-entries (mapv #(parse-param % mname) params)
+        repeated (fn [names] (some (fn [[n k]] (when (< 1 k) n)) (frequencies names)))
+        _ (when-let [a (repeated (map first axes))]
+            ;; Python memo: SyntaxError, duplicate argument
+            (err/raise (str "Duplicate axis " a " in defmemo " mname) {}))
+        _ (when-let [p (repeated (map :name param-entries))]
+            (err/raise (str "Duplicate parameter " p " in defmemo " mname) {}))
         base-pctxt {:name mname
                     :static-parameters (mapv :name param-entries)
                     :exotic-parameters (set (keep #(when (:exotic %) (:name %)) param-entries))

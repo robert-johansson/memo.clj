@@ -28,6 +28,7 @@
   (:refer-clojure :exclude [+ - * / < > <= >= == abs])
   (:require [gen.array :as array :refer [+ - * / < > <= >= == exp log abs where]]
             [gen.array.tape :as tape]
+            [memo.domains :as domains]
             [memo.errors :as err]
             [memo.ir :as ir]))
 
@@ -47,9 +48,17 @@
     (if (pos? k) (array/reshape x (into (vec (repeat k 1)) s)) x)))
 
 (defn- along
-  "A domain's values as an array along dim d."
+  "A domain's values as an array along dim d. Integers the backend holds in
+  32 bits (MLX) must fit them: Python memo raises an OverflowError there."
   [values d]
-  (array/reshape (array/array values) (into [(count values)] (repeat d 1))))
+  (let [a (array/array values)]
+    (when (= :int32 (array/dtype a))
+      (when-let [v (first (filter #(not (clojure.core/<= Integer/MIN_VALUE % Integer/MAX_VALUE)) values))]
+        (err/raise (str "Domain value " v " is out of bounds for int32")
+                   {:hint (str "This backend holds a domain's integers in 32 bits, and Python memo "
+                               "raises an OverflowError here (the JVM backend's are 64 bits). Use "
+                               "doubles, e.g. [0.0 1e10].")})))
+    (array/reshape a (into [(count values)] (repeat d 1)))))
 
 (defn- reduce-dims [f x dims]
   (if (empty? dims)
@@ -139,6 +148,10 @@
   (cond
     (and (number? x) (number? y)) (python-pow x y)
 
+    ;; JAX's integer_pow: x ** 0 is 1, with gradient 0 (gen.array's
+    ;; y x^(y-1) is NaN at x = 0)
+    (and (integer? y) (zero? y)) (array/ones-like x)
+
     (and (integral? x) (integral? y)
          (if (number? y) (neg? y) (array/any-true? (< y 0))))
     (err/raise "Integers cannot be raised to negative powers"
@@ -168,7 +181,32 @@
                {:hint (str "Python memo computes " op " bitwise on other integers, which "
                            "gen.array cannot do. Compare first, e.g. (= x 1).")})))
 
-(defn- run-op [op [x y] what]
+(defn- python-scalar? [x] (or (number? x) (boolean? x)))
+
+(defn- python-int [x] (if (boolean? x) (if x 1 0) x))
+
+(declare run-op run-op*)
+
+(defn- python-op
+  "op on host values (parameters and literals), as Python memo computes them,
+  as Python numbers: a boolean is the integer 0 or 1 in arithmetic, and
+  division by zero is an error. nil when op is not one of those."
+  [op [x y] what]
+  (cond
+    (and (#{:add :sub :mul :neg :uadd :abs} op) (or (boolean? x) (boolean? y)))
+    (run-op op (if (some? y) [(python-int x) (python-int y)] [(python-int x)]) what)
+
+    (and (#{:div :mod} op) (some? y) (clojure.core/== 0 (python-int y)))
+    (err/raise "division by zero"
+               {:hint (str "Python memo computes parameters and literals as Python numbers, and "
+                           "raises a ZeroDivisionError here.")})))
+
+(defn- run-op [op [x y :as args] what]
+  (or (when (and (python-scalar? x) (or (nil? y) (python-scalar? y)))
+        (python-op op args what))
+      (run-op* op args what)))
+
+(defn- run-op* [op [x y] what]
   (case op
     :add (if (and (bool? x) (bool? y)) (array/logical-or x y) (+ x y))
     :mul (if (and (bool? x) (bool? y)) (array/logical-and x y) (* x y))
@@ -201,26 +239,38 @@
 ;; -----------------------------------------------------------------------------
 ;; memo calls
 
-(defn- check-which [n which]
+(defn- check-which [n which loc]
   (if (= 1 n)
     (when (some? which)
       (err/raise (str "You are calling a memo model with only one return value, so you "
-                      "do not have to specify which return value you want.")))
+                      "do not have to specify which return value you want.") {:loc loc}))
     (do (when (nil? which)
           (err/raise (str "You are calling a memo model that has multiple return values, "
                           "but you have not specified which return value you want. Try "
-                          "writing (model 0 [...] ...) to get the first return value.")))
+                          "writing (model 0 [...] ...) to get the first return value.")
+                     {:loc loc}))
         (when-not (clojure.core/< -1 which n)
-          (err/raise "Your memo model does not have enough return values.")))))
+          (err/raise "Your memo model does not have enough return values." {:loc loc})))))
 
-(defn- check-domains [callee caller]
+(defn- same-values? [a b]
+  (and (= (count a) (count b)) (every? true? (map clojure.core/== a b))))
+
+(defn- check-domains
+  "The axes a memo call passes against the callee's: their domains must have
+  the same values, in order (Python memo compares their names, so another
+  module's X of other values passes, misaligned)."
+  [callee caller callee-values caller-values loc]
   (when (clojure.core/> (count callee) (count caller))
-    (err/raise "Not enough arguments to memo call!"))
+    (err/raise "Not enough arguments to memo call!" {:loc loc}))
   (when (clojure.core/> (count caller) (count callee))
-    (err/raise "Too many arguments to memo call!"))
-  (doseq [[i t s] (map vector (range) callee caller)]
-    (when (not= t s)
-      (err/raise (str "Domain mismatch in memo call argument " (inc i) ": " t " != " s ".")))))
+    (err/raise "Too many arguments to memo call!" {:loc loc}))
+  (doseq [[i t s tv sv] (map vector (range) callee caller callee-values caller-values)]
+    (when-not (same-values? tv sv)
+      (err/raise (str "Domain mismatch in memo call argument " (inc i) ": " t " != " s ".")
+                 {:hint (str "The memo called ranges over " t " = " (pr-str tv) ", the choice "
+                             "passed over " s " = " (pr-str sv) ": an axis takes a choice over the "
+                             "same values, in the same order.")
+                  :loc loc}))))
 
 (defn- place
   "A table whose axis i belongs on dim (dims i), laid out on the dims."
@@ -238,11 +288,13 @@
                    :else (recur (inc p) (inc filler) (conj out filler))))]
       (array/transpose x perm))))
 
-(defn- call-memo [resolve-memo env {:keys [name which args kwargs guards dims domains]}]
+(defn- call-memo [{:keys [resolve-memo domain-values] :as ctx} env
+                  {:keys [name which args kwargs guards dims domains]}]
   (let [f (resolve-memo name)
-        {:memo/keys [num-results domain-names shape call]} (meta f)
-        _ (check-which num-results which)
-        _ (check-domains domain-names domains)
+        {:memo/keys [num-results domain-names shape call] callee-domains :memo/domains} (meta f)
+        _ (check-which num-results which {:name (:name ctx)})
+        _ (check-domains domain-names domains (mapv domains/values callee-domains)
+                         (mapv domain-values domains) {:name (:name ctx)})
         table (if (every? #(array/truthy? (get env %)) guards)
                 (let [res (call (mapv #(get env %) args)
                                 (into {} (map (fn [[k s]] [k (get env s)])) kwargs))]
@@ -274,6 +326,14 @@
     [(array/item x)]
     (let [x (if (array/host? x) (array/array x) x)]
       (vec (flatten (array/->clj (array/broadcast-to (pad x (count shape)) shape)))))))
+
+(defn- failure
+  "What an exception from user code says: for a ClassCastException, which
+  quotes class and loader names, what it means here."
+  [e]
+  (if (instance? ClassCastException e)
+    "a gen.array value reached a function that takes numbers"
+    (or (ex-message e) (.getSimpleName (class e)))))
 
 (defn- not-scalar [name]
   (err/raise (str "The function " name "(...) is not scalar-in-scalar-out. memo can "
@@ -433,12 +493,17 @@
                               e
                               (err/memo-error
                                (str "The vectorized function " name " failed on whole arrays: "
-                                    (or (ex-message e) (.getSimpleName (class e))))
+                                    (failure e))
                                {:hint (str "A function marked ^:memo/vectorized is called once on "
                                            "gen.array arrays: write it with gen.array's operators "
                                            "(array/exp, not Math/exp), or remove the mark, so that "
                                            "memo.clj calls it on each value.")
                                 :cause e})))))
+            _ (when-not (or (number? r) (boolean? r) (array/array? r) (tape/tracked? r))
+                (err/raise (str "The vectorized function " name " returned " (pr-str r)
+                                ", not an array")
+                           {:hint (str "A function marked ^:memo/vectorized returns a gen.array "
+                                       "array (or a number), elementwise over its arguments.")}))
             rs (array/shape r)]
         (when-not (and (clojure.core/<= (count rs) (count dyn-shape))
                        (every? true? (map #(or (= 1 %1) (= %1 %2)) (rseq rs) (rseq dyn-shape))))
@@ -473,8 +538,7 @@
                  (throw (if (err/memo-error? e)
                           e
                           (err/memo-error
-                           (str "The inline form " form " failed: "
-                                (or (ex-message e) (.getSimpleName (class e))))
+                           (str "The inline form " form " failed: " (failure e))
                            {:hint (if traced?
                                     (str "Its parameters are being differentiated, so they reach it "
                                          "as gen.array values: compute with gen.array's operators, "
@@ -505,7 +569,7 @@
              :swap-dims (let [{:keys [d1 d2]} instr]
                           (swap-axes (pad (arg (:arg instr)) (inc (max d1 d2))) (axis d1) (axis d2)))
              :alias (arg (:arg instr))
-             :call-memo (call-memo (:resolve-memo ctx) env instr)
+             :call-memo (call-memo ctx env instr)
              :ffi (host-call ctx env instr)
              :inline (inline-value (nth (:inlines ctx) (:idx instr)) (map env (:param-order ctx))
                                    (contains? (:inline-args ctx) (:out instr)))))))
@@ -557,8 +621,10 @@
   "The function computing a compiled memo's result: from a map of parameter
   values to its table, or, for several returns, their tables stacked on a
   leading axis. ctx: :resolve-memo, from a memo's name to the memo, at call
-  time (so a memo may call itself). Memo calls run first (calls-first), and
-  no value is kept past its last use (drops)."
+  time (so a memo may call itself); :name, the memo's; :domain-values, from
+  its domains' names to their values; :fns, :inlines, :param-order. Memo
+  calls run first (calls-first), and no value is kept past its last use
+  (drops)."
   [compiled ctx]
   (let [{:keys [results]} compiled
         instrs (calls-first (:instrs compiled))

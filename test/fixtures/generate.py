@@ -19,7 +19,7 @@ import math
 import os
 import subprocess
 import sys
-from enum import IntEnum
+from enum import IntEnum, auto
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MEMO_SRC = os.path.join(ROOT, "memo-mcp", "memo")
@@ -2003,6 +2003,58 @@ def t24_insp2():
     return 1
 
 
+# the second acceptance check (memoclj-a46m): s2 booleans of parameters and
+# literals are Python's, s3 the gradient of x ** 0, s4 enum members after a
+# valued one, e8 xor of three, d2 division by zero of statics
+@memo
+def s2_bool_sum(a):
+    return (a > 0) + (a > 0)
+
+
+@memo
+def s2_bool_neg(a):
+    return -(a > 0)
+
+
+@memo
+def s2_bool_expect(a):
+    alice: chooses(x in X, wpp=1)
+    return E[alice.x * ((a > 0) + (a > 0))]
+
+
+@memo
+def s3_pow0(a):
+    alice: chooses(x in X, wpp=1)
+    return E[(a * alice.x) ** 0]
+
+
+class Mixed(IntEnum):
+    RED = 1
+    GREEN = auto()
+    BLUE = auto()
+
+
+@memo
+def s4_mixed[c: Mixed]():
+    alice: chooses(x in Mixed, uniformly)
+    return Pr[alice.x == c]
+
+
+@memo
+def e8_xor3[p: Bool, q: Bool, r: Bool]():
+    return p ^ q ^ r
+
+
+@memo
+def d2_div0(a):
+    return a / 0
+
+
+@memo
+def d2_mod0(a):
+    return a % 0
+
+
 # T10: a vectorized function gets an array parameter as its array, when
 # called and when spot-checked
 Two = np.arange(2)
@@ -2053,14 +2105,21 @@ write("acceptance.edn",
        case(t9_forget_known_unread),
        case(t9_forget_observed_unread),
        case(t9_forget_alone),
-       case(t10_lookup, np.array([0.1, 0.5, -0.2]))],
+       case(t10_lookup, np.array([0.1, 0.5, -0.2])),
+       case(s2_bool_sum, 1.0),
+       case(s2_bool_neg, 1.0),
+       case(s2_bool_expect, 1.0),
+       case(s3_pow0, 0.5),
+       case(s4_mixed),
+       case(e8_xor3)],
       [t6_cast_expr_err, t21_wants_no_goal],
-      runtime_errors=[(t1_zero_neg,)],
+      runtime_errors=[(t1_zero_neg,), (d2_div0, 1.0), (d2_mod0, 1.0)],
       grads=[grad(t2_abs, 1.0, 0.0),
              grad(t2_abs, 1.0, -0.0),
              grad(t2_near, 1.0, 2.0),
              grad(t2_near, 1.0, 0.0),
-             grad(t10_lookup, [1.0, 1.0], np.array([0.1, 0.5, -0.2]))],
+             grad(t10_lookup, [1.0, 1.0], np.array([0.1, 0.5, -0.2])),
+             grad(s3_pow0, 1.0, 0.0)],
       inspect=[t24_insp1, t24_insp2])
 
 

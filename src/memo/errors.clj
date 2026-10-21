@@ -45,18 +45,22 @@
 
 (defn format-error
   "e rendered as Python memo renders its notes: the memo error inside it,
-  when Clojure wrapped one (as a defmemo that fails to compile does)."
+  when Clojure wrapped one (as a defmemo that fails to compile does). Any
+  other exception is named by its class, as not a memo error."
   [e]
-  (let [e (or (root-memo-error e) e)
-        {:memo/keys [hint user loc frame-ctxt]} (ex-data e)]
-    (str "memo error: " (ex-message e)
+  (if-not (root-memo-error e)
+    (str "error (not a memo error): "
+         (if e (str (.getSimpleName (class e)) ": " (ex-message e)) "nil"))
+    (let [e (root-memo-error e)
+          {:memo/keys [hint user loc frame-ctxt]} (ex-data e)]
+      (str "memo error: " (ex-message e)
          (when loc
            (str "\n  in: " (when (:name loc) (str "defmemo " (:name loc)))
                 (when (:line loc) (str ", line " (:line loc)))))
          (when hint (str "\n  hint: " hint))
          (when frame-ctxt (str "\n  ctxt: " frame-ctxt))
          (when (false? user)
-           "\n  [This may be a bug in memo.clj: please report it.]"))))
+           "\n  [This may be a bug in memo.clj: please report it.]")))))
 
 (defn warn
   "Print parts as a warning to *err*, unless *warnings?* is false."

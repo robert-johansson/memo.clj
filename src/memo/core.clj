@@ -39,6 +39,11 @@
                       name ".")
                  {:loc {:name mname}}))
     (cond
+      (and (integer? v) (not (clojure.core/<= Long/MIN_VALUE v Long/MAX_VALUE)))
+      (err/raise (str "Parameter " name " was " v ", an integer beyond 64 bits")
+                 {:hint "Python memo cannot take it either (an OverflowError). Use a double."
+                  :loc {:name mname}})
+
       (or (number? v) (boolean? v)) nil
       ;; Python memo's message, for an array (and None)
       (or (nil? v) (sequential? v) (array/array? v))
@@ -123,22 +128,42 @@
   parameters."
   [{:keys [name ns parsed domains defaults opts fns inlines]}]
   (let [domain-values (into {} (map (fn [[k d]]
+                                      (when (instance? clojure.lang.Var$Unbound d)
+                                        (err/raise (str "Unknown domain " k)
+                                                   {:hint (str k " is declared but has no value: its "
+                                                               "definition failed, or is still to come.")
+                                                    :loc {:name name}}))
                                       (when-not (domains/domain? d)
                                         (err/raise (str k " is not a domain: " (pr-str d))
                                                    {:hint (domains/not-a-domain-hint d)
                                                     :loc {:name name}}))
-                                      [k (domains/values d)]))
+                                      (let [vs (domains/values d)]
+                                        ;; Python memo the same: some queries
+                                        ;; compare positions, others values
+                                        (when (and (sequential? d) (not= (count vs) (count (set vs))))
+                                          (err/warn-at {:name name} "Domain " k " has repeated values "
+                                                       (pr-str vs) ": a choice's value then names "
+                                                       "more than one member, and a query compares "
+                                                       "them by value or by position as Python memo "
+                                                       "does, so (Pr (= alice.x y)) and "
+                                                       "(Pr (= alice.x 1)) can disagree."))
+                                        [k vs])))
                             domains)
-        callee-axes (fn [callee]
-                      (when (not= callee name)
-                        (some-> (ns-resolve (the-ns ns) callee) deref meta :memo/axes count)))
-        compiled (analyze/analyze parsed domain-values (assoc opts :callee-axes callee-axes))
+        callee (fn [callee]
+                 (when (not= callee name)
+                   (let [m (some-> (ns-resolve (the-ns ns) callee) deref meta)]
+                     (when (:memo/axes m)
+                       {:axes (count (:memo/axes m)) :params (:memo/params m)
+                        :defaults (:memo/defaults m) :num-results (:memo/num-results m)}))))
+        compiled (analyze/analyze parsed domain-values (assoc opts :callee callee))
         problems (ir/check compiled)
         _ (when (seq problems)
             (err/raise (str "memo.clj built an ill-formed program for " name)
                        {:user false :hint (str/join "; " problems)}))
         params (:params parsed)
         run (lower/program compiled {:resolve-memo (memo-resolver ns)
+                                     :name name
+                                     :domain-values domain-values
                                      :fns fns
                                      :inlines inlines
                                      :param-order (mapv :name params)})
@@ -163,6 +188,7 @@
       {:memo/name name
        :memo/doc (:doc parsed)
        :memo/params (mapv :name params)
+       :memo/defaults (set (keys defaults))
        :memo/axes (:axes compiled)
        :memo/domain-names (:domains compiled)
        :memo/domains (mapv domains (:domains compiled))
@@ -188,15 +214,17 @@
   as in memo expressions: Python memo's {Action.WAIT} is Python, where
   Action.WAIT is a value. Any other agent.choice-shaped symbol is an error
   (Clojure would read it as a class name); dotted symbols that name classes
-  are left to Clojure."
-  [mname form resolve-member]
+  are left to Clojure. So is a bare name in hidden, the memo's axes and
+  choices."
+  [mname form resolve-member hidden]
   (walk/postwalk (fn [x]
                    (let [parts (when (and (symbol? x) (nil? (namespace x))) (parse/dotted-parts x))
                          v (when (= 2 (count parts)) (resolve-member (first parts) (second parts)))]
                      (cond
                        (some? v) v
-                       (and (= 2 (count parts))
-                            (not (class? (try (resolve x) (catch Exception _ nil)))))
+                       (or (and (= 2 (count parts))
+                                (not (class? (try (resolve x) (catch Exception _ nil)))))
+                           (contains? hidden x))
                        (err/raise (str "Cannot reference " x " inside the inline escape hatch #{...}")
                                   {:hint (str "#{...} is Clojure, evaluated with the memo's parameters "
                                               "only: it cannot reference memo constructs (agents or "
@@ -221,6 +249,13 @@
   host functions and memo calls (Python memo's `p: ...`)."
   [mname & body]
   (let [opts (select-keys (meta mname) [:variant :cache])
+        _ (when-let [v (:variant opts)]
+            (when-not (contains? (set (vals parse/variants)) v)
+              (err/raise "Unknown variant"
+                         {:hint (str "`" (pr-str v) "` is not a recognized memo variant. The "
+                                     "available variants are: :adult, :child, :no-thinks, "
+                                     ":no-knows, :no-wants")
+                          :loc {:name mname}})))
         [axes params & forms] body
         resolve-member (member-resolver *ns*)
         parsed (parse/parse-defmemo mname axes params (vec forms)
@@ -229,6 +264,12 @@
         refs (ast/collect parsed)
         domain-syms (sort (into (:domain-names refs) (map second axes)))
         param-syms (mapv :name (:params parsed))
+        ;; names #{...} cannot see: the axes and choices (not parameters)
+        inline-hidden (into (set (map first axes))
+                            (comp (keep #(when (and (map? %) (= :choose (:node %))) (:choices %)))
+                                  cat (map first)
+                                  (remove (set param-syms)))
+                            (tree-seq coll? seq (:stmts parsed)))
         _ (doseq [d domain-syms]
             (when (some #{d} param-syms)
               ;; Python memo would take the parameter's value as the domain
@@ -246,9 +287,23 @@
         fn-ref (fn [f]
                  (let [v (resolve f)]
                    (cond
+                     (and (var? v) (bound? v) (seq (:memo/axes (meta @v))))
+                     (err/raise (str f " is a memo with axes, called without them")
+                                {:hint (str "A memo with axes is called with a vector of choices "
+                                            "for them: (" f " [x ...] args ...).")
+                                 :loc {:name mname}})
+
                      (var? v) (list 'var (symbol (str (.ns ^clojure.lang.Var v))
                                                  (str (.sym ^clojure.lang.Var v))))
                      (= f mname) nil
+
+                     (and (namespace f) (class? (try (resolve (symbol (namespace f))) (catch Exception _ nil))))
+                     (err/raise (str "Unknown function " f)
+                                {:hint (str f " is a Java method, not a function: wrap it in one "
+                                            "defined before the memo, e.g. (defn " (name f) " [x] ("
+                                            f " x)).")
+                                 :loc {:name mname}})
+
                      :else (err/raise (str "Unknown function " f)
                                       {:hint (str "Host functions must be defined before the "
                                                   "defmemo that calls them. Or should this be "
@@ -257,7 +312,24 @@
         defaults (into {} (keep (fn [p]
                                   (when (some? (:default p))
                                     [(list 'quote (:name p)) (:default p)])))
-                       (:params parsed))]
+                       (:params parsed))
+        _ (doseq [{:keys [name default]} (:params parsed)
+                  :when (and (symbol? default) (not (some #{default} param-syms))
+                             (not (contains? &env default)) (not (resolve default)))]
+            ;; [[a b]] reads as a with the default b
+            (err/raise (str "The default of parameter " name ", " default ", is not defined")
+                       {:hint (str "A parameter is a name, with a default as (" name " 1.0); a "
+                                   "default is a value, defined before the memo.")
+                        :loc {:name mname}}))
+        _ (doseq [p (:params parsed)
+                  :let [used (some (set param-syms) (tree-seq coll? seq (:default p)))]
+                  :when (and (some? (:default p)) used)]
+            ;; a default is computed once, when the memo is defined
+            (err/raise (str "The default of parameter " (:name p) " refers to the parameter " used)
+                       {:hint (str "A default is a value computed when the memo is defined, "
+                                   "outside it, so it cannot use another parameter. (Python memo: "
+                                   "a NameError.)")
+                        :loc {:name mname}}))]
     `(def ~mname
        (make-memo {:name '~mname
                    :ns '~(ns-name *ns*)
@@ -270,7 +342,9 @@
                                                       d)]))
                                    domain-syms)
                    :fns ~(into {} (map (fn [f] [(list 'quote f) (fn-ref f)])) (:ffi-names refs))
-                   :inlines ~(mapv (fn [form] `(with-meta (fn [~@param-syms] ~(inline-members mname form resolve-member))
+                   :inlines ~(mapv (fn [form] `(with-meta (fn [~@param-syms]
+                                                            ~(inline-members mname form resolve-member
+                                                                             inline-hidden))
                                                     {:memo/form '~form}))
                                    inline-forms)}))))
 
@@ -288,6 +362,9 @@
         _ (when-not name
             (err/raise "print-table takes a memo and its result"
                        {:hint "(print-table m (m args...)), with m a defmemo's model."}))
+        _ (when-not (or (number? result) (boolean? result) (array/array? result) (sequential? result))
+            (err/raise (str "print-table: the result is " (pr-str result) ", not " name "'s table")
+                       {:hint (str "Pass " name "'s own result: (print-table " name " (" name " ...)).")}))
         result (if (or (number? result) (boolean? result) (array/array? result))
                  result
                  (array/array result))

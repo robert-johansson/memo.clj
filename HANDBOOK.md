@@ -134,7 +134,16 @@ function from a member's name to its value, as above. As in an `IntEnum`,
 a member given the value of an earlier one is its alias:
 `(defenum D [P 1] [Q 1] [R 2])` has the members `P` and `R`, and `D.Q` is
 `P`. An axis or a choice
-names its domain by a var: `[x X]`, never `[x [0 1 2]]`.
+names its domain by a var: `[x X]`, never `[x [0 1 2]]`. A gen.array
+array is not a domain: write `(vec (array/->clj a))`. A member written
+without a value after one with a value is the previous value plus one, as
+Python's `auto()` makes it: `(defenum C [RED 1] GREEN)` has GREEN 2.
+
+A vector domain may repeat a value, as a Python list may, but a choice's
+value then names more than one member, and memo compares them by value in
+some queries and by position in others (`(Pr (= alice.x 1))` and
+`(Pr (= alice.x y))` can disagree), in Python memo as here. memo.clj warns
+when such a domain is used.
 
 One enum is predefined: `Bool`, with members `NO` (0) and `YES` (1).
 Every model can name it without defining it, and a namespace's own `Bool`
@@ -833,9 +842,11 @@ memo.clj's operators are Clojure's prefix forms.
 `+`, `-`, `*` and `/` take any number of arguments and fold left.
 
 On literals and parameters, `**` is Python's: Python memo computes them
-as Python numbers, so an integer to a negative power is a float. On
+as Python numbers, so an integer to a negative power is a float, and
+division or modulo by zero is Python's error, "division by zero". On
 values that vary, an integer to a negative integer power is an error, as
-in JAX; write `(** x -1.0)`.
+in NumPy (JAX's integer power gives garbage there under `jit`, though 0
+for the base 2); write `(** x -1.0)`.
 
 ```clojure
 (defmemo inverse [] [a]
@@ -862,7 +873,7 @@ in JAX; write `(** x -1.0)`.
 |----------|-------------|
 | `(and a b ...)` | Logical AND |
 | `(or a b ...)` | Logical OR |
-| `(xor a b)` | Logical XOR |
+| `(xor a b ...)` | Logical XOR (folding left, as `a ^ b ^ c`) |
 
 ### Unary operators
 
@@ -894,8 +905,10 @@ in JAX; write `(** x -1.0)`.
 
 **Booleans follow JAX, as in Python memo.** A comparison gives a boolean.
 `+` of two booleans is logical or, `*` is logical and, and `-` of a
-boolean is an error. A weight that adds comparisons counts each value
-once:
+boolean is an error. On parameters and literals alone, which Python memo
+computes as Python numbers, a boolean is the integer 0 or 1 instead:
+`(+ (> a 0) (> a 0))` is 2, and `(- (> a 0))` is -1. A weight that adds
+comparisons of choices counts each value once:
 
 ```clojure
 (defmemo bool-weights [] []
@@ -1072,7 +1085,10 @@ Within an agent's statements, its own choices are plain names (`x` and
 
 ## Probabilistic Operators
 
-memo has operators for statistics of distributions.
+memo has operators for statistics of distributions. As in Python memo, a
+query of a number rather than a condition is its mean: `(Pr (+ alice.x 5))`
+is `(E (+ alice.x 5))`; and `:such-that` with a number weights by it, as
+`:wpp` does.
 
 **Expectation**, `(E e)`:
 
@@ -1629,7 +1645,8 @@ What memo.clj computes differently, on purpose:
   and Metal, so `:to-maximize` breaks such a tie differently on each.
 - **Integers** are 64-bit on the JVM backend and 32-bit on MLX and in
   Python memo, which wrap silently past 2^31: `(* x 1000000000)` at x = 3
-  is 3000000000 on the JVM, -1294967296 on MLX and in Python memo.
+  is 3000000000 on the JVM, -1294967296 on MLX and in Python memo. A
+  parameter beyond 64 bits is an error, as in Python memo.
 - **Your own `Bool`.** A namespace's own `Bool` replaces the predefined
   one. Python memo's generated code imports memo's, which silently wins
   over a model's own: with `Bool` of three members, a uniform choice gives
@@ -1637,6 +1654,13 @@ What memo.clj computes differently, on purpose:
 - **Domains are vars.** A number is not a domain (Python memo takes
   `S = 3` as the domain {3}; write `[3]`), and a parameter cannot have a
   domain's name (Python memo would take its value as the domain).
+- **A memo call checks its axes' domains by value.** Python memo compares
+  their names, so a caller's own `X = [2 1 0]`, passed where the callee's
+  `X` is `[0 1 2]`, is silently misaligned there and an error here; the
+  same values under another name pass.
+- **Domain values beyond 32 bits** are an error on MLX, whose domain
+  integers are 32 bits, as Python memo's OverflowError (the JVM backend's
+  are 64 bits).
 - **No bitwise operators.** `and`, `or`, `xor` and `not` are logical, on
   booleans and on integers that are 0 or 1. Python memo computes `&`,
   `|`, `^` and `~` bitwise on other integers (its `~x` is `True ^ x`, so

@@ -37,8 +37,8 @@
   (let [m (symbol (name member))
         i (.indexOf ^java.util.List (:members e) (get (:aliases e) m m))]
     (when (neg? i)
-      (throw (ex-info (str "Enum " (:name e) " has no member " (name member))
-                      {:enum (:name e) :member member :members (:members e)})))
+      (err/raise (str "Enum " (:name e) " has no member " (name member))
+                 {:hint (str "Its members are " (apply str (interpose ", " (:members e))) ".")}))
     (nth (:values e) i)))
 
 (declare field pack)
@@ -56,8 +56,8 @@
 
 (defn- place [d k]
   (or (get (:places d) k)
-      (throw (ex-info (str "Domain " (:name d) " has no field " (pr-str k))
-                      {:domain (:name d) :field k :fields (:keys d)}))))
+      (err/raise (str "Domain " (:name d) " has no field " (pr-str k))
+                 {:hint (str "Its fields are " (pr-str (:keys d)) ".")})))
 
 (defn field
   "Field k of member z of product domain d: a number for a number, an array
@@ -73,8 +73,8 @@
   field's keyword to its value."
   [d m]
   (when-not (= (set (keys m)) (set (:keys d)))
-    (throw (ex-info (str "Domain " (:name d) " packs exactly its fields " (pr-str (:keys d)))
-                    {:domain (:name d) :fields (:keys d) :given (vec (keys m))})))
+    (err/raise (str "Domain " (:name d) " packs exactly its fields " (pr-str (:keys d)))
+               {:hint (str "Given " (pr-str (vec (keys m))) ".")}))
   (reduce + (map (fn [k] (* (get m k) (place d k))) (:keys d))))
 
 (defn fields
@@ -89,11 +89,11 @@
   [name pairs]
   (doseq [[k n] pairs]
     (when-not (and (keyword? k) (integer? n) (> n 1))
-      (throw (ex-info (str "defdomain " name ": each field is a keyword and a size above 1, not "
+      (err/raise (str "defdomain " name ": each field is a keyword and a size above 1, not "
                            (pr-str k) " " (pr-str n))
-                      {:field k :size n}))))
+                 {:hint "As Python memo's domain(...) asserts, each field's size is an integer above 1."})))
   (when (not= (count (set (map first pairs))) (count pairs))
-    (throw (ex-info (str "defdomain " name ": repeated field") {:fields (map first pairs)})))
+    (err/raise (str "defdomain " name ": repeated field")))
   (let [ks (mapv first pairs)
         sizes (into {} pairs)
         places (into {} (map vector (rseq ks) (reductions * 1 (map sizes (rseq ks)))))]
@@ -110,7 +110,8 @@
   (str "A domain is a vector of numbers, an enum (defenum) or a product (defdomain)."
        (cond
          (number? d) (str " Python memo takes a number n as the domain {n}; write [" d "] for that.")
-         (set? d) " A set has no order: write a vector, e.g. (vec (sort s)).")))
+         (set? d) " A set has no order: write a vector, e.g. (vec (sort s))."
+         (array/array? d) " A gen.array array is not one: write a vector, e.g. (vec (array/->clj a)).")))
 
 (defn values
   "The values of a domain, as a vector of numbers."
@@ -128,14 +129,21 @@
 
 (defmacro defenum
   "(defenum Utt SILENT SOME ALL) defines Utt, an enum with values 0, 1, 2.
-  Members may give explicit values: (defenum R [GREEN 5] [RED 9]). As in
+  Members may give explicit values: (defenum R [GREEN 5] [RED 9]); a member
+  without one after a member with one is the previous value plus one, as
+  Python's auto(): (defenum C [RED 1] GREEN) has GREEN 2. As in
   Python's IntEnum, a member with the value of an earlier one is its alias:
   (defenum D [P 1] [Q 1] [R 2]) has the members P and R, and D.Q is P."
   [name & members]
-  (let [pairs (vec (map-indexed (fn [i m] (if (vector? m) [(first m) (second m)] [m i]))
-                                members))]
+  (let [pairs (reduce (fn [acc m]
+                        ;; a bare member is the previous value plus one (Python's
+                        ;; auto()), so 0, 1, 2 ... when none has a value
+                        (conj acc (if (vector? m)
+                                    [(first m) (second m)]
+                                    [m (if-let [[_ v] (peek acc)] (inc v) 0)])))
+                      [] members)]
     (when (not= (count (set (map first pairs))) (count pairs))
-      (throw (ex-info (str "defenum " name ": repeated member") {:members (map first pairs)})))
+      (err/raise (str "defenum " name ": repeated member")))
     (let [canonical (reduce (fn [acc [m v]] (if (some #(= v (second %)) acc) acc (conj acc [m v])))
                             [] pairs)
           by-value (into {} (map (fn [[m v]] [v m])) canonical)
@@ -148,7 +156,8 @@
   S = domain(x=3, y=4)). Sizes are expressions, e.g. (count (values Loc))."
   [name & fields]
   (when (odd? (count fields))
-    (throw (ex-info (str "defdomain " name ": fields come in pairs, :field size") {:fields fields})))
+    (err/raise (str "defdomain " name ": fields come in pairs, :field size")
+               {:hint "For example (defdomain S :x 3 :y 4)."}))
   `(def ~name (product-domain '~name ~(mapv vec (partition 2 fields)))))
 
 (defenum Bool NO YES)

@@ -302,8 +302,13 @@ kept in the upstream ledger (§9).
   the top level is a MemoError, "Unknown goal", corrected by the first
   acceptance pass.)
 - **`self` is not reserved** (§8).
-- **Met by the first acceptance pass** (2026-10-21), memo.clj sound in
+- **Met by the acceptance checks** (2026-10-21), memo.clj sound in
   each:
+  - A memo call compares its axes' domains by name: another module's `X`
+    of other values is silently misaligned (memo.clj compares values).
+  - Duplicate values in a list domain: equality compares values in some
+    queries and positions in the posterior shortcut (memo.clj the same,
+    and warns).
   - `g[x, x]` on a memo of two axes crashes in JAX (memo.clj: a compile
     error, the same choice passed twice); `h[()](a)` crashes.
   - `KL[3 | 4]` is 7: a `KL[...]` other than `KL[p.x | q.y]` is read as a

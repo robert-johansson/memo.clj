@@ -417,7 +417,7 @@
   the choices given. Its arguments are static, so they are known before any
   agent reasons; it is called only when the path conditions around it hold,
   which is what lets a memo recurse."
-  [state {:keys [name which-retval args kwargs ids loc]}]
+  [state {:keys [name which-retval args kwargs ids ellipsis? loc]}]
   (let [[state arg-vals]
         (reduce (fn [[st acc] a]
                   (let [[st v] (eval-expr st a)]
@@ -443,16 +443,31 @@
                                                      "'s choice of " si ".")))))
                   ids)
         dims (mapv :idx chs)
-        ;; a memo defined before this one: its axes are known (Python memo
-        ;; checks them when called)
-        _ (when-let [n (some-> (:callee-axes state) (#(% name)))]
-            (cond
-              (> (count ids) n) (err/raise "Too many arguments to memo call!"
-                                           (assoc (frame-err-opts state loc)
-                                                  :hint (str name " has " n " axes.")))
-              (< (count ids) n) (err/raise "Not enough arguments to memo call!"
-                                           (assoc (frame-err-opts state loc)
-                                                  :hint (str name " has " n " axes.")))))
+        ;; a memo defined before this one: its axes and parameters are known
+        ;; (Python memo checks them when called; a return index is checked
+        ;; when called here too, as Python memo's tests expect)
+        _ (when-let [{:keys [axes params defaults num-results]} (some-> (:callee state) (#(% name)))]
+            (let [opts (fn [hint] (assoc (frame-err-opts state loc) :hint hint))
+                  sig (str name " has " axes " axes and the parameters " (pr-str params) ".")
+                  named (set (map (comp symbol clojure.core/name first) kwargs))]
+              (cond
+                (> (count ids) axes) (err/raise "Too many arguments to memo call!" (opts sig))
+                (< (count ids) axes) (err/raise "Not enough arguments to memo call!" (opts sig)))
+              ;; Python memo checks the return index first, when called
+              (when (and (not ellipsis?)
+                         (if (= 1 num-results)
+                           (nil? which-retval)
+                           (and (some? which-retval) (< -1 which-retval num-results))))
+                (when (> (count args) (count params))
+                  (err/raise (str "Too many arguments to memo " name " (it takes " (count params) ")")
+                             (opts sig)))
+                (when-let [k (first (remove (set params) named))]
+                  (err/raise (str "memo " name " has no parameter " k) (opts sig)))
+                (when-let [p (first (filter named (take (count args) params)))]
+                  (err/raise (str "Parameter " p " of memo " name " passed both positionally and by name")
+                             (opts sig)))
+                (when-let [p (first (remove #(or (named %) (defaults %)) (drop (count args) params)))]
+                  (err/raise (str "Missing parameter " p " in call to memo " name) (opts sig))))))
         _ (when (not= (count (set dims)) (count dims))
             (err/raise "The same choice is passed twice in a memo call"
                        (assoc (frame-err-opts state loc)
@@ -1191,11 +1206,12 @@
   {:instrs [...] :results [sym ...] :forall [[dim id domain] ...]
    :axes [id ...] :domains [domain ...] :shape [n ...] :n-dims n}.
   domains maps each domain symbol to its values; opts has :variant and
-  :callee-axes, from the name of a memo defined before to its number of axes."
-  [{:keys [pctxt stmts retvals]} domains {:keys [variant callee-axes]}]
+  :callee, from the name of a memo defined before to {:axes n :params [..]
+  :defaults #{..} :num-results n}."
+  [{:keys [pctxt stmts retvals]} domains {:keys [variant callee]}]
   (let [state (reduce (fn [st [i s]]
                         (eval-stmt (assoc st :continuation (subvec stmts (inc i))) s))
-                      (assoc (initial-state pctxt domains variant) :callee-axes callee-axes)
+                      (assoc (initial-state pctxt domains variant) :callee callee)
                       (map-indexed vector stmts))
         [state vals] (reduce (fn [[st acc] retval]
                                (let [[st val] (eval-expr st retval)]
