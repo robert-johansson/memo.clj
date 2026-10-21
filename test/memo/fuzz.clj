@@ -8,8 +8,7 @@
   agents it models), so most programs are well formed; the rest test that
   both reject. Constructs whose answers depend on the dtype are kept out
   (DESIGN.md §13.8: :to-maximize over non-integer values, large exp, KL
-  against zeros), as are snapshots followed by observations (Python memo's
-  snapshot bug, in the upstream ledger).
+  against zeros).
 
     (campaign {:n 200 :seed 1})   ; generate, run both, compare, report
     clojure -X:test:fuzz :n 200 :seed 1
@@ -148,7 +147,8 @@
 ;; The root state: {:axes {name dom} :params [..] :agents {agent ...}}, an
 ;; agent {:choices {x dom} :knows {ref dom} :mind {other {x dom}}
 ;; :mind-knows {other {ref dom}} :deep {other {third {x dom}}} :observed
-;; #{[b x]} :goals #{g} :snapshot alias :frozen? bool :forgot #{x}}.
+;; #{[b x]} :goals #{g} :snapshot [alias mind] :forgot #{x}}, where a snapshot
+;; keeps the mind a had when it was taken.
 
 (def agent-names '[alice bob carol])
 (def choice-names '[x y z w])
@@ -169,8 +169,6 @@
 (defn- taken-by [st a]
   (concat (keys (get-in st [:agents a :choices])) (keys (get-in st [:agents a :knows]))
           (get-in st [:agents a :forgot])))
-
-(defn- usable? [st a] (not (get-in st [:agents a :frozen?])))
 
 (def ^:private world-calls
   "Calls of the world's model w3 (a table over D3), as weights."
@@ -296,21 +294,21 @@
          (list a :forgets-about x)]))))
 
 (defn- gen-snapshot
-  "(a :snapshots-self-as past_a), after which a does nothing more (an
-  observation after a snapshot is Python memo's snapshot bug)."
+  "(a :snapshots-self-as past_a): later statements of a, observations
+  included, must leave the snapshot as it was."
   [st a]
-  (when (and (seq (get-in st [:agents a :mind])) (not (get-in st [:agents a :snapshot])))
-    (let [alias (symbol (str "past_" a))]
-      [(-> st (assoc-in [:agents a :snapshot] alias) (assoc-in [:agents a :frozen?] true))
-       (list a :snapshots-self-as alias)])))
+  (let [mind (get-in st [:agents a :mind])]
+    (when (and (seq mind) (not (get-in st [:agents a :snapshot])))
+      (let [alias (symbol (str "past_" a))]
+        [(assoc-in st [:agents a :snapshot] [alias mind])
+         (list a :snapshots-self-as alias)]))))
 
 (defn- gen-statement [st]
-  (let [a (pick (filter #(usable? st %) agent-names))]
-    (when a
-      (some (fn [g] (g st a))
-            (shuffle* [(pick-weighted [[6 gen-chooses] [2 gen-knows] [4 gen-thinks] [2 gen-observes]
-                                       [1 gen-observes-that] [1 gen-wants] [1 gen-forgets] [1 gen-snapshot]])
-                       gen-chooses])))))
+  (let [a (pick agent-names)]
+    (some (fn [g] (g st a))
+          (shuffle* [(pick-weighted [[6 gen-chooses] [2 gen-knows] [4 gen-thinks] [2 gen-observes]
+                                     [1 gen-observes-that] [1 gen-wants] [1 gen-forgets] [2 gen-snapshot]])
+                     gen-chooses]))))
 
 ;; -----------------------------------------------------------------------------
 ;; returns, programs
@@ -330,7 +328,7 @@
         minds (for [[a {:keys [mind]}] (:agents st) :when (seq mind)] a)
         deep (for [[a {:keys [deep]}] (:agents st) [b cs] deep [c xs] cs [x _] xs] [a b c x])
         same-dom (for [[u du] (:axes st) [r d] beliefs :when (= du d)] [u r])
-        snaps (for [[a {:keys [snapshot mind]}] (:agents st) :when snapshot] [a snapshot mind])]
+        snaps (for [[a {[alias mind] :snapshot}] (:agents st) :when alias] [a alias mind])]
     (pick-weighted
      (cond-> [[3 (or (belief-expr scope 2) (num-expr scope 1))]
               [1 (num-expr (dissoc scope :beliefs) 1)]
@@ -350,9 +348,10 @@
        (< 1 (count beliefs))
        (conj [1 (let [[r1 r2] (shuffle* (keys beliefs))] (list 'KL r1 r2))])
        (seq snaps)
-       (conj [2 (let [[a alias mind] (pick snaps)
-                      [b cs] (pick mind)]
-                  (list 'E (list 'as a (list 'as alias (list 'E (dotted b (key (first cs))))))))])))))
+       (conj [3 (let [[a alias mind] (pick snaps)
+                      beliefs (into {} (for [[b cs] mind [x d] cs] [(dotted b x) d]))]
+                  (list 'E (list 'as a (list 'as alias (belief-expr {:own {} :dotted {} :params (:params st)
+                                                                       :beliefs beliefs} 1)))))])))))
 
 (defn gen-program
   "A random defmemo named mname, and the calls to make of it."
@@ -587,7 +586,7 @@
     (remove-ns (ns-name ns))
     (spit "test/fixtures/fuzz.edn"
           (str ";; Written by memo.fuzz/record-regressions! from Python memo: do not edit.\n"
-               (with-out-str (clojure.pprint/pprint {:oracle {:memo "1.3.2"} :regressions entries}))))
+               (with-out-str (clojure.pprint/pprint {:oracle {:memo (py/version)} :regressions entries}))))
     entries))
 
 (defn replay

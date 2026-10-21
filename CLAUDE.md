@@ -9,7 +9,7 @@ memo.clj's syntax, executable (`test/memo/handbook_doc_test.clj` runs it).
 
 ## The oracle and the references
 
-- **Python memo 1.3.2** (kach/memo `711e4cd`) is the oracle. It lives in
+- **Python memo 1.3.3** (kach/memo `d8aac63`) is the oracle. It lives in
   `memo-mcp/memo` (memo-mcp is the owner's MCP server, gitignored here), with
   a venv in `memo-mcp/venv`. The memo-dsl MCP tools run, compile and explain
   Python memo programs.
@@ -71,7 +71,8 @@ Java binding).
    expression differs across that boundary. Find such differences with the
    MCP tools before assuming.
 3. **Single assignment.** The IR never rebinds a symbol (`memo.ir/check`).
-   Python memo's rebinding of observed values is its snapshot bug.
+   Python memo's rebinding of observed values was its snapshot bug (fixed
+   in 1.3.3).
 4. **Loud errors.** A construct not built yet, an operation JAX rejects, a
    value gen.array cannot compute as JAX does: each is an `ex-info` that says
    so, never a silent number.

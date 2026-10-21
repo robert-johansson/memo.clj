@@ -36,7 +36,7 @@
   own, an :alias of the old one: [state frame']. A copy (a snapshot, an
   imagined world) must not share value symbols with its original, or an
   observation in one would reach the other (repoint follows the symbol):
-  Python memo 1.3.2's snapshot bug (DESIGN.md §2.4)."
+  Python memo's snapshot bug before 1.3.3 (DESIGN.md §2.4)."
   [state frame]
   (let [tags-in (fn tags-in [f]
                   (concat (keep :tag (vals (:choices f)))

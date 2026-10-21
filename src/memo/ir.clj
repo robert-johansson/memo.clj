@@ -8,9 +8,9 @@
   Python memo does.)
 
   Single assignment. Every instruction defines a new symbol, :out, used
-  only after it is defined. memo.clj never rebinds a value: Python memo
-  1.3.2's rebinding of an observed choice is what lets a snapshot see its
-  owner's later observations (DESIGN.md §2.4).
+  only after it is defined. memo.clj never rebinds a value: Python memo's
+  rebinding of an observed choice is what let a snapshot see its owner's
+  later observations before 1.3.3 (DESIGN.md §2.4).
 
   Instructions:
     {:i :const  :out s :value n}             a number

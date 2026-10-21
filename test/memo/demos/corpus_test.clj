@@ -22,7 +22,7 @@
 (defn- twin-ns [demo] (symbol (str "memo.demos." (str/lower-case demo) "-test")))
 
 (deftest every-demo-is-accounted-for
-  (is (= 36 (count demos)) "memo 1.3.2's 36 demos")
+  (is (= 36 (count demos)) "memo 1.3.3's 36 demos")
   (doseq [demo demos]
     (testing demo
       (let [fx (ts/fixture (str "demos/" demo ".edn"))]

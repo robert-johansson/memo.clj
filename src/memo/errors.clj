@@ -1,7 +1,7 @@
 (ns memo.errors
   "memo's errors: `ex-info` carrying Python memo's message, a hint, the source
   location and the frame context (DESIGN.md §12). The message content follows
-  Python memo 1.3.2's, so compile-error tests compare messages with its own.")
+  Python memo 1.3.3's, so compile-error tests compare messages with its own.")
 
 (def ^:dynamic *warnings?*
   "When true (the default), memo's compile-time warnings print to stderr, as

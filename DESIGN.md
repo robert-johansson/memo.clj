@@ -23,8 +23,9 @@ be exact (memo's semantics) or bounded (an agent that thinks with a budget).
 In order:
 
 1. **M1 — the exact core.** Every construct of Python memo at a pinned
-   release (1.3.2 today, the pin of `memo-mcp/memo`), compiled to gen.array
-   programs, giving Python memo's numbers on every test and demo of its own.
+   release (1.3.3 since 2026-10-21, the pin of `memo-mcp/memo`), compiled
+   to gen.array programs, giving Python memo's numbers on every test and
+   demo of its own.
    - It runs on every gen.clj backend: the JVM, MLX's CPU, Metal and CUDA.
    - Gradients with respect to parameters come from gen.array's reverse-mode
      autodiff.
@@ -150,7 +151,9 @@ Python goldens.
 ### 2.4 Python memo 1.3.2 under probe (2026-10-20)
 
 Checked against the source, and by running small programs through memo-mcp
-(JAX 0.12, float32).
+(JAX 0.12, float32). 1.3.3 (2026-10-21, the pin since that day) changes
+only `Frame.copy`, fixing the snapshot bug below; the rest of this section
+holds for it.
 
 **Semantics to copy exactly.** These are what memo computes, and parity
 depends on them.
@@ -231,7 +234,8 @@ depends on them.
 **Upstream bugs.** memo.clj does not reproduce these (decided, 2026-10-20). Each is a documented
 divergence (principle 1), with its correct value derived independently and
 kept in the upstream ledger (§9).
-- **A snapshot's queries read values its owner observes later.** `observes`
+- **A snapshot's queries read values its owner observes later** (fixed
+  upstream in 1.3.3). `observes`
   rebinds the generated variable holding the observed choice's values
   (`core.py`, lines 1396–1398). Frames copied by `snapshots_self_as`, or by an imagined
   future, share that variable. In the Handbook's own example, with a
@@ -250,8 +254,8 @@ kept in the upstream ledger (§9).
   it, but never a copy (a snapshot or an imagined world). After
   `alice: thinks[ charlie: knows(bob.x) ]` and then
   `alice: observes [bob.x] is x`, `alice[charlie[bob.x]]` must give x, as
-  it does in 1.3.2. Immutable frames give the second half for free, not
-  the first: the observation has to reach the live aliases explicitly.
+  it does in Python memo. Immutable frames give the second half for free,
+  not the first: the observation has to reach the live aliases explicitly.
   Both cases are tests. (Done in slice 2: an observation emits a fresh
   alias of the source's value and, in the frame tree at compile time,
   repoints every choice that shared the target's value; the IR stays
@@ -260,7 +264,13 @@ kept in the upstream ledger (§9).
   memo) and its test `copies-keep-their-own-values` are what memo.clj
   lifts. (Done in slice 5: snapshots and imagined worlds take fresh value
   names; the ledger's snapshot and imagine entries require the correct
-  values, and a planted bug that drops the renaming fails them.)
+  values, and a planted bug that drops the renaming fails them.) Fixed
+  upstream in 1.3.3 (kach/memo `a354de8`, issue 126, 2026-10-21):
+  `Frame.copy` gives a copy its own lls and choice tags, the same fix. With
+  the pin moved to 1.3.3 (bean memoclj-0s5l), the four ledger entries are
+  ordinary slice5 cases, the Handbook's example is ported directly, Python
+  memo's six tests of the fix are in testpy.edn, and the fuzzer generates
+  observations after snapshots.
 - **Silent zero gradients.** A host call whose arguments are all static is
   evaluated outside `jit` and converted with `.item()`, so its gradient
   with respect to a parameter is 0 (0 against 0.246 in the probe). A memo
@@ -614,17 +624,17 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
   `(Utt :SOME)`, and a domain's fields are `(G :x z)`. No vars with dots in
   their names.
 - **The agent name `self`** is reserved: using it as an agent is a compile
-  error. This diverges from Python memo 1.3.2 (principle 1), which accepts
+  error. This diverges from Python memo 1.3.3 (principle 1), which accepts
   `self: chooses(x …)`; its choice takes the observer's own key
   `(self, x)`, and the answer comes out right by accident. memo-clj
   accepted it and returned Pr = 1.
 - **memo's bare assertions become compile errors with hints:** `Predict` or
   `EU` at the top level, and a goal named twice in `wants` (§2.4).
-- **Statements and expressions** are those of Python memo 1.3.2. memo-clj's
-  README has the table as of 1.2.26; 1.3.2 adds `time @`, `space @` and
-  `size @`, and rejects `is` in expressions. It is to be re-checked against
-  the Handbook. All are built (M1, slices 1-6) except cost reflection
-  (`time @`, `space @`, `size @`), which is M4.
+- **Statements and expressions** are those of Python memo 1.3.3, the same
+  as 1.3.2's. memo-clj's README has the table as of 1.2.26; 1.3.2 adds
+  `time @`, `space @` and `size @`, and rejects `is` in expressions. It is
+  to be re-checked against the Handbook. All are built (M1, slices 1-6)
+  except cost reflection (`time @`, `space @`, `size @`), which is M4.
 - **Options and parameters** (slice 6): metadata on the memo's name,
   `^{:cache true}` (Python's `cache=True`: calls memoized by their host
   number arguments, never for values being differentiated, and every cache
@@ -691,10 +701,11 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
     The generator tracks scope (frames, knowledge, minds two deep) over
     chooses (every spec, several choices at once, calls of a model),
     knows, thinks, observes, observes-that/-event, wants and EU,
-    forgets-about and snapshots; returns over E, Pr (the posterior
-    shortcut), Var, H, KL, `as` and imagine. Agreement: values within 1e-4
-    relative (float32 accumulation over random tables), or both reject
-    with a memo error (memo.clj may not crash), messages compared.
+    forgets-about and snapshots (followed by observations since 1.3.3);
+    returns over E, Pr (the posterior shortcut), Var, H, KL, `as` and
+    imagine. Agreement: values within 1e-4 relative (float32 accumulation
+    over random tables), or both reject with a memo error (memo.clj may
+    not crash), messages compared.
     Findings are kept in `test/fixtures/fuzz.edn` and replayed without
     Python. First campaigns: 2,300 programs, one real disagreement (Var
     under zero mass, above).
@@ -754,7 +765,9 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
 3. **Choosing the bounded lowering** (§7.2): automatic below a size limit and
    reported, as proposed, or always declared by the modeler? And what limit?
 4. **Upstream:** does the exact core track new memo releases, with the pin
-   moved deliberately? Or freeze at 1.3.2 until M3?
+   moved deliberately? Or freeze at 1.3.2 until M3? *(2026-10-21: the owner
+   moved the pin to 1.3.3 for upstream's snapshot fix, bean memoclj-0s5l;
+   whether to track every release stays open.)*
 5. **Continuous variables in minds:** memo is finite. Is discretizing enough,
    or should bounded minds (M3) admit gen.clj distributions inside an agent's
    model? That would go beyond memo's semantics, so it would be an extension

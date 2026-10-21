@@ -14,7 +14,7 @@
   Lifted from memo-clj after review against parse.py, with two changes
   (DESIGN.md §8): an enum member written `Utt.SOME` is resolved to its value
   here, through the :resolve-member function in the parse context, so no var
-  needs a dot in its name; and `self` cannot name an agent (Python memo 1.3.2
+  needs a dot in its name; and `self` cannot name an agent (Python memo 1.3.3
   accepts it, and its choices then collide with the frame's own)."
   (:require [clojure.string :as str]
             [memo.errors :as err]))

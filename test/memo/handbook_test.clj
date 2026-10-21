@@ -160,6 +160,12 @@
   (alice :snapshots-self-as past_alice younger_alice)
   (return (as alice (+ (as past_alice (E bob.x)) (as younger_alice (Pr (= bob.x 2)))))))
 
+(defmemo snapshot-unaffected [[x X]] []
+  (alice :thinks (bob :chooses [x X] :wpp 1))
+  (alice :snapshots-self-as past_alice)
+  (alice :observes bob.x :is x)
+  (return (as alice (as past_alice (E bob.x)))))
+
 (defmemo wants-to-win [[a A]] []
   (alice :thinks (bob :chooses [score N] :wpp 1))
   (alice :wants win (> score bob.score))
@@ -423,7 +429,7 @@
 
 (def covered-by
   "Entries a case of another fixture ports: [fixture section case]."
-  {"snapshots-self-as/2" ["slice5.edn" :ledger :snap-f]})   ; Python memo's snapshot bug
+  {})
 
 (def not-applicable
   "Entries with no counterpart in memo.clj, and why."
@@ -518,7 +524,7 @@
 (deftest every-entry-is-accounted-for
   (let [ids (map :id (:entries fixture))
         ported (set (mapcat :entries (:twins fixture)))]
-    (is (= 79 (count ids)) "Handbook.md at memo 1.3.2")
+    (is (= 79 (count ids)) "Handbook.md at memo 1.3.3")
     (doseq [id ids]
       (is (or (ported id) (covered-by id) (not-applicable id)) (str id " is not accounted for")))
     (doseq [[id [file section case]] covered-by]

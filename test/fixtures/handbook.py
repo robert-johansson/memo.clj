@@ -272,6 +272,14 @@ def snapshot_aliases[x: X]():
     return alice[past_alice[E[bob.x]] + younger_alice[Pr[bob.x == 2]]]
 
 
+@twin("snapshots-self-as/2", call())
+def snapshot_unaffected[x: X]():
+    alice: thinks[ bob: chooses(x in X, wpp=1) ]
+    alice: snapshots_self_as(past_alice)
+    alice: observes [bob.x] is x
+    return alice[past_alice[E[bob.x]]]
+
+
 @twin("wants-and-eu/1", call())
 def wants_to_win[a: A]():
     alice: thinks[ bob: chooses(score in N, wpp=1) ]

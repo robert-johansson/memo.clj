@@ -5,7 +5,7 @@ gen.clj. memo is a language for recursive reasoning about agents: agents
 make choices, think about each other's choices, observe and update. A
 model compiles to array programs and gives exact answers.
 
-This Handbook follows the memo Handbook (memo 1.3.2) part by part and
+This Handbook follows the memo Handbook (memo 1.3.3) part by part and
 heading by heading, so the two can be read side by side. Its examples are
 in memo.clj's syntax. A closing part lists the differences from Python
 memo.
@@ -526,8 +526,8 @@ A snapshot is not affected by its owner's later observations:
 ;=> [1.0 1.0 1.0]
 ```
 
-Python memo 1.3.2 gives `[0 1 2]` here: its snapshot reads values that its
-owner observes later (see [Differences](#differences-from-python-memo)).
+Python memo before 1.3.3 gives `[0 1 2]` here: its snapshot reads values
+that its owner observes later.
 
 ## `:wants` and `EU`
 
@@ -1451,7 +1451,7 @@ standard error. Bind `memo.errors/*warnings?*` to false to silence them.
 # Differences from Python memo
 
 memo.clj implements every statement and expression of the memo Handbook
-(1.3.2) except cost reflection. The syntax:
+(1.3.3) except cost reflection. The syntax:
 
 | Python memo | memo.clj |
 |---|---|
@@ -1499,11 +1499,6 @@ What memo.clj computes differently, on purpose:
   booleans and the literals 0 and 1. Python memo computes `&`, `|`, `^`
   and `~` bitwise on other integers (its `~x` is `True ^ x`, so `~2` is
   3); memo.clj makes those an error.
-- **Snapshots keep their own values.** In Python memo 1.3.2, a snapshot's
-  queries read values its owner observes later, so
-  `alice[past_alice[E[bob.x]]]` after `alice: observes [bob.x] is x`
-  gives x instead of 1. memo.clj gives the snapshot's own answer, as in
-  [`:snapshots-self-as`](#snapshots-self-as).
 - **Loud errors where Python memo is silent or stuck.**
   - Differentiating through a tabulated host function is an error; Python
     memo gives a zero gradient.
@@ -1526,7 +1521,7 @@ What memo.clj computes differently, on purpose:
   weights: the same number (M is below 1 only when a branch has zero
   mass), without float32's cancellation when M is 1.
 
-Where the memo Handbook and Python memo 1.3.2 disagree, memo.clj follows
+Where the memo Handbook and Python memo 1.3.3 disagree, memo.clj follows
 Python memo:
 
 - `~x` is listed as bitwise inversion; memo computes `True ^ x`.

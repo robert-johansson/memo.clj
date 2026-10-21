@@ -1,8 +1,7 @@
 (ns memo.slice5-test
   "M1, slice 5: imagine, snapshots-self-as, wants, EU and Predict. Every model
   here has a twin of the same name in test/fixtures/generate.py, and
-  slice5.edn holds Python memo's results, errors, a gradient, and ledger
-  entries where Python memo is wrong (the snapshot bug, DESIGN.md §2.4)."
+  slice5.edn holds Python memo's results, errors and a gradient."
   (:require [clojure.test :refer [deftest is testing]]
             [memo.core :refer [defmemo]]
             [memo.domains :refer [defenum]]
@@ -169,7 +168,7 @@
                                  (future_alice :chooses [a_ Ap] :to-maximize (Q-pomdp [b_ a_] (- t 1)))
                                  (E (as future_alice (Q-pomdp [b_ a_] (- t 1)))))))))))
 
-;; the snapshot bug: Python memo gets these wrong (the ledger's entries)
+;; the snapshot bug (DESIGN.md §2.4): Python memo got these wrong until 1.3.3
 
 (defmemo snap-f [[x X]] []
   (alice :thinks (bob :chooses [x X] :wpp 1))
@@ -206,9 +205,6 @@
 
 (deftest gradients-match-jax
   (ts/check-grads 'memo.slice5-test fixture))
-
-(deftest values-python-memo-gets-wrong
-  (ts/check-ledger 'memo.slice5-test fixture))
 
 (def error-forms
   {:imagine-unknown-err

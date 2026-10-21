@@ -1,5 +1,5 @@
 (ns memo.testpy-test
-  "The parity corpus, part 1: memo 1.3.2's own test suite (demo/test.py),
+  "The parity corpus, part 1: memo 1.3.3's own test suite (demo/test.py),
   every case, under its own name. testpy.edn holds Python memo's outcome for
   each (generate.py runs test.py itself with a recording memo_test); each
   case here has a Clojure twin, a form that must not compile, or a reason it
@@ -370,6 +370,48 @@
   (bob :knows alice.coffee)
   (return (E (as bob (Var (= alice.coffee 1))))))
 
+;; kach/memo issue 126, fixed in 1.3.3: a copy is unaffected by later observations
+
+(defmemo snapshot-unaffected-by-later-observe [] []
+  (alice :thinks (bob :chooses [x X] :wpp 1))
+  (charlie :chooses [x X] :wpp (= x 2))
+  (alice :snapshots-self-as past_alice)
+  (alice :observes bob.x :is charlie.x)
+  (return (as alice (as past_alice (E bob.x)))))
+
+(defmemo snapshot-unaffected-by-later-observe-two-vars [] []
+  (alice :thinks (bob :chooses [x X] :wpp 1) (bob :chooses [y X] :wpp (= y x)))
+  (charlie :chooses [x X] :wpp (= x 2))
+  (alice :snapshots-self-as past_alice)
+  (alice :observes bob.x :is charlie.x)
+  (return (as alice (as past_alice (E (+ bob.x bob.y))))))
+
+(defmemo snapshot-unaffected-by-later-observe-issue [[x X]] []
+  (alice :thinks (bob :chooses [x X] :wpp 1))
+  (alice :snapshots-self-as past_alice)
+  (alice :observes bob.x :is x)
+  (return (as alice (as past_alice (E bob.x)))))
+
+(defmemo snapshot-unaffected-by-later-observe-two-vars-issue [[x X]] []
+  (alice :thinks (bob :chooses [x X] :wpp 1) (bob :chooses [y X] :wpp (= y x)))
+  (alice :snapshots-self-as past_alice)
+  (alice :observes bob.x :is x)
+  (return (as alice (as past_alice (E (+ bob.x bob.y))))))
+
+(defmemo snapshot-observing-self-unaffected [] []
+  (alice :thinks (bob :chooses [x X] :wpp 1))
+  (charlie :chooses [x X] :wpp (= x 2))
+  (alice :snapshots-self-as past_alice)
+  (alice :observes bob.x :is charlie.x)
+  (return (E (as alice (+ (as past_alice (E bob.x)) bob.x 1)))))
+
+(defmemo imagine-observe-unaffected-outside [] []
+  (alice :chooses [z X] :wpp (= z 2))
+  (alice :thinks (carol :thinks (bob :chooses [x X] :wpp 1)))
+  (return (E (as alice (+ (imagine (carol :observes bob.x :is z)
+                                   (as carol bob.x))
+                          (as carol (E bob.x)))))))
+
 ;; cases that must not compile
 
 (def compile-forms
@@ -519,7 +561,7 @@
 
 (deftest the-port-is-complete
   (let [names (set (map :name (:cases fixture)))]
-    (is (= 96 (count (:cases fixture))) "test.py's 95 cases, imagine_ok defined twice")
+    (is (= 102 (count (:cases fixture))) "test.py's 101 cases, imagine_ok defined twice")
     (doseq [k names]
       (is (or (not-applicable k) (compile-forms k) (twin k)) (str (name k) " has no twin")))
     (is (every? names (concat (keys compile-forms) (keys not-applicable) (keys memo-clj-messages)))

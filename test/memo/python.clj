@@ -19,6 +19,11 @@
 (defn available? []
   (and (.exists (io/file venv-python)) (.exists (io/file memo-src "memo" "core.py"))))
 
+(defn version
+  "The pinned memo's version, from its memo/version.py."
+  []
+  (second (re-find #"__version__ = '([^']+)'" (slurp (io/file memo-src "memo" "version.py")))))
+
 (defn- json
   "Clojure data as JSON: numbers, strings, keywords (as strings), booleans,
   nil, vectors and maps."

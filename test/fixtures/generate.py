@@ -1339,21 +1339,13 @@ def Q_pomdp[b: Bp, a: Ap](t):
     ])]
 
 
-# the snapshot bug (DESIGN.md §2.4): a snapshot is unaffected by its owner's
-# later observation, so each *_ref twin (without the observation) has the
-# correct value of its model
+# the snapshot bug (DESIGN.md §2.4), fixed in memo 1.3.3: a snapshot is
+# unaffected by its owner's later observation
 @memo
 def snap_f[x: X]():
     alice: thinks[ bob: chooses(x in X, wpp=1) ]
     alice: snapshots_self_as(past_alice)
     alice: observes [bob.x] is x
-    return alice[past_alice[E[bob.x]]]
-
-
-@memo
-def snap_f_ref[x: X]():
-    alice: thinks[ bob: chooses(x in X, wpp=1) ]
-    alice: snapshots_self_as(past_alice)
     return alice[past_alice[E[bob.x]]]
 
 
@@ -1366,24 +1358,10 @@ def snap_g[x: X]():
 
 
 @memo
-def snap_g_ref[x: X]():
-    alice: thinks[ bob: chooses(x in X, wpp=1), bob: chooses(y in X, wpp=(y == x)) ]
-    alice: snapshots_self_as(past_alice)
-    return alice[past_alice[E[bob.x + bob.y]]]
-
-
-@memo
 def snap_pr[x: X]():
     alice: thinks[ bob: chooses(x in X, wpp=1) ]
     alice: snapshots_self_as(past_alice)
     alice: observes [bob.x] is x
-    return alice[past_alice[Pr[bob.x == 2]]]
-
-
-@memo
-def snap_pr_ref[x: X]():
-    alice: thinks[ bob: chooses(x in X, wpp=1) ]
-    alice: snapshots_self_as(past_alice)
     return alice[past_alice[Pr[bob.x == 2]]]
 
 
@@ -1393,16 +1371,6 @@ def eu_leak():
     alice: thinks[ world: chooses(s in B2, wpp=1 + 2 * s) ]
     alice: wants(win=(world.s == g))
     alice: chooses(look in B2, to_maximize=EU[win] - 0.1 * look)
-    alice: chooses(m in B2, wpp=exp(E[world.s] * m))
-    alice: observes [world.s] is world.s
-    alice: chooses(g in B2, wpp=Pr[world.s == g])
-    return Pr[alice.m == 1]
-
-
-@memo
-def eu_leak_ref():
-    world: chooses(s in B2, wpp=1)
-    alice: thinks[ world: chooses(s in B2, wpp=1 + 2 * s) ]
     alice: chooses(m in B2, wpp=exp(E[world.s] * m))
     alice: observes [world.s] is world.s
     alice: chooses(g in B2, wpp=Pr[world.s == g])
@@ -1452,18 +1420,14 @@ write("slice5.edn",
        case(novel_event_inform, 2.0),
        case(Q_pomdp, 0),
        case(Q_pomdp, 1),
-       case(Q_pomdp, 2)],
+       case(Q_pomdp, 2),
+       case(snap_f),
+       case(snap_g),
+       case(snap_pr),
+       case(eu_leak)],
       [imagine_unknown_err, predict_fail_knows, unknown_goal,
        (no_wants_err, {"variant": Variant.NO_WANTS})],
-      grads=[grad(novel_event_inform, W555, 2.0)],
-      ledger=[ledger_value(snap_f, snap_f_ref,
-                           why="the snapshot's E[bob.x] reads bob.x's value as rebound by the owner's observation"),
-              ledger_value(snap_g, snap_g_ref,
-                           why="the snapshot pairs its prior with bob.x's observed value: x + 1"),
-              ledger_value(snap_pr, snap_pr_ref,
-                           why="the snapshot's Pr[bob.x == 2] reads the rebound value"),
-              ledger_value(eu_leak, eu_leak_ref,
-                           why="the observation replayed in EU's imagined future rebinds world.s for the real frame")])
+      grads=[grad(novel_event_inform, W555, 2.0)])
 
 
 # --- slice 6: H, KL, forgets-about, cast, array parameters, cache --------------------

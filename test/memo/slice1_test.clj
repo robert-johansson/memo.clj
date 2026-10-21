@@ -97,7 +97,7 @@
 (def fixture (ts/fixture "slice1.edn"))
 
 (deftest results-match-python-memo
-  (is (= "711e4cdde9cb1764815c17a0b3204122bc3873d3" (get-in fixture [:oracle :commit])))
+  (is (= "d8aac635ee53483e8e0311b85f6898ef37710a26" (get-in fixture [:oracle :commit])))
   (ts/check-cases 'memo.slice1-test fixture))
 
 (def error-forms
@@ -142,7 +142,7 @@
       (is (ts/close? 1.0 (ts/host g))))))
 
 (deftest divergences-from-python-memo
-  (testing "self cannot name an agent (Python memo 1.3.2 accepts it; DESIGN.md §8)"
+  (testing "self cannot name an agent (Python memo 1.3.3 accepts it; DESIGN.md §8)"
     (is (= "`self` cannot be the name of an agent"
            (ex-message (ts/compile-error 'memo.slice1-test
                                          '(defmemo self-agent [] []
