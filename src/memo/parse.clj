@@ -156,16 +156,15 @@
                       (every? (comp :static second) kwargs*))
          :loc loc}))))
 
-(defn- entropy-ref [a pctxt loc]
-  (if-let [[who & ids] (dotted-parts a)]
+(defn- entropy-ref [op a pctxt loc]
+  (let [[who & ids] (dotted-parts a)]
     (if (= 1 (count ids))
       [who (first ids)]
-      (err/raise "Unexpected variable in (H ...)"
-                 {:hint "You can only calculate the entropy of other agents' choices, e.g. alice.x"
-                  :loc loc}))
-    (err/raise "Unexpected variable in (H ...)"
-               {:hint "You can only calculate the entropy of other agents' choices, e.g. alice.x"
-                :loc loc})))
+      (err/raise (str "Unexpected variable in (" op " ...)")
+                 {:hint (if (= op 'KL)
+                          "KL compares the distributions of two agents' choices, e.g. (KL alice.x bob.x)."
+                          "You can only calculate the entropy of other agents' choices, e.g. alice.x")
+                  :loc loc}))))
 
 (defn parse-expr [form pctxt]
   (let [loc (loc-of form pctxt)]
@@ -314,13 +313,13 @@
           (= head 'H)
           (do (when (empty? args)
                 (err/raise "Invalid entropy expression" {:loc loc}))
-              {:node :entropy :rvs (mapv #(entropy-ref % pctxt loc) args)
+              {:node :entropy :rvs (mapv #(entropy-ref 'H % pctxt loc) args)
                :loc loc :static false})
 
           (= head 'KL)
           (do (when (not= 2 (count args))
                 (err/raise "(KL p.x q.y) takes exactly two choice references" {:loc loc}))
-              (let [[[pw pi] [qw qi]] (mapv #(entropy-ref % pctxt loc) args)]
+              (let [[[pw pi] [qw qi]] (mapv #(entropy-ref 'KL % pctxt loc) args)]
                 {:node :kl :p-who pw :p-id pi :q-who qw :q-id qi
                  :loc loc :static false}))
 
@@ -343,7 +342,7 @@
               (err/raise "(imagine ...) needs a final expression" {:loc loc}))
             (when (and (seq? then-form) (symbol? (first then-form))
                        (keyword? (second then-form)))
-              (err/raise "Invalid final form in imagine expression"
+              (err/raise "Invalid statement at end of imagine expression"
                          {:hint "The final item in an `imagine` expression should be an expression to be evaluated, not a statement."
                           :loc loc}))
             {:node :imagine
@@ -550,8 +549,9 @@
 
       (= kw :wants)
       (do (when-not (and (= 2 (count rest-args)) (symbol? (first rest-args)))
-            (err/raise "Malformed wants statement"
-                       {:hint (str "Expected (" who " :wants goal-name expr).") :loc loc}))
+            (err/raise "Unknown statement syntax"
+                       {:hint (str "A goal is named and given: (" who " :wants goal-name expr).")
+                        :loc loc}))
           [{:node :wants :who who :what (first rest-args)
             :how (parse-expr (second rest-args) pctxt) :loc loc}])
 

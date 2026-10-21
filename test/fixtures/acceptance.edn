@@ -106,7 +106,8 @@
  :args [[0.10000000149011612 0.5 -0.20000000298023224]]
  :shape [2]
  :value [0.9198235273361206 0.9198235273361206]}]
- :errors {:t6-cast-expr-err "agent `carol` is not in the cast"}
+ :errors {:t6-cast-expr-err "agent `carol` is not in the cast"
+ :t21-wants-no-goal "Unknown statement syntax"}
  :runtime-errors {:t1-zero-neg "zero to a negative power"}
  :grads [{:model :t2-abs
  :args [0.0]
@@ -124,4 +125,6 @@
  :args [[0.10000000149011612 0.5 -0.20000000298023224]]
  :weights [1.0 1.0]
  :value [-0.5690845251083374 0.07400082051753998 0.49508368968963623]}]
- :ledger []}
+ :ledger []
+ :inspect {:t24-insp1 "** Tracing bob from generate.py, line 1991, in @memo t24_insp1\n-> bob is tracking the following choices:\n   - x: X (known)\n   - carol.y: X (known)\n     | (observed to be alice's bob.x)\n-> bob is currently tracking the following agents:\n   + carol\n-> bob is being modeled by alice.\n-> alice is being modeled by observer.\n\n** Tracing alice from generate.py, line 1994, in @memo t24_insp1\n-> alice is tracking the following choices:\n   - q: X (known)\n     | (observed to be observer's self.q)\n   - bob.x: X (known)\n     | (observed to be observer's self.q)\n-> alice is currently tracking the following agents:\n   + bob\n-> alice is being modeled by observer.\n\n** Tracing carol from generate.py, line 1995, in @memo t24_insp1\n-> From observer's perspective, there is not yet any model of carol. The current agents currently modeled by observer are: alice.\n\n"
+ :t24-insp2 "** Tracing child from generate.py, line 2002, in @memo t24_insp2\n-> child is using the variant CHILD\n-> child is tracking the following choices:\n   - sally.x: X (uncertain)\n-> child is currently tracking the following agents:\n   + sally\n-> child is being modeled by observer.\n\n"}}

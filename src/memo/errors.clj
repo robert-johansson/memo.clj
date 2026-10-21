@@ -58,3 +58,10 @@
   (when *warnings?*
     (binding [*out* *err*]
       (println (apply str "Warning: " parts)))))
+
+(defn warn-at
+  "warn, naming where: loc as a memo error's (:memo/loc), {:name :line}."
+  [loc & parts]
+  (apply warn (concat parts (when (:name loc)
+                              ["\n  in: defmemo " (:name loc)
+                               (when (:line loc) (str ", line " (:line loc)))]))))

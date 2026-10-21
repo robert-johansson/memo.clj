@@ -337,7 +337,7 @@
             frm (fr/get-frame state)
             all-known? (every? #(get-in frm [:choices % :known]) (:deps val))]
         (when (and all-known? warn)
-          (err/warn "Redundant " (name reduction) ", not marginalizing..."))
+          (err/warn-at (:loc e) "Redundant " (name reduction) ", not marginalizing..."))
         ;; a redundant expectation is the value itself, without the frame's
         ;; beliefs: after an impossible observation that is not the same
         ;; number (DESIGN.md §2.4), so it is semantics, not an optimization.
@@ -443,6 +443,16 @@
                                                      "'s choice of " si ".")))))
                   ids)
         dims (mapv :idx chs)
+        ;; a memo defined before this one: its axes are known (Python memo
+        ;; checks them when called)
+        _ (when-let [n (some-> (:callee-axes state) (#(% name)))]
+            (cond
+              (> (count ids) n) (err/raise "Too many arguments to memo call!"
+                                           (assoc (frame-err-opts state loc)
+                                                  :hint (str name " has " n " axes.")))
+              (< (count ids) n) (err/raise "Not enough arguments to memo call!"
+                                           (assoc (frame-err-opts state loc)
+                                                  :hint (str name " has " n " axes.")))))
         _ (when (not= (count (set dims)) (count dims))
             (err/raise "The same choice is passed twice in a memo call"
                        (assoc (frame-err-opts state loc)
@@ -645,7 +655,10 @@
                            "observer has none. Use them in an agent's choice, e.g. "
                            "(alice :chooses [a A] :to-maximize (EU goal)).")
                 :loc loc}))
-  (let [[state future] (fresh state (str "future_" (:name (fr/get-frame state))))
+  (let [n (:sym-n state)
+        ;; a frame's name, as Python memo's ctxt.sym makes it (no $)
+        [state future] [(assoc state :sym-n (inc n))
+                        (symbol (str "future_" (:name (fr/get-frame state)) "_" n))]
         path (:path state)
         state (-> state
                   (assoc :path (pop path))
@@ -693,7 +706,7 @@
         [state tag] (fresh state (str "forall_" id))
         state (emit state {:i :domain :out tag :dim idx
                            :values (domain-values state domain loc)})
-        state (fr/update-frame state assoc-in [:choices ['self id]]
+        state (fr/update-frame state fr/put-choice ['self id]
                                {:tag tag :idx idx :known true :domain domain})]
     (update state :forall conj [idx id domain])))
 
@@ -721,7 +734,7 @@
                  st (assoc st :next-dim (inc idx))
                  [st tag] (fresh st (str who "_" id))
                  st (emit st {:i :domain :out tag :dim idx :values (domain-values st dom loc)})
-                 st (fr/update-frame st assoc-in [:choices ['self id]]
+                 st (fr/update-frame st fr/put-choice ['self id]
                                      {:tag tag :idx idx :known true :domain dom})]
              [st (conj dims idx)]))
          [state []]
@@ -741,7 +754,7 @@
                                            "make the choice. Perhaps you meant to take "
                                            "an expected value somewhere, using (E ...)?"))))
             (when (and (not (contains? (:deps w) ['self id])) (not= :lit (:node wpp)))
-              (err/warn "When " who " chooses " id ", the probability doesn't depend "
+              (err/warn-at loc "When " who " chooses " id ", the probability doesn't depend "
                         "on the value of " id ". As a result, the choice will "
                         "effectively be uniform over " id " after normalization. "
                         "Are you sure this is what you want? (A uniform choice is "
@@ -749,7 +762,7 @@
         state (fr/leave state)
         state (reduce (fn [st [id dom]]
                         (let [ch (get-in (fr/get-frame st) [:children who :choices ['self id]])]
-                          (fr/update-frame st assoc-in [:choices [who id]]
+                          (fr/update-frame st fr/put-choice [who id]
                                            {:tag (:tag ch) :idx (:idx ch)
                                             :known false :domain dom})))
                       state
@@ -974,16 +987,16 @@
                                    " as knowing that choice."))))
     (let [state (fr/update-frame state update-in [:children who]
                                  #(-> %
-                                      (assoc-in [:choices source] (assoc src :known true))
+                                      (fr/put-choice source (assoc src :known true))
                                       (assoc-in [:conditions source] source)))]
       (if (= 'self source-who)
         (fr/update-frame state #(-> %
-                                    (assoc-in [:choices [who source-id]] src)
+                                    (fr/put-choice [who source-id] src)
                                     (assoc-in [:conditions [who source-id]] [(:name frm) source-id])))
         (let [state (-> state (fr/enter who) (fr/ensure-child source-who) (fr/leave))]
           (fr/update-frame state update-in [:children who :children source-who]
                            #(-> %
-                                (assoc-in [:choices ['self source-id]] (assoc src :known true))
+                                (fr/put-choice ['self source-id] (assoc src :known true))
                                 (assoc-in [:conditions ['self source-id]] source))))))))
 
 (defn- eval-snapshot
@@ -1000,7 +1013,7 @@
         current' (reduce (fn [cur [[nm id] _]]
                            (if (= 'self nm)
                              (-> cur
-                                 (assoc-in [:choices [alias id]] (get-in future [:choices ['self id]]))
+                                 (fr/put-choice [alias id] (get-in future [:choices ['self id]]))
                                  (assoc-in [:conditions [alias id]] [who id]))
                              cur))
                          current
@@ -1111,23 +1124,25 @@
     (if-let [f (get-in frm [:children who])]
       (do
         (when (not= :adult (:variant f))
-          (println (str "-> " who " is using the variant " (name (:variant f)))))
+          ;; Python memo prints its Variant's name
+          (println (str "-> " who " is using the variant "
+                        (str/replace (str/upper-case (name (:variant f))) "-" "_"))))
         (println (str "-> " who " is tracking the following choices:"))
-        (doseq [[addr c] (sort-by (comp str key) (:choices f))]
+        (doseq [[addr c] (sort-by (comp :seq val) (:choices f))]
           (println (str "   - " (label addr) ": " (:domain c) " (" (if (:known c) "known" "uncertain") ")"))
-          (when-let [src (get (:conditions f) addr)]
-            (println (str "     | (observed to be " (:name frm) "'s " (label src) ")"))))
+          (when-let [[w i] (get (:conditions f) addr)]
+            (println (str "     | (observed to be " (:name frm) "'s " w "." i ")"))))
         (if (empty? (:children f))
           (println (str "-> " who " is not yet tracking any agents."))
           (do (println (str "-> " who " is currently tracking the following agents:"))
-              (doseq [c (sort (map str (keys (:children f))))] (println (str "   + " c)))))
+              (doseq [c (sort-by :seq (vals (:children f)))] (println (str "   + " (:name c))))))
         (doseq [i (range (count (:path state)) -1 -1)]
           (let [inner (if (= i (count (:path state))) f (fr/get-frame state (subvec (:path state) 0 (inc i))))
                 outer (fr/get-frame state (subvec (:path state) 0 i))]
             (println (str "-> " (:name inner) " is being modeled by " (:name outer) ".")))))
       (println (str "-> From " (:name frm) "'s perspective, there is not yet any model of " who
-                    ". The agents currently modeled by " (:name frm) " are: "
-                    (str/join ", " (sort (map str (keys (:children frm))))) ".")))
+                    ". The current agents currently modeled by " (:name frm) " are: "
+                    (str/join ", " (map :name (sort-by :seq (vals (:children frm))))) ".")))
     (println)
     state))
 
@@ -1175,11 +1190,12 @@
   "The IR program of a parsed memo:
   {:instrs [...] :results [sym ...] :forall [[dim id domain] ...]
    :axes [id ...] :domains [domain ...] :shape [n ...] :n-dims n}.
-  domains maps each domain symbol to its values."
-  [{:keys [pctxt stmts retvals]} domains {:keys [variant]}]
+  domains maps each domain symbol to its values; opts has :variant and
+  :callee-axes, from the name of a memo defined before to its number of axes."
+  [{:keys [pctxt stmts retvals]} domains {:keys [variant callee-axes]}]
   (let [state (reduce (fn [st [i s]]
                         (eval-stmt (assoc st :continuation (subvec stmts (inc i))) s))
-                      (initial-state pctxt domains variant)
+                      (assoc (initial-state pctxt domains variant) :callee-axes callee-axes)
                       (map-indexed vector stmts))
         [state vals] (reduce (fn [[st acc] retval]
                                (let [[st val] (eval-expr st retval)]

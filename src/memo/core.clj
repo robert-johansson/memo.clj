@@ -38,13 +38,21 @@
       (err/raise (str "Parameter " name " was not an array, despite being annotated as ^:array "
                       name ".")
                  {:loc {:name mname}}))
-    (when-not (and (or (number? v) (boolean? v) (array/array? v))
-                   (empty? (array/shape v)))
-      (err/raise (str "Parameter " name " was not a numeric scalar, but rather an array. "
-                      "By default, all memo parameters must be scalars. Annotate this "
-                      "parameter as ^:array " name " if you really did intend to pass in "
-                      "a non-scalar.")
-                 {:loc {:name mname}})))
+    (cond
+      (or (number? v) (boolean? v)) nil
+      ;; Python memo's message, for an array (and None)
+      (or (nil? v) (sequential? v) (array/array? v))
+      (when-not (and (array/array? v) (empty? (array/shape v)))
+        (err/raise (str "Parameter " name " was not a numeric scalar, but rather an array. "
+                        "By default, all memo parameters must be scalars. Annotate this "
+                        "parameter as ^:array " name " if you really did intend to pass in "
+                        "a non-scalar.")
+                   {:loc {:name mname}}))
+      :else
+      (err/raise (str "Parameter " name " was not a numeric scalar, but " (pr-str v)
+                      ", a " (.getSimpleName (class v)) ".")
+                 {:hint "A memo parameter is a number or a boolean (or, marked ^:array, an array)."
+                  :loc {:name mname}})))
   v)
 
 (defonce ^{:doc "Bumped whenever a memo is (re)defined: a cached memo drops its table
@@ -121,7 +129,10 @@
                                                     :loc {:name name}}))
                                       [k (domains/values d)]))
                             domains)
-        compiled (analyze/analyze parsed domain-values opts)
+        callee-axes (fn [callee]
+                      (when (not= callee name)
+                        (some-> (ns-resolve (the-ns ns) callee) deref meta :memo/axes count)))
+        compiled (analyze/analyze parsed domain-values (assoc opts :callee-axes callee-axes))
         problems (ir/check compiled)
         _ (when (seq problems)
             (err/raise (str "memo.clj built an ill-formed program for " name)

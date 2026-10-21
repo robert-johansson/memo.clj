@@ -171,7 +171,11 @@
    '(defmemo t6-cast-expr-err [] []
       (cast [alice])
       (alice :thinks (carol :chooses [y X] :wpp 1))
-      (return (as alice (E carol.y))))})
+      (return (as alice (E carol.y))))
+   :t21-wants-no-goal
+   '(defmemo t21-wants-no-goal [] []
+      (alice :wants g)
+      (return 1))})
 
 (deftest compile-errors-match-python-memo
   (doseq [[k message] (:errors fixture)]
@@ -388,3 +392,79 @@
             (try (eval '(defmemo t17-bad [] [] (return alice.nope))) nil (catch Exception e e)))]
     (is (not (err/memo-error? e)) "Clojure wraps the error of a defmemo that fails to compile")
     (is (= (err/format-error (err/root-memo-error e)) (err/format-error e)))))
+
+;; error messages (T18-T24)
+
+(defmemo t19-ok1 [[x X]] [a] (return (* x a)))
+(defmemo t19-ok2 [[x X] [y X]] [] (return (+ x y)))
+
+(deftest error-messages
+  (testing "T18 a malformed KL names KL (Python memo reads it as a query of an agent named KL)"
+    (doseq [form ['(defmemo t18-expr [] []
+                     (a :chooses [x X] :wpp 1) (b :chooses [x X] :wpp 1)
+                     (return (KL (+ a.x 1) b.x)))
+                  '(defmemo t18-lits [] [] (return (KL 3 4)))]]
+      (is (= "Unexpected variable in (KL ...)" (compile-message form)))))
+  (testing "T19 axes for a memo defined before: Python memo's messages, when it is defined"
+    (is (= "Too many arguments to memo call!"
+           (compile-message '(defmemo t19-many [[x X]] [] (return (t19-ok1 [x x] 1.0))))))
+    (is (= "Not enough arguments to memo call!"
+           (compile-message '(defmemo t19-few [[x X]] [] (return (t19-ok2 [x])))))))
+  (testing "T20 a parameter that is not a number says what it is"
+    (is (= "Parameter a was not a numeric scalar, but \"hello\", a String."
+           (some-> (thrown #(t1-param-neg "hello")) ex-message)))
+    (is (= "Parameter a was not a numeric scalar, but :a, a Keyword."
+           (some-> (thrown #(t1-param-neg :a)) ex-message)))
+    (is (str/starts-with? (str (some-> (thrown #(t1-param-neg nil)) ex-message))
+                          "Parameter a was not a numeric scalar, but rather an array.")
+        "nil: Python memo's message for None"))
+  (testing "T21 an imagine ending in a statement"
+    (is (= "Invalid statement at end of imagine expression"
+           (compile-message '(defmemo t21-imagine [] []
+                               (return (imagine (alice :chooses [x X] :wpp 1))))))))
+  (testing "T22 a frame made for EU is named as Python memo names it, without $"
+    (is (re-matches #"Unknown choice future_alice_\d+\.zz"
+                    (str (compile-message '(defmemo t22-goal [] []
+                                             (alice :wants g zz)
+                                             (alice :chooses [x X] :to-maximize (EU g))
+                                             (return 1))))))))
+
+(deftest warnings-say-where
+  ;; T23: Python memo prints the source line
+  (let [w (java.io.StringWriter.)]
+    (binding [*err* w
+              err/*warnings?* true
+              *ns* (the-ns 'memo.acceptance-test)]
+      (eval '(defmemo t23-redundant [] []
+               (alice :chooses [x X] :wpp 1)
+               (bob :knows alice.x)
+               (return (E (as bob (E alice.x)))))))
+    (is (str/includes? (str w) "Redundant expectation"))
+    (is (str/includes? (str w) "in: defmemo t23-redundant"))))
+
+(def inspect-forms
+  {:t24-insp1 '(defmemo t24-insp1 [[q X]] []
+                 (alice :knows q)
+                 (alice :thinks
+                   (bob :chooses [x X] :wpp 1)
+                   (bob :thinks (carol :chooses [y X] :wpp 1))
+                   (bob :observes carol.y :is bob.x)
+                   (bob :inspect))
+                 (alice :observes bob.x :is q)
+                 (alice :inspect)
+                 (carol :inspect)
+                 (return 1))
+   :t24-insp2 '(defmemo t24-insp2 [] []
+                 (child :has-theory :child)
+                 (child :thinks (sally :chooses [x X] :wpp 1))
+                 (child :inspect)
+                 (return 1))})
+
+(deftest inspect-prints-as-python-memo
+  ;; T24: Python memo's order (as choices were made) and words; the
+  ;; "** Tracing" lines name the source, a file there, the defmemo here
+  (doseq [[k text] (:inspect fixture)]
+    (testing (name k)
+      (let [ours (with-out-str (binding [*ns* (the-ns 'memo.acceptance-test)] (eval (inspect-forms k))))
+            lines #(remove (fn [l] (str/starts-with? l "** Tracing")) (str/split-lines %))]
+        (is (= (lines text) (lines ours)))))))
