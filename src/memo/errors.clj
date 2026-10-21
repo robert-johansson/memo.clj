@@ -23,10 +23,14 @@
            cause))
 
 (defn raise
+  "Throw a memo error (memo-error's message and opts)."
   ([message] (raise message {}))
   ([message opts] (throw (memo-error message opts))))
 
-(defn memo-error? [e]
+(defn memo-error?
+  "Whether e is a memo error itself (see root-memo-error for one Clojure
+  wrapped)."
+  [e]
   (boolean (some-> (ex-data e) :memo/error)))
 
 (defn root-memo-error
@@ -54,7 +58,9 @@
          (when (false? user)
            "\n  [This may be a bug in memo.clj: please report it.]"))))
 
-(defn warn [& parts]
+(defn warn
+  "Print parts as a warning to *err*, unless *warnings?* is false."
+  [& parts]
   (when *warnings?*
     (binding [*out* *err*]
       (println (apply str "Warning: " parts)))))

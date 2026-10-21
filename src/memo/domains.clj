@@ -25,7 +25,10 @@
   (invoke [this member] (member-value this member))
   (applyTo [this args] (clojure.lang.AFn/applyToHelper this args)))
 
-(defn enum? [d] (instance? EnumDomain d))
+(defn enum?
+  "Whether d is an enum, made by defenum."
+  [d]
+  (instance? EnumDomain d))
 
 (defn member-value
   "The value of an enum's member, named by a keyword or a symbol (an alias
@@ -46,7 +49,10 @@
   (invoke [this k z] (field this k z))
   (applyTo [this args] (clojure.lang.AFn/applyToHelper this args)))
 
-(defn product? [d] (instance? ProductDomain d))
+(defn product?
+  "Whether d is a product domain, made by defdomain."
+  [d]
+  (instance? ProductDomain d))
 
 (defn- place [d k]
   (or (get (:places d) k)
@@ -146,6 +152,10 @@
   `(def ~name (product-domain '~name ~(mapv vec (partition 2 fields)))))
 
 (defenum Bool NO YES)
+
+(alter-meta! #'Bool assoc :doc
+  "The predefined enum, NO (0) and YES (1), Python memo's Bool. Every defmemo
+  can name it without defining it; a namespace's own Bool takes its place.")
 
 (def builtins
   "Domains every defmemo can name without defining them, as Python memo's

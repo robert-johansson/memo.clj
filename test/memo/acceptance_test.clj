@@ -468,3 +468,18 @@
       (let [ours (with-out-str (binding [*ns* (the-ns 'memo.acceptance-test)] (eval (inspect-forms k))))
             lines #(remove (fn [l] (str/starts-with? l "** Tracing")) (str/split-lines %))]
         (is (= (lines text) (lines ours)))))))
+
+(deftest a-namespaces-own-bool-takes-its-place
+  ;; decision D2: Python memo's generated code imports memo's Bool, which
+  ;; silently wins over a model's own (there a uniform choice gives 1/2)
+  (let [ns (create-ns 'memo.acceptance-own-bool)]
+    (try
+      (binding [*ns* ns]
+        (refer-clojure)
+        (eval '(require '[memo.core :refer [defmemo]] '[memo.domains :refer [defenum]]))
+        (eval '(defenum Bool NO MAYBE YES))
+        (eval '(defmemo three-way [] []
+                 (alice :chooses [b Bool] :uniformly)
+                 (return (Pr (= alice.b 1)))))
+        (is (ts/close? (/ 1.0 3) (ts/host ((resolve 'three-way))))))
+      (finally (remove-ns 'memo.acceptance-own-bool)))))

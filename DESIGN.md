@@ -297,9 +297,24 @@ kept in the upstream ledger (§9).
   call is also 0 (0 against 1.275).
 - **A recursive memo without axes never terminates.** Path conditions guard
   only bracketed memo calls.
-- **Assertions instead of hints.** `Predict`/`EU` at the top level, and two
-  `wants` with the same goal name, raise a bare `AssertionError`.
+- **Assertions instead of hints.** `Predict` at the top level, and two
+  `wants` with the same goal name, raise a bare `AssertionError`. (`EU` at
+  the top level is a MemoError, "Unknown goal", corrected by the first
+  acceptance pass.)
 - **`self` is not reserved** (§8).
+- **Met by the first acceptance pass** (2026-10-21), memo.clj sound in
+  each:
+  - `g[x, x]` on a memo of two axes crashes in JAX (memo.clj: a compile
+    error, the same choice passed twice); `h[()](a)` crashes.
+  - `KL[3 | 4]` is 7: a `KL[...]` other than `KL[p.x | q.y]` is read as a
+    query of an agent named KL, and `|` is bitwise or (so a malformed KL
+    reports "Unknown choice a.x"). memo.clj: "Unexpected variable in (KL
+    ...)".
+  - int32 arithmetic wraps silently past 2^31 (as on MLX; the JVM
+    backend computes in 64 bits, a documented difference).
+  - The generated code imports memo's own `Bool`, which silently wins over
+    a model's own `Bool` (memo.clj lets the namespace's win, decided
+    2026-10-21).
 - **Forgetting a choice another mind refers to** (the first acceptance
   pass). After `alice: forgets_about(x)`, reading a copy of alice.x that
   bob holds (through `knows`, or an observation), or bob's beliefs that

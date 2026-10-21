@@ -35,6 +35,27 @@ License, Copyright (c) 2024-2025 Kartik Chandra and Tony Chen.*
    calling a model, reading its results, options, gradients and errors.
 5. **[Differences from Python memo](#differences-from-python-memo)**.
 
+## Setting Up
+
+memo.clj is a Clojure library for the Clojure CLI and a JDK (gen.clj is
+developed on Java 25; its MLX backend uses the foreign function interface,
+final since Java 22). Depend on it from a `deps.edn`:
+
+```text
+{:deps {memo.clj/memo.clj {:local/root "/path/to/memo.clj"}}}
+```
+
+memo.clj pins its gen.clj. After the first download, run
+`clojure -X:deps prep` once: gen.clj compiles its Java binding. Then load a
+file of models with `clojure -M -i models.clj`, or work at a REPL (`clj`).
+Models run on the JVM backend by default. MLX (Metal, or MLX's CPU) needs
+gen.clj's native libraries, built by its `native/build-mlx.sh` (gen.clj's
+README), and the system properties of memo.clj's `:mlx` alias:
+`-Dgen.backend=mlx`, `-Dgen.mlx.lib=` the libraries' directory, and
+`--enable-native-access=ALL-UNNAMED`. Inside memo.clj,
+`clojure -M:mlx -i models.clj` runs a file on MLX, and `clojure -X:test`
+runs the tests (CLAUDE.md lists the rest).
+
 Every example below runs in this namespace:
 
 ```clojure
@@ -115,9 +136,11 @@ a member given the value of an earlier one is its alias:
 `P`. An axis or a choice
 names its domain by a var: `[x X]`, never `[x [0 1 2]]`.
 
-One enum is predefined, as in Python memo: `Bool`, with members `NO` (0)
-and `YES` (1). Every model can name it without defining it; a namespace's
-own `Bool` takes its place. Outside a model it is `memo.domains/Bool`:
+One enum is predefined: `Bool`, with members `NO` (0) and `YES` (1).
+Every model can name it without defining it, and a namespace's own `Bool`
+takes its place (in Python memo, memo's own always wins: see
+[Differences](#differences-from-python-memo)). Outside a model it is
+`memo.domains/Bool`:
 
 ```clojure
 (defmemo says-yes [] []
@@ -181,6 +204,53 @@ array to a vectorized one (a vector becomes one; see Host functions):
 ```clojure
 ;; error: Parameter table was not an array, despite being annotated as ^:array table.
 (lookup 1.0)
+```
+
+A gen.array array has no `nth`. To compute with an array parameter as an
+array, and to differentiate with respect to it, write the host function
+with gen.array's operators and mark it `^:memo/vectorized`:
+
+```clojure
+(defn ^:memo/vectorized table-at [table i]
+  (array/take table (array/astype i :int32)))
+
+(defmemo looked-up [] [^:array table]
+  (alice :chooses [x X] :wpp (exp (table-at table x)))
+  (return (E alice.x)))
+
+(array/->clj (looked-up [0.1 0.5 -0.2]))
+;=> 0.9198235667016574
+
+;; the gradient with respect to the whole table
+(array/->clj ((array/grad looked-up) (array/array [0.1 0.5 -0.2])))
+;=> [-0.28454227390473374 0.037000431654636734 0.247541842250097]
+```
+
+**Cast and forall.** `(cast [alice bob])`, first in a model, names its
+agents: a statement of any other agent at the top level, or a reference to
+one in an expression, is then an error, which catches misspelled names (an
+agent inside a mind or an `imagine` is not checked, as in Python memo).
+`(forall [x X])`, a statement, declares an axis, as `[x X]` among the
+axes does:
+
+```clojure
+(defmemo cast-and-forall [] []
+  (cast [alice])
+  (forall [x X])
+  (alice :knows x)
+  (alice :chooses [y X] :wpp (= y x))
+  (return (E alice.y)))
+
+(array/->clj (cast-and-forall))
+;=> [0.0 1.0 2.0]
+```
+
+```clojure
+;; error: agent `bob` is not in the cast
+(defmemo miscast [] []
+  (cast [alice])
+  (bob :chooses [y X] :wpp 1)
+  (return 1))
 ```
 
 **Multiple return values** are written as several `return` forms. They are
@@ -474,8 +544,11 @@ known:
 
 bob knows `alice.y`, so `(as bob alice.y)` is a value he can give; the
 observer does not, and takes its expectation. `:knows` takes one or more
-names, own choices or other agents':
-`(bob :knows x alice.y)`. It is roughly this expanded form:
+choices that the frame it is written in knows: a bare name is one of that
+frame's own (at the top level, an axis, as `x` here), and `alice.y` is
+another agent's: `(bob :knows x alice.y)`. bob's own choices are not among
+them: he knows those already, and naming one is an error. It is roughly
+this expanded form:
 
 ```clojure
 (defmemo told-expanded [] []
@@ -1445,8 +1518,11 @@ does. The log-likelihood of three heads and one tail under `flip`:
 ```
 
 Only `^:memo/vectorized` host functions are differentiated. A value being
-differentiated that reaches a tabulated function is an error (Python memo
-gives a silent zero gradient there):
+differentiated that reaches a tabulated function is an error: memo.clj
+calls that function on host numbers, so a gradient cannot pass through it.
+(Python memo differentiates through its `@jax.jit` host functions, and
+gives a silent zero gradient only where a call's arguments are all
+static.)
 
 ```clojure
 ;; error: Cannot differentiate through the host function gauss-host
@@ -1523,7 +1599,7 @@ memo.clj implements every statement and expression of the memo Handbook
 | `alice: forgets_about(x, y)` | `(alice :forgets-about x y)` |
 | `alice: has_theory(CHILD)` | `(alice :has-theory :child)` |
 | `alice: INSPECT()` | `(alice :inspect)` |
-| `cast: [alice, bob]`, `forall[x: X]` | `(cast [alice bob])`, `(forall [x X])` |
+| `cast: [alice, bob]`, `forall: x in X` | `(cast [alice bob])`, `(forall [x X])` |
 | `alice[e]` | `(as alice e)` |
 | `E[e]`, `Pr[a, b]`, `Var[e]` | `(E e)`, `(Pr a b)`, `(Var e)` |
 | `H[a.x, b.y]`, `KL[a.x \| b.y]` | `(H a.x b.y)`, `(KL a.x b.y)` |
@@ -1543,23 +1619,46 @@ What memo.clj computes differently, on purpose:
 - **Results are full tables.** Axes come at their domains' full sizes;
   Python memo leaves size 1 an axis a result does not depend on.
 - **Precision.** The JVM backend computes in float64, MLX in float32 by
-  default, Python memo (JAX) in float32. A few answers differ by more than rounding under
-  float64: `KL` against a zero probability, `exp` overflow outside
-  `:wpp (exp ...)` (past about 709 instead of 88), and `:to-maximize` ties
-  (0.1 + 0.2 ties with 0.3 in float32 only).
+  default, Python memo (JAX) in float32. A few answers differ by more than
+  rounding under float64: `KL` against a zero probability, `exp` overflow
+  outside `:wpp (exp ...)` (past about 709 instead of 88), weights so small
+  that float32 rounds them to zero (`:wpp 1e-50` gives zeros in Python
+  memo and on MLX, uniform weights on the JVM), and `:to-maximize` ties
+  (0.1 + 0.2 ties with 0.3 in float32 only). Values equal in exact
+  arithmetic can also differ in the last bit between the JVM, MLX's CPU
+  and Metal, so `:to-maximize` breaks such a tie differently on each.
+- **Integers** are 64-bit on the JVM backend and 32-bit on MLX and in
+  Python memo, which wrap silently past 2^31: `(* x 1000000000)` at x = 3
+  is 3000000000 on the JVM, -1294967296 on MLX and in Python memo.
+- **Your own `Bool`.** A namespace's own `Bool` replaces the predefined
+  one. Python memo's generated code imports memo's, which silently wins
+  over a model's own: with `Bool` of three members, a uniform choice gives
+  1/3 each here and 1/2 over memo's two there.
+- **Domains are vars.** A number is not a domain (Python memo takes
+  `S = 3` as the domain {3}; write `[3]`), and a parameter cannot have a
+  domain's name (Python memo would take its value as the domain).
 - **No bitwise operators.** `and`, `or`, `xor` and `not` are logical, on
   booleans and on integers that are 0 or 1. Python memo computes `&`,
   `|`, `^` and `~` bitwise on other integers (its `~x` is `True ^ x`, so
   `~2` is 3); memo.clj makes those an error.
 - **Loud errors where Python memo is silent or stuck.**
-  - Differentiating through a tabulated host function is an error; Python
-    memo gives a zero gradient.
+  - Differentiating through a tabulated host function is an error, since
+    it runs on host numbers; Python memo differentiates through its
+    `@jax.jit` functions, with a silent zero gradient where a call's
+    arguments are all static.
   - A memo without axes is called directly, so it is differentiated and its
-    recursion stops at its path conditions; in Python memo its gradient is
-    zero and a recursive one never terminates.
-  - `Predict` or `EU` at the top level, and a goal named twice in
-    `:wants`, are compile errors with hints; Python memo raises bare
-    assertions.
+    recursion stops at its path conditions; in Python memo, called from
+    another memo, its gradient is zero (`jax.grad` of it directly is right)
+    and a recursive one never terminates.
+  - `Predict` at the top level, and a goal named twice in `:wants`, are
+    compile errors with hints; Python memo raises bare assertions.
+  - An observation that would put two of an agent's beliefs on one axis,
+    and one whose observed value a mind inside the observer had already
+    observed, make reading the beliefs they leave behind a compile error
+    ("Observation against an already-used value"), with the repair in its
+    hint; Python memo fails there with a shape error.
+  - Reading another agent's copy of a choice its owner has forgotten
+    (`:forgets-about`) is a compile error; in Python memo, a `KeyError`.
   - `self` cannot be an agent's name; Python memo accepts it, and its
     choices collide with the observer's.
   - A vectorized host function is checked against its values on host
@@ -1570,6 +1669,10 @@ What memo.clj computes differently, on purpose:
     Python memo returns garbage (`3 ** -1` is 2111105451). So is a
     negative number to a fractional power, which Python computes as a
     complex number.
+- **Caching.** A `^:cache` model can be differentiated (calls with values
+  being differentiated are not cached); Python memo's `cache=True` raises a
+  `TypeError` under `jax.grad`. Its cache is dropped when any memo is
+  redefined; Python memo's keeps tables computed with the old definition.
 - **The escape hatch is Clojure.** `#{alice.x}` is a compile error; in
   Python memo, `{alice.x}` is a `NameError` when the model is called.
 - **Var** is Python memo's E[X²] − E[X]², computed as the centered
