@@ -189,6 +189,14 @@ depends on them.
 - **Memo calls need brackets.** `f[x](…)` is a memo call. `f(…)` is parsed
   as a host-function call, and it is the only way to call a memo without
   axes.
+- **Literals and parameters are Python numbers** (the first acceptance
+  pass, 2026-10-21). memo hoists them out of JAX and emits `l ** r`, so
+  `**` on them is Python's: `2 ** -1` is 0.5 (gen.array's integer power
+  gives 0), `0 ** -1` raises "zero to a negative power", and a negative
+  number to a fractional power is complex (memo.clj: a memo error). The
+  parity fixtures record an integer argument as an integer, so the twins
+  are called with the numbers Python memo was given; until then every
+  argument was recorded as a float, and this difference could not show.
 - **An observation against an already-used value** (slice 2; decided, 2026-10-20). When the
   observer's beliefs already vary along the source's dim (it knows the
   source, and a choice it models depends on it), the observation swaps two
@@ -230,6 +238,11 @@ depends on them.
     where `+` is gen.array's (gen.clj's house style refers it). Code moved
     from one to the other should say `logical-or`, or convert booleans to
     numbers, explicitly.
+- **The gradient of `abs` at 0 is JAX's, 1** (the first acceptance pass,
+  2026-10-21). gen.array's is 0, its sign, so in `exp(-|x - mu|)` a
+  parameter equal to a domain value lost half its gradient (0.2826
+  against 0.5652). The lowering computes `abs` on floats as
+  `where(x >= 0, x + 0.0, -x)`.
 
 **Upstream bugs.** memo.clj does not reproduce these (decided, 2026-10-20). Each is a documented
 divergence (principle 1), with its correct value derived independently and
@@ -281,6 +294,10 @@ kept in the upstream ledger (§9).
 - **Assertions instead of hints.** `Predict`/`EU` at the top level, and two
   `wants` with the same goal name, raise a bare `AssertionError`.
 - **`self` is not reserved** (§8).
+- **Integer arrays to negative powers are garbage** (the first acceptance
+  pass). Under `jit`, `x ** -1` over int32 `[1 2 3]` is
+  `[1 0 2111105451]`; eager JAX rejects it ("Integers cannot be raised to
+  negative powers"). memo.clj raises that error (principle 4).
 
 **Where float64 changes the answer**, not just its last digits:
 - `KL` against a zero probability: a term p · log(p/0) becomes p times the

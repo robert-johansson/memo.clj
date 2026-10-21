@@ -82,10 +82,17 @@ def oracle():
             Kw("jax"): jax.__version__, Kw("dtype"): "float32"}
 
 
+def number(a):
+    """An argument as recorded: Python's ints stay ints, as Python memo
+    computes a parameter as the number it is given ({x << 4} needs one, and
+    2 ** -1 is 0.5 while memo.clj's long ** gives 0)."""
+    return a if isinstance(a, int) else float(a)
+
+
 def case(f, *args):
     out = np.asarray(f(*args))
     shape = tuple(f._shape) if f._num_retvals == 1 else (f._num_retvals,) + tuple(f._shape)
-    return {Kw("model"): kebab(f.__name__), Kw("args"): [float(a) for a in args],
+    return {Kw("model"): kebab(f.__name__), Kw("args"): [number(a) for a in args],
             Kw("shape"): list(shape), Kw("value"): tolist(np.broadcast_to(out, shape))}
 
 
@@ -135,7 +142,7 @@ def ledger_value(wrong, right, *args, why):
     except Exception as e:
         python = f"{type(e).__name__}: {str(e).splitlines()[0]}"
     correct = tolist(np.broadcast_to(np.asarray(right(*args)), shape))
-    return {Kw("model"): kebab(wrong.__name__), Kw("args"): [float(a) for a in args],
+    return {Kw("model"): kebab(wrong.__name__), Kw("args"): [number(a) for a in args],
             Kw("python"): python, Kw("correct"): correct, Kw("why"): why}
 
 
@@ -1712,6 +1719,142 @@ write("slice6.edn",
       grads=[grad(entropy_joint, 1.0, 0.4)])
 
 
+# --- the first acceptance pass's findings (bean memoclj-ai05) ---------------------
+#
+# Each model is named for its finding (t1_... for T1); memo.acceptance-test
+# holds the twins, and memo.clj's own checks where Python memo is wrong.
+
+X123 = np.array([1, 2, 3])
+Signed = np.array([-2, -1, 0, 1, 2])
+
+
+# T1: ** on literals and parameters is Python's (they are Python numbers)
+@memo
+def t1_lit_neg():
+    return 2 ** -2
+
+
+@memo
+def t1_lit_pos():
+    return 2 ** 3
+
+
+@memo
+def t1_param_neg(a):
+    return a ** -1
+
+
+@memo
+def t1_param_exp(a):
+    return 2 ** a
+
+
+@memo
+def t1_float_exp[x: X123]():
+    return x ** -1.0
+
+
+@memo
+def t1_int_pos[x: X123]():
+    return x ** 2
+
+
+@memo
+def t1_zero_neg():
+    return 0 ** -1
+
+
+# T2: the gradient of abs at 0 is JAX's, 1
+@memo
+def t2_abs(mu):
+    return abs(mu)
+
+
+@memo
+def t2_near(mu):
+    alice: chooses(x in X, wpp=exp(-abs(x - mu)))
+    return E[alice.x]
+
+
+@memo
+def t2_abs_int[s: Signed]():
+    return abs(s)
+
+
+# T3: a member with an earlier member's value is its alias (IntEnum)
+class Dupe(IntEnum):
+    P = 1
+    Q = 1
+    R = 2
+
+
+@memo
+def t3_dupe_mean():
+    alice: chooses(x in Dupe, uniformly)
+    return E[alice.x]
+
+
+@memo
+def t3_dupe_to_be[x: Dupe]():
+    alice: chooses(y in Dupe, to_be={Dupe.Q})
+    return Pr[alice.y == x]
+
+
+# T4: a host function's Ratio or big integer is a Python number (twins:
+# Clojure's (/ v 2) gives a Ratio, (* v 3N) a BigInt)
+def t4_half(v):
+    return v / 2
+
+
+def t4_triple(v):
+    return v * 3
+
+
+@memo
+def t4_host_ratio[x: X]():
+    return t4_half(x)
+
+
+@memo
+def t4_static_ratio():
+    return t4_half(3)
+
+
+@memo
+def t4_inline_ratio():
+    return {3 / 2}
+
+
+@memo
+def t4_host_bigint[x: X]():
+    return t4_triple(x)
+
+
+write("acceptance.edn",
+      [case(t1_lit_neg),
+       case(t1_lit_pos),
+       case(t1_param_neg, 2),
+       case(t1_param_neg, 2.0),
+       case(t1_param_exp, -1),
+       case(t1_param_exp, 3),
+       case(t1_float_exp),
+       case(t1_int_pos),
+       case(t2_near, 2.0),
+       case(t2_abs_int),
+       case(t3_dupe_mean),
+       case(t3_dupe_to_be),
+       case(t4_host_ratio),
+       case(t4_static_ratio),
+       case(t4_inline_ratio),
+       case(t4_host_bigint)],
+      [],
+      runtime_errors=[(t1_zero_neg,)],
+      grads=[grad(t2_abs, 1.0, 0.0),
+             grad(t2_abs, 1.0, -0.0),
+             grad(t2_near, 1.0, 2.0),
+             grad(t2_near, 1.0, 0.0)])
+
+
 # --- the parity corpus: memo's own test suite, demo/test.py, case by case ---------
 #
 # test.py is run as it is, with memo_test replaced by a recorder, so the
@@ -1746,7 +1889,7 @@ def recording_memo_test(mod, expect='pass', item=None, *args, **kwargs):
     def helper(f):
         name = f.__name__
         rec = {Kw("name"): kebab(name), Kw("expect"): expect,
-               Kw("args"): [float(a) for a in args]}
+               Kw("args"): [number(a) for a in args]}
         if kwargs.get("variant") is not None:
             rec[Kw("variant")] = kwargs["variant"].name
         if item is not None:
@@ -1850,11 +1993,6 @@ def hb_grads(*args, argnums=0):
 
 def _error_text(e):
     return e.message if isinstance(e, MemoError) else f"{type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}"
-
-
-def number(a):
-    """An argument as recorded: Python's ints stay ints ({x << 4} needs one)."""
-    return a if isinstance(a, int) else float(a)
 
 
 def hb_twin(ids, *calls, **memo_opts):

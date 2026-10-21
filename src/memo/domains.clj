@@ -19,7 +19,7 @@
 
 (declare member-value)
 
-(defrecord EnumDomain [name members values]
+(defrecord EnumDomain [name members values aliases]
   clojure.lang.IFn
   (invoke [this member] (member-value this member))
   (applyTo [this args] (clojure.lang.AFn/applyToHelper this args)))
@@ -27,9 +27,11 @@
 (defn enum? [d] (instance? EnumDomain d))
 
 (defn member-value
-  "The value of an enum's member, named by a keyword or a symbol."
+  "The value of an enum's member, named by a keyword or a symbol (an alias
+  too)."
   [e member]
-  (let [i (.indexOf ^java.util.List (:members e) (symbol (name member)))]
+  (let [m (symbol (name member))
+        i (.indexOf ^java.util.List (:members e) (get (:aliases e) m m))]
     (when (neg? i)
       (throw (ex-info (str "Enum " (:name e) " has no member " (name member))
                       {:enum (:name e) :member member :members (:members e)})))
@@ -107,13 +109,19 @@
 
 (defmacro defenum
   "(defenum Utt SILENT SOME ALL) defines Utt, an enum with values 0, 1, 2.
-  Members may give explicit values: (defenum R [GREEN 5] [RED 9])."
+  Members may give explicit values: (defenum R [GREEN 5] [RED 9]). As in
+  Python's IntEnum, a member with the value of an earlier one is its alias:
+  (defenum D [P 1] [Q 1] [R 2]) has the members P and R, and D.Q is P."
   [name & members]
   (let [pairs (vec (map-indexed (fn [i m] (if (vector? m) [(first m) (second m)] [m i]))
                                 members))]
     (when (not= (count (set (map first pairs))) (count pairs))
       (throw (ex-info (str "defenum " name ": repeated member") {:members (map first pairs)})))
-    `(def ~name (->EnumDomain '~name '~(mapv first pairs) ~(mapv second pairs)))))
+    (let [canonical (reduce (fn [acc [m v]] (if (some #(= v (second %)) acc) acc (conj acc [m v])))
+                            [] pairs)
+          by-value (into {} (map (fn [[m v]] [v m])) canonical)
+          aliases (into {} (keep (fn [[m v]] (when (not= m (by-value v)) [m (by-value v)]))) pairs)]
+      `(def ~name (->EnumDomain '~name '~(mapv first canonical) ~(mapv second canonical) '~aliases)))))
 
 (defmacro defdomain
   "(defdomain S :x 3 :y 4) defines S, a product domain of 12 members whose

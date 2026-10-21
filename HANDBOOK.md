@@ -105,7 +105,10 @@ An enum's members are numbered from 0, or given values:
 ```
 
 Inside a `defmemo`, a member is written `Coin.TAILS`. Outside, an enum is a
-function from a member's name to its value, as above. An axis or a choice
+function from a member's name to its value, as above. As in an `IntEnum`,
+a member given the value of an earlier one is its alias:
+`(defenum D [P 1] [Q 1] [R 2])` has the members `P` and `R`, and `D.Q` is
+`P`. An axis or a choice
 names its domain by a var: `[x X]`, never `[x [0 1 2]]`.
 
 One enum is predefined, as in Python memo: `Bool`, with members `NO` (0)
@@ -751,6 +754,19 @@ memo.clj's operators are Clojure's prefix forms.
 
 `+`, `-`, `*` and `/` take any number of arguments and fold left.
 
+On literals and parameters, `**` is Python's: Python memo computes them
+as Python numbers, so an integer to a negative power is a float. On
+values that vary, an integer to a negative integer power is an error, as
+in JAX; write `(** x -1.0)`.
+
+```clojure
+(defmemo inverse [] [a]
+  (return (** a -1)))
+
+(array/->clj (inverse 2))
+;=> 0.5
+```
+
 ### Comparison operators
 
 | Operator | Description |
@@ -849,7 +865,8 @@ become *path conditions*, which is how a recursive model stops (see
 Python memo calls functions decorated with `@jax.jit`. memo.clj calls
 Clojure functions: a **host function** is any Clojure function of scalars,
 defined before the model that calls it. It must return a single number
-or boolean.
+or boolean. A ratio or a `BigDecimal` it returns is used as a double (as
+Python's `/` gives a float), and an integer beyond 64 bits is an error.
 
 ```clojure
 (defn f [x] (Math/cos x))
@@ -1225,7 +1242,8 @@ host function may be named `cost`, as in Python memo.
 
 Python memo's curly braces reference Python values from inside a model.
 memo.clj's are `#{...}`: the form inside is Clojure, a function of the
-model's parameters, and its value is used as a number.
+model's parameters, and its value is used as a number (a ratio as a
+double).
 
 ```clojure
 (def N5 5)
@@ -1514,6 +1532,10 @@ What memo.clj computes differently, on purpose:
     numbers.
   - A host function that throws is a memo error naming the function and its
     arguments.
+  - An integer array to a negative integer power is an error; under `jit`,
+    Python memo returns garbage (`3 ** -1` is 2111105451). So is a
+    negative number to a fractional power, which Python computes as a
+    complex number.
 - **The escape hatch is Clojure.** `#{alice.x}` is a compile error; in
   Python memo, `{alice.x}` is a `NameError` when the model is called.
 - **Var** is Python memo's E[X²] − E[X]², computed as the centered

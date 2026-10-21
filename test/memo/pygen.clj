@@ -463,8 +463,10 @@
       (if (not= (name (:name v)) (name dname))
         (str n " = " (sanitize (:name v)))
         (str "class " n "(IntEnum):\n"
-             (str/join "\n" (map (fn [m val] (str "    " (sanitize m) " = " val))
-                                 (:members v) (:values v)))))
+             (str/join "\n" (concat (map (fn [m val] (str "    " (sanitize m) " = " val))
+                                         (:members v) (:values v))
+                                    (map (fn [[a m]] (str "    " (sanitize a) " = " (domains/member-value v m)))
+                                         (:aliases v))))))
       (domains/product? v)
       (str n " = domain(" (str/join ", " (map (fn [k] (str (sanitize (name k)) "=" (get (:sizes v) k)))
                                                (:keys v)))

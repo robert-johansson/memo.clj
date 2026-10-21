@@ -229,7 +229,8 @@
                                                       d)]))
                                    domain-syms)
                    :fns ~(into {} (map (fn [f] [(list 'quote f) (fn-ref f)])) (:ffi-names refs))
-                   :inlines ~(mapv (fn [form] `(fn [~@param-syms] ~(inline-members mname form resolve-member)))
+                   :inlines ~(mapv (fn [form] `(with-meta (fn [~@param-syms] ~(inline-members mname form resolve-member))
+                                                    {:memo/form '~form}))
                                    inline-forms)}))))
 
 (defn program

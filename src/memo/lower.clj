@@ -17,7 +17,12 @@
     bitwise operators, so those are a loud error.
   - nan_to_num maps NaN to 0 and ±inf to ± the dtype's largest value
     (DESIGN.md §2.4): Python memo's 0/0 = 0, and the 0 · log 0 = 0 of its
-    entropies."
+    entropies.
+  - ** on host numbers (literals and parameters) is Python's, as Python
+    memo computes them outside JAX: (** 2 -1) is 0.5. An integer array to a
+    negative integer power, which JAX rejects (and returns garbage for
+    under jit), is a loud error.
+  - The gradient of abs at 0 is 1, JAX's, where gen.array's is 0."
   (:refer-clojure :exclude [+ - * / < > <= >= == abs])
   (:require [gen.array :as array :refer [+ - * / < > <= >= == exp log abs where]]
             [gen.array.tape :as tape]
@@ -93,6 +98,43 @@
 
 (defn- as-bool [x] (if (bool? x) x (not (clojure.core/== x 0))))
 
+(defn- integral? [x] (if (number? x) (integer? x) (not (float-max (array/dtype x)))))
+
+(defn- python-pow
+  "x ** y on host numbers, as Python computes it."
+  [x y]
+  (cond
+    (and (zero? x) (neg? y))
+    (err/raise "zero to a negative power"
+               {:hint "Python memo raises a ZeroDivisionError here."})
+
+    (and (neg? x) (not (integer? y)) (Double/isFinite (double y))
+         (not= (double y) (Math/floor (double y))))
+    (err/raise (str "A negative number to a fractional power, (** " x " " y "), is complex")
+               {:hint "Python memo returns a complex number here, which memo.clj does not compute."})
+
+    (and (integer? x) (integer? y) (neg? y)) (Math/pow (double x) (double y))
+    :else (array/pow x y)))
+
+(defn- pow [x y]
+  (cond
+    (and (number? x) (number? y)) (python-pow x y)
+
+    (and (integral? x) (integral? y)
+         (if (number? y) (neg? y) (array/any-true? (< y 0))))
+    (err/raise "Integers cannot be raised to negative powers"
+               {:hint (str "JAX rejects an integer array to a negative integer power, and under "
+                           "jit Python memo returns garbage (3 ** -1 is 2111105451). Use a float, "
+                           "e.g. (** x -1.0).")})
+
+    :else (array/pow x y)))
+
+(defn- abs* [x]
+  (if (and (not (number? x)) (float-max (array/dtype x)))
+    ;; JAX's gradient, 1 at 0 (gen.array's is 0); + 0.0 makes -0.0 0.0
+    (where (>= x 0) (+ x 0.0) (array/negate x))
+    (abs x)))
+
 (defn- no-bool [op x]
   (when (bool? x)
     (err/raise (str "Unsupported operand type for " op ": a boolean")
@@ -112,7 +154,7 @@
     :mul (if (and (bool? x) (bool? y)) (array/logical-and x y) (* x y))
     :sub (do (no-bool "-" x) (no-bool "-" y) (- x y))
     :div (/ (as-number x) (as-number y))
-    :pow (array/pow (as-number x) (as-number y))
+    :pow (pow (as-number x) (as-number y))
     :mod (array/mod (as-number x) (as-number y))
     :eq (== (as-number x) (as-number y))
     :neq (array/!= (as-number x) (as-number y))
@@ -125,7 +167,7 @@
     :xor (logical "xor" array/!= x y)
     :exp (exp (as-number x))
     :log (log (as-number x))
-    :abs (if (bool? x) x (abs x))
+    :abs (if (bool? x) x (abs* x))
     :uadd x
     :neg (do (no-bool "unary -" x) (array/negate x))
     :inv (if (or (bool? x) (unit-literal? x))
@@ -217,9 +259,24 @@
                   "only handle host functions that take scalars as input and return "
                   "a single scalar as output.")))
 
+(defn- host-number
+  "A host number as Python memo would have it: a Ratio or a BigDecimal is a
+  double (Python's division gives a float), and an integer beyond 64 bits is
+  a loud error (Python memo's is an OverflowError)."
+  [what x]
+  (cond
+    (or (ratio? x) (decimal? x)) (double x)
+    (and (integer? x) (not (instance? Long x)))
+    (if (clojure.core/<= Long/MIN_VALUE x Long/MAX_VALUE)
+      (long x)
+      (err/raise (str what " gave " x ", an integer beyond 64 bits")
+                 {:hint "Python memo cannot take it either (an OverflowError). Use a double."}))
+    :else x))
+
 (defn- scalar [name r]
   (cond
-    (or (number? r) (boolean? r)) r
+    (number? r) (host-number (str "The host function " name) r)
+    (boolean? r) r
     (and (array/array? r) (empty? (array/shape r))) (array/item r)
     :else (not-scalar name)))
 
@@ -385,7 +442,9 @@
              :alias (arg (:arg instr))
              :call-memo (call-memo (:resolve-memo ctx) env instr)
              :ffi (host-call ctx env instr)
-             :inline (apply (nth (:inlines ctx) (:idx instr)) (map env (:param-order ctx)))))))
+             :inline (let [f (nth (:inlines ctx) (:idx instr))
+                           v (apply f (map env (:param-order ctx)))]
+                       (if (number? v) (host-number (str "#{" (pr-str (:memo/form (meta f))) "}") v) v))))))
 
 (defn- table
   "A result value as the table over the memo's axes: the axes in declaration
