@@ -104,6 +104,10 @@ An enum's members are numbered from 0, or given values:
 ;=> 2
 ```
 
+A number is not a domain: Python memo takes `S = 3` as the domain {3},
+memo.clj asks for `[3]`. Nor can a parameter have a domain's name, which
+Python memo would read as the domain. Both are memo errors.
+
 Inside a `defmemo`, a member is written `Coin.TAILS`. Outside, an enum is a
 function from a member's name to its value, as above. As in an `IntEnum`,
 a member given the value of an earlier one is its alias:
@@ -160,8 +164,9 @@ array too, so the host function may be `^:memo/vectorized`:
 
 **Array parameters.** A parameter is a scalar unless it is marked
 `^:array` (Python's `a: ...`). An array parameter takes a Clojure vector or
-a gen.array array, and is passed whole, as given, to host functions and
-memo calls:
+a gen.array array, and is passed whole to host functions and memo calls:
+as given to a tabulated host function (so `nth` wants a vector), and as an
+array to a vectorized one (a vector becomes one; see Host functions):
 
 ```clojure
 (defn table-get [table i] (nth table i))
@@ -952,7 +957,9 @@ computation, so its results are usually not checked: check a vectorized
 function once on the JVM backend.
 
 A tabulated function that throws becomes a memo error naming the
-function and its arguments, with the original exception as its cause.
+function and its arguments, with the original exception as its cause; a
+vectorized function that throws on whole arrays (say, `Math/exp` on one)
+becomes a memo error naming the function.
 
 ## Choice Expressions
 
@@ -1284,6 +1291,12 @@ so `#{Action.WAIT}` is `Action.WAIT`:
 ;=> 0
 ```
 
+Its value must be a number, a boolean or a gen.array array; anything
+else, such as a vector, is a memo error. Under differentiation, its
+parameters reach it as gen.array values, so a form to be differentiated
+computes with gen.array's operators, `#{(array/* 2 a)}`, not clojure.core's
+(that is a memo error naming the form).
+
 This is an escape hatch for exceptional cases. Most models never need it.
 
 **You cannot reference memo constructs (agents or their choices) inside the
@@ -1467,7 +1480,8 @@ its `defmemo` is evaluated, wrapped by the Clojure compiler;
 ;=> peeking
 ```
 
-`(err/format-error e)` renders an error as Python memo prints it:
+`(err/format-error e)` renders an error as Python memo prints it, the
+memo error inside a wrapped one included:
 
 ```text
 memo error: Asking an agent for an unknown value
@@ -1478,6 +1492,11 @@ memo error: Asking an agent for an unknown value
 
 memo's compile-time warnings, such as a redundant expectation, print to
 standard error. Bind `memo.errors/*warnings?*` to false to silence them.
+
+A memo that recurses without end, or too deep for the JVM's stack, is the
+memo error "Maximum recursion depth exceeded in memo ..." (Python memo's
+`RecursionError`). Its hint gives the two remedies: a base case, or a
+thread with a bigger stack.
 
 ---
 

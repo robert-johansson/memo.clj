@@ -93,6 +93,8 @@
   Python memo crashes there, with a shape error."
   [state loc]
   (let [frm (fr/get-frame state)]
+    (when-let [{:keys [message hint]} (:broken frm)]
+      (err/raise message (assoc (frame-err-opts state loc) :hint hint)))
     (when-let [{:keys [source target]} (:scrambled frm)]
       (err/raise "Observation against an already-used value"
                  (assoc (frame-err-opts state loc)
@@ -105,6 +107,35 @@
                                    " :observes-that (= " target " " source ")). (Python memo "
                                    "fails here with a shape error.)"))))
     (:ll frm)))
+
+(defn- mark-unreadable
+  "frame with what is inside it (itself excluded) marked unreadable: each
+  choice of another agent for which (stale? ch) holds, and each agent's own
+  choice whose copy the frame holding that agent marked, as :unreadable;
+  then each frame for which (broken? f) holds, as :broken; both (why
+  holder), {:message :hint}, holder naming the frame directly inside frame
+  that holds them. Reading either is then that compile error (eval-choice,
+  read-ll), where Python memo would fail."
+  [frame stale? broken? why]
+  (letfn [(walk [f holder inherited]
+            (let [marked (set (keep (fn [[[w id :as k] ch]]
+                                      (when (if (= 'self w) (inherited id) (stale? ch)) k))
+                                    (:choices f)))
+                  f (-> f
+                        (update :choices
+                                #(reduce-kv (fn [acc k ch]
+                                              (assoc acc k (cond-> ch
+                                                             (and (marked k) (not (:unreadable ch)))
+                                                             (assoc :unreadable (why holder)))))
+                                            {} %))
+                        (update :children
+                                #(reduce-kv (fn [acc k c]
+                                              (assoc acc k (walk c holder
+                                                                 (set (keep (fn [[w id]] (when (= w k) id))
+                                                                            marked)))))
+                                            {} %)))]
+              (cond-> f (and (broken? f) (not (:broken f))) (assoc :broken (why holder)))))]
+    (update frame :children #(reduce-kv (fn [acc k c] (assoc acc k (walk c (:name c) #{}))) {} %))))
 
 (defn- repoint
   "The state with every choice in the frame tree whose value is the symbol
@@ -139,6 +170,8 @@
   (let [id (:id e)
         frm (fr/get-frame state)
         ch (get-in frm [:choices ['self id]])]
+    (when-let [{:keys [message hint]} (:unreadable ch)]
+      (err/raise message (assoc (frame-err-opts state (:loc e)) :hint hint)))
     (when-not ch
       (err/raise (str "Unknown choice " (:name frm) "." id)
                  (assoc (frame-err-opts state (:loc e))
@@ -867,8 +900,29 @@
                                          (update :scrambled #(or % scrambled))
                                          (assoc-in [:conditions target] source)
                                          (assoc-in [:choices target :idx] sidx)
-                                         (assoc-in [:children target-who :choices ['self target-id] :idx] sidx))))]
-        (repoint state (:tag target-ch) value)))))
+                                         (assoc-in [:children target-who :choices ['self target-id] :idx] sidx))))
+            state (repoint state (:tag target-ch) value)]
+        ;; a mind inside who that observed the target holds its own alias of
+        ;; it, which the repoint does not reach, as known, and beliefs along
+        ;; its old dim, which nothing marginalizes now: reading them is Python
+        ;; memo's shape error (a :knows copy shares the value, and follows; a
+        ;; snapshot's copy is a belief, and its own E sums the dim)
+        (if (= sidx tidx)
+          state
+          (fr/update-frame
+           state update-in [:children who]
+           mark-unreadable
+           #(and (= tidx (:idx %)) (:known %) (not= value (:tag %)))
+           #(and (contains? (:ll-dims %) tidx) (some :unreadable (vals (:choices %))))
+           (fn [holder]
+             {:message "Observation against an already-used value"
+              :hint (str "In " who "'s mind, " holder " observed " (label target) " before "
+                         who " observed it to be " (label source) ": memo represents an observed "
+                         "value by sharing its axis, and " holder "'s copy cannot follow "
+                         (label target) " onto " (label source) "'s. (Python memo fails here "
+                         "with a shape error.) If " holder " simply learns " (label target)
+                         ", write (" holder " :knows " (label target) ") in " who "'s mind "
+                         "instead.")})))))))
 
 (defn- eval-observes-factor
   "(who :observes-that e) and (who :observes-event :wpp e): who's beliefs
@@ -989,6 +1043,23 @@
                                     {:node :with :who target-who :loc loc :static false
                                      :expr {:node :choice :id target-id :loc loc :static false}}]}}})))
 
+(defn- forget-copies
+  "frame after who forgot the choices of by-idx (dim -> id): the copies of
+  them that other frames inside it hold (a :knows or an :observes made
+  earlier), and the beliefs that vary with them, are gone. Reading one is
+  a compile error; in Python memo it is a KeyError."
+  [frame who by-idx]
+  (let [why (fn [holder id]
+              {:message (str who "." id " was forgotten")
+               :hint (str who " forgot " id " with (" who " :forgets-about " id "), which sums it "
+                          "out of " (:name frame) "'s beliefs, but " holder " still refers to it, "
+                          "through a :knows or an :observes made earlier. Forget it after the "
+                          "last use of " holder "'s beliefs, or not at all. (Python memo fails "
+                          "here with a KeyError.)")})]
+    (reduce (fn [frame [idx id]]
+              (mark-unreadable frame #(= idx (:idx %)) #(contains? (:ll-dims %) idx) #(why % id)))
+            frame by-idx)))
+
 (defn- eval-forgets-about
   "(who :forgets-about x ...): who's own choices summed out of the current
   frame's beliefs, once, and dropped from scope: later computations need not
@@ -1019,14 +1090,15 @@
                 state)]
     (fr/update-frame state
                      (fn [f]
-                       (reduce (fn [f id]
-                                 (-> f
-                                     (update-in [:children who :choices] dissoc ['self id])
-                                     (update-in [:children who :conditions] dissoc ['self id])
-                                     (update :choices dissoc [who id])
-                                     (update :conditions dissoc [who id])))
-                               (update f :ll-dims #(reduce disj % idxs))
-                               ids)))))
+                       (-> (reduce (fn [f id]
+                                     (-> f
+                                         (update-in [:children who :choices] dissoc ['self id])
+                                         (update-in [:children who :conditions] dissoc ['self id])
+                                         (update :choices dissoc [who id])
+                                         (update :conditions dissoc [who id])))
+                                   (update f :ll-dims #(reduce disj % idxs))
+                                   ids)
+                           (forget-copies who (zipmap idxs ids)))))))
 
 (defn- eval-trace
   "(who :inspect): what who tracks, printed while the memo compiles (Python

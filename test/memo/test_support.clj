@@ -149,16 +149,20 @@
 (defn gradient
   "d/d(first argument) of sum(weights * f(args)), by gen.array's grad."
   [f weights args]
-  (let [w (array/array weights)]
-    (host ((array/grad (fn [a0] (array/sum (array/* w (apply f a0 (rest args)))))) (first args)))))
+  (let [w (array/array weights)
+        a0 (if (sequential? (first args)) (array/array (first args)) (first args))]
+    (host ((array/grad (fn [a0] (array/sum (array/* w (apply f a0 (rest args)))))) a0))))
 
 (defn grad-close?
   "Gradients agree: jax.grad computes in float32. A NaN matches a NaN (Python
   memo's NaN gradients are matched, not repaired; DESIGN.md §2.4)."
   [expected actual]
-  (if (Double/isNaN (double expected))
-    (Double/isNaN (double actual))
-    (< (Math/abs (- (double expected) (double actual))) (+ 1e-5 (* 1e-4 (Math/abs (double expected)))))))
+  (cond
+    (sequential? expected) (and (sequential? actual) (= (count expected) (count actual))
+                                (every? true? (map grad-close? expected actual)))
+    (Double/isNaN (double expected)) (Double/isNaN (double actual))
+    :else (< (Math/abs (- (double expected) (double actual)))
+             (+ 1e-5 (* 1e-4 (Math/abs (double expected)))))))
 
 (defn check-grads
   "Each fixture gradient: memo.clj's matches jax.grad's."

@@ -35,6 +35,19 @@
      :shape [2 3],
      :value
      [[0.12687499821186066 0.12687499821186066 0.12687499821186066]
-      [0.12687499821186066
-       0.12687499821186066
-       0.12687499821186066]]}]}]}
+      [0.12687499821186066 0.12687499821186066 0.12687499821186066]]}]}
+  {:id :var-cancels-near-zero,
+   :why
+   "Var of a choice that is certain (3): Python memo's E[X^2] - E[X]^2 cancels in float32 to -1.1e-5, memo.clj's centered Var gives 0; agreement allows a program with Var 1e-4 absolute (found 2026-10-21, seed 1)",
+   :form
+   (defmemo
+    var-cancels-near-zero
+    []
+    [p]
+    (bob :chooses [x D4] :to-maximize x)
+    (alice :chooses [x D3] :wpp (+ 0.5 (= x p)))
+    (alice :chooses [y D3] [z D4] :wpp (+ 1 (abs (+ z z))))
+    (alice :chooses [w P3] :such-that (not (> x 2.0)))
+    (return (Var bob.x))),
+   :calls [{:args [1.0], :kwargs {}}],
+   :python [{:outcome :ok, :shape [], :value -1.0967256457661279E-5}]}]}

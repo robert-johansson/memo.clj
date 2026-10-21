@@ -414,10 +414,21 @@
                                                :memo-error (err/memo-error? (or (err/root-memo-error e) e))})))
                     calls)})))
 
+(def ^:private ^:dynamic *atol*
+  "Absolute tolerance beyond near?'s own: var-tolerance's, for a program."
+  0.0)
+
+(defn- var-tolerance
+  "1e-4 for a program with Var: Python memo's E[X^2] - E[X]^2 cancels in
+  float32, where memo.clj's centered Var does not (DESIGN.md §2.4), so a
+  Var of 0 comes out as -1.1e-5 there (seed 1, 2026-10-21); 0 otherwise."
+  [form]
+  (if (some #{'Var} (tree-seq coll? seq form)) 1e-4 0.0))
+
 (defn- near?
   "Values agree within float32 accumulation over a random program's tables
-  (up to thousands of cells): 1e-4 relative, 1e-5 absolute. NaN matches
-  NaN."
+  (up to thousands of cells): 1e-4 relative, 1e-5 absolute (plus *atol*).
+  NaN matches NaN."
   [expected actual]
   (cond
     (and (sequential? expected) (sequential? actual))
@@ -426,7 +437,7 @@
     (let [e (double expected) a (double actual)]
       (or (and (Double/isNaN e) (Double/isNaN a))
           (= e a)
-          (<= (Math/abs (- e a)) (+ 1e-5 (* 1e-4 (Math/abs e))))))
+          (<= (Math/abs (- e a)) (+ 1e-5 *atol* (* 1e-4 (Math/abs e))))))
     :else false))
 
 (defn- beyond-float32?
@@ -493,7 +504,8 @@
                         (let [n (count (:calls (first ps)))]
                           (recur (rest ps) (drop n ts) (conj acc (vec (take n ts)))))))]
     (remove-ns (ns-name ns))
-    (mapv (fn [p o t] (let [[ok how] (agree? o t)] (assoc p :memo-clj o :python t :agree ok :how how)))
+    (mapv (fn [p o t] (let [[ok how] (binding [*atol* (var-tolerance (:form p))] (agree? o t))]
+                        (assoc p :memo-clj o :python t :agree ok :how how)))
           programs ours per-program)))
 
 (defn shrink
@@ -569,7 +581,18 @@
              (alice :chooses [x D3] :to-maximize (* x x))
              (alice :thinks (bob :chooses [x B2] :uniformly))
              (return (Var carol.y)))
-    :calls [{:args [0.3 0.7] :kwargs {}}]}])
+    :calls [{:args [0.3 0.7] :kwargs {}}]}
+   {:id :var-cancels-near-zero
+    :why (str "Var of a choice that is certain (3): Python memo's E[X^2] - E[X]^2 cancels in "
+              "float32 to -1.1e-5, memo.clj's centered Var gives 0; agreement allows a program "
+              "with Var 1e-4 absolute (found 2026-10-21, seed 1)")
+    :form '(defmemo var-cancels-near-zero [] [p]
+             (bob :chooses [x D4] :to-maximize x)
+             (alice :chooses [x D3] :wpp (+ 0.5 (= x p)))
+             (alice :chooses [y D3] [z D4] :wpp (+ 1 (abs (+ z z))))
+             (alice :chooses [w P3] :such-that (not (> x 2.0)))
+             (return (Var bob.x)))
+    :calls [{:args [1.0] :kwargs {}}]}])
 
 (defn record-regressions!
   "Run the regressions in Python memo and write test/fixtures/fuzz.edn."
@@ -595,4 +618,4 @@
   (let [ns (world-ns)
         ours (memo-clj-outcome ns {:form form :calls calls})]
     (remove-ns (ns-name ns))
-    [(first (agree? ours python)) ours]))
+    [(first (binding [*atol* (var-tolerance form)] (agree? ours python))) ours]))

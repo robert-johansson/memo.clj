@@ -4,8 +4,10 @@
   the same name in test/fixtures/generate.py, for finding T<k>, and
   acceptance.edn holds Python memo's results, errors and gradients. Where
   Python memo is wrong, memo.clj's own checks say what it does instead."
-  (:require [clojure.test :refer [deftest is testing]]
-            [memo.core :refer [defmemo]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
+            [gen.array :as array]
+            [memo.core :as memo :refer [defmemo]]
             [memo.domains :as domains :refer [defenum]]
             [memo.errors :as err]
             [memo.test-support :as ts]))
@@ -96,6 +98,62 @@
 (defmemo t7-knows-none [] []
   (alice :chooses [x X] :wpp 1)
   (bob :knows)
+  (return (E alice.x)))
+
+;; T8: after alice observes carol.x, a mind in alice's whose beliefs vary
+;; with carol.x cannot be read; the rest can
+
+(defmemo t8-retag-alice-only [[y X]] []
+  (alice :thinks
+    (carol :chooses [x X] :wpp 1)
+    (bob :thinks (carol :chooses [x X] :wpp 1))
+    (bob :observes carol.x :is carol.x))
+  (alice :observes carol.x :is y)
+  (return (as alice (E carol.x))))
+
+(defmemo t8-retag-no-read [[y X]] []
+  (alice :thinks
+    (carol :chooses [x X] :wpp 1)
+    (bob :thinks (carol :chooses [x X] :wpp 1))
+    (bob :observes carol.x :is carol.x))
+  (alice :observes carol.x :is y)
+  (return 1.0))
+
+(defmemo t8-retag-knows [[y X]] []
+  (alice :thinks (carol :chooses [x X] :wpp 1) (bob :knows carol.x))
+  (alice :observes carol.x :is y)
+  (return (as alice (E (as bob carol.x)))))
+
+;; T9: a forgotten choice's copies in other minds cannot be read; unread,
+;; they are harmless
+
+(defmemo t9-forget-known-unread [] []
+  (alice :chooses [x X] :wpp (+ 1 x))
+  (bob :knows alice.x)
+  (alice :forgets-about x)
+  (return 1.0))
+
+(defmemo t9-forget-observed-unread [] []
+  (alice :chooses [x X] :wpp (+ 1 x))
+  (bob :thinks (alice :chooses [x X] :wpp 1))
+  (bob :observes alice.x :is alice.x)
+  (alice :forgets-about x)
+  (return 1.0))
+
+(defmemo t9-forget-alone [] []
+  (alice :chooses [x X] :wpp (+ 1 x))
+  (alice :chooses [y X] :to-be x)
+  (alice :forgets-about x)
+  (return (E alice.y)))
+
+;; T10: a vectorized function gets an array parameter as its array
+
+(def Two [0 1])
+
+(defn ^:memo/vectorized t10-vtake [table i] (array/take table (array/astype i :int32)))
+
+(defmemo t10-lookup [[k Two]] [^:array table]
+  (alice :chooses [x X] :wpp (exp (t10-vtake table x)))
   (return (E alice.x)))
 
 ;; against Python memo
@@ -198,3 +256,135 @@
   (testing "the message names the construct written"
     (is (= "memo.clj computes Pr with several conditions on booleans and on 0 and 1 only"
            (some-> (thrown #(t5-pr-two-of-three)) ex-message)))))
+
+(defn- compile-message
+  "The message of the memo error form gives when it is defined, or nil."
+  [form]
+  (some-> (ts/compile-error 'memo.acceptance-test form) ex-message))
+
+(deftest reading-a-mind-whose-observed-value-moved-is-a-compile-error
+  ;; Python memo: a shape error when the model is called
+  (is (= "Observation against an already-used value"
+         (compile-message '(defmemo t8-retag [[y X]] []
+                             (alice :thinks
+                               (carol :chooses [x X] :wpp 1)
+                               (bob :thinks (carol :chooses [x X] :wpp 1))
+                               (bob :observes carol.x :is carol.x))
+                             (alice :observes carol.x :is y)
+                             (return (as alice (E (as bob carol.x))))))))
+  (testing "bob's beliefs, read without the stale copy"
+    (is (= "Observation against an already-used value"
+           (compile-message '(defmemo t8-retag-beliefs [[y X]] []
+                               (alice :thinks
+                                 (carol :chooses [x X] :wpp 1)
+                                 (bob :thinks (carol :chooses [x X] :wpp 1)
+                                              (carol :chooses [z X] :wpp (= z x)))
+                                 (bob :observes carol.x :is carol.x))
+                               (alice :observes carol.x :is y)
+                               (return (as alice (E (as bob (E carol.z)))))))))))
+
+(deftest reading-a-forgotten-choice-is-a-compile-error
+  ;; Python memo: a KeyError, ('alice', 'x'), when the model is defined
+  (doseq [[what form]
+          [["known" '(defmemo t9-known [] []
+                       (alice :chooses [x X] :wpp (+ 1 x))
+                       (bob :knows alice.x)
+                       (alice :forgets-about x)
+                       (return (E (as bob alice.x))))]
+           ["observed" '(defmemo t9-observed [] []
+                          (alice :chooses [x X] :wpp (+ 1 x))
+                          (bob :thinks (alice :chooses [x X] :wpp 1))
+                          (bob :observes alice.x :is alice.x)
+                          (alice :forgets-about x)
+                          (return (E (as bob (E alice.x)))))]
+           ["beliefs only" '(defmemo t9-beliefs [] []
+                              (alice :chooses [x X] :wpp (+ 1 x))
+                              (bob :thinks (alice :chooses [x X] :wpp 1)
+                                           (alice :chooses [y X] :wpp (= y x)))
+                              (bob :observes alice.x :is alice.x)
+                              (alice :forgets-about x)
+                              (return (E (as bob (E alice.y)))))]
+           ["in a mind" '(defmemo t9-mind [] []
+                           (carol :thinks
+                             (alice :chooses [x X] :wpp (+ 1 x))
+                             (bob :knows alice.x)
+                             (alice :forgets-about x))
+                           (return (E (as carol (E (as bob alice.x))))))]]]
+    (testing what
+      (is (= "alice.x was forgotten" (compile-message form))))))
+
+(defmemo t11-inline-scaled [] [a] (return #{(* 2 a)}))
+(defmemo t11-inline-array [] [a] (return #{(array/* 2 a)}))
+
+(deftest an-inline-form-under-differentiation
+  (is (ts/close? 1.0 (ts/host (t11-inline-scaled 0.5))))
+  (testing "with clojure.core's operators: a memo error naming the form"
+    (let [e (thrown #(ts/gradient t11-inline-scaled 1.0 [0.5]))]
+      (is (err/memo-error? e))
+      (is (str/includes? (str (some-> e ex-message)) "#{(* 2 a)}"))))
+  (testing "with gen.array's: differentiated"
+    (is (ts/grad-close? 2.0 (ts/gradient t11-inline-array 1.0 [0.5])))))
+
+(defn ^:memo/vectorized t12-exp [x] (Math/exp x))
+
+(defmemo t12-vectorized-throws [] []
+  (alice :chooses [x X] :wpp (t12-exp x))
+  (return (E alice.x)))
+
+(deftest a-vectorized-function-that-throws
+  (let [e (thrown #(t12-vectorized-throws))]
+    (is (err/memo-error? e))
+    (is (str/starts-with? (str (some-> e ex-message))
+                          "The vectorized function t12-exp failed on whole arrays"))))
+
+(def L [1 2])
+
+(defmemo t13-inline-vector [] [] (return #{L}))
+
+(deftest an-inline-form-that-is-not-a-number
+  (let [e (thrown #(t13-inline-vector))]
+    (is (err/memo-error? e))
+    (is (= "The inline form #{L} gave [1 2], not a number" (some-> e ex-message)))))
+
+(def NotDom 5)
+(def SetDom #{0 1})
+
+(deftest what-is-not-a-domain
+  (testing "a number (Python memo's {5}; decision D5)"
+    (is (= "NotDom is not a domain: 5"
+           (compile-message '(defmemo t14-number [] []
+                               (alice :chooses [x NotDom] :wpp 1)
+                               (return (E alice.x)))))))
+  (testing "a set"
+    (is (= "SetDom is not a domain: #{0 1}"
+           (compile-message '(defmemo t14-set [] []
+                               (alice :chooses [x SetDom] :wpp 1)
+                               (return (E alice.x)))))))
+  (testing "nothing at all"
+    (is (= "Unknown domain Nope"
+           (compile-message '(defmemo t14-unknown [[x Nope]] [] (return x))))))
+  (testing "a parameter named like a domain (decision D3)"
+    (is (= "The name `X` is already used for a static parameter and cannot be used as a domain."
+           (compile-message '(defmemo t14-shadow [[x X]] [X] (return (* x X))))))))
+
+(deftest print-table-checks-its-arguments
+  (testing "a memo's var is the memo"
+    (is (str/includes? (with-out-str (memo/print-table #'t2-abs-int (t2-abs-int))) "t2-abs-int")))
+  (testing "a result of another shape"
+    (let [e (thrown #(memo/print-table t1-float-exp (t2-abs-int)))]
+      (is (err/memo-error? e))
+      (is (str/starts-with? (str (some-> e ex-message)) "print-table: the result has shape [5]")))))
+
+(defmemo t16-forever [[x X]] [t] (return (t16-forever [x] (+ t 1))))
+
+(deftest runaway-recursion
+  ;; Python memo: a RecursionError
+  (let [e (thrown #(t16-forever 0))]
+    (is (err/memo-error? e))
+    (is (= "Maximum recursion depth exceeded in memo t16-forever" (some-> e ex-message)))))
+
+(deftest format-error-renders-the-memo-error-inside
+  (let [e (binding [*ns* (the-ns 'memo.acceptance-test)]
+            (try (eval '(defmemo t17-bad [] [] (return alice.nope))) nil (catch Exception e e)))]
+    (is (not (err/memo-error? e)) "Clojure wraps the error of a defmemo that fails to compile")
+    (is (= (err/format-error (err/root-memo-error e)) (err/format-error e)))))

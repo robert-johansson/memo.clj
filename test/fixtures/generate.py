@@ -85,8 +85,16 @@ def oracle():
 def number(a):
     """An argument as recorded: Python's ints stay ints, as Python memo
     computes a parameter as the number it is given ({x << 4} needs one, and
-    2 ** -1 is 0.5 while memo.clj's long ** gives 0)."""
-    return a if isinstance(a, int) else float(a)
+    2 ** -1 is 0.5 while memo.clj's long ** gives 0); an array (for an
+    array parameter) is a list."""
+    if isinstance(a, int):
+        return a
+    return float(a) if np.ndim(a) == 0 else tolist(a)
+
+
+def real(a):
+    """A gradient's argument or value as recorded: a float, or a list of them."""
+    return float(a) if np.ndim(a) == 0 else tolist(a)
 
 
 def case(f, *args):
@@ -118,8 +126,8 @@ def grad(f, weights, *args):
     """d/d(first argument) of sum(weights * f(*args)), by jax.grad."""
     w = np.array(weights)
     g = jax.grad(lambda a0: (w * f(a0, *args[1:])).sum())(args[0])
-    return {Kw("model"): kebab(f.__name__), Kw("args"): [float(a) for a in args],
-            Kw("weights"): tolist(w), Kw("value"): float(g)}
+    return {Kw("model"): kebab(f.__name__), Kw("args"): [real(a) for a in args],
+            Kw("weights"): tolist(w), Kw("value"): real(g)}
 
 
 def ledger(wrong, right, weights, *args, why):
@@ -1904,6 +1912,72 @@ def t7_knows_none():
     return E[alice.x]
 
 
+# T8: after alice observes carol.x, a mind in alice's whose beliefs vary
+# with carol.x cannot be read (Python memo: a shape error); the rest can
+@memo
+def t8_retag_alice_only[y: X]():
+    alice: thinks[ carol: chooses(x in X, wpp=1), bob: thinks[ carol: chooses(x in X, wpp=1) ], bob: observes [carol.x] is carol.x ]
+    alice: observes [carol.x] is y
+    return alice[E[carol.x]]
+
+
+@memo
+def t8_retag_no_read[y: X]():
+    alice: thinks[ carol: chooses(x in X, wpp=1), bob: thinks[ carol: chooses(x in X, wpp=1) ], bob: observes [carol.x] is carol.x ]
+    alice: observes [carol.x] is y
+    return 1.0
+
+
+@memo
+def t8_retag_knows[y: X]():
+    alice: thinks[ carol: chooses(x in X, wpp=1), bob: knows(carol.x) ]
+    alice: observes [carol.x] is y
+    return alice[E[bob[carol.x]]]
+
+
+# T9: a forgotten choice's copies in other minds cannot be read (Python
+# memo: a KeyError); unread, they are harmless
+@memo
+def t9_forget_known_unread():
+    alice: chooses(x in X, wpp=1 + x)
+    bob: knows(alice.x)
+    alice: forgets_about(x)
+    return 1.0
+
+
+@memo
+def t9_forget_observed_unread():
+    alice: chooses(x in X, wpp=1 + x)
+    bob: thinks[ alice: chooses(x in X, wpp=1) ]
+    bob: observes [alice.x] is alice.x
+    alice: forgets_about(x)
+    return 1.0
+
+
+@memo
+def t9_forget_alone():
+    alice: chooses(x in X, wpp=1 + x)
+    alice: chooses(y in X, to_be=x)
+    alice: forgets_about(x)
+    return E[alice.y]
+
+
+# T10: a vectorized function gets an array parameter as its array, when
+# called and when spot-checked
+Two = np.arange(2)
+
+
+@jax.jit
+def t10_vtake(table, i):
+    return table[i]
+
+
+@memo
+def t10_lookup[k: Two](table: ...):
+    alice: chooses(x in X, wpp=exp(t10_vtake(table, x)))
+    return E[alice.x]
+
+
 write("acceptance.edn",
       [case(t1_lit_neg),
        case(t1_lit_pos),
@@ -1931,13 +2005,21 @@ write("acceptance.edn",
        case(t5_xor_mixed),
        case(t6_cast_inner),
        case(t6_cast_imagine),
-       case(t7_knows_none)],
+       case(t7_knows_none),
+       case(t8_retag_alice_only),
+       case(t8_retag_no_read),
+       case(t8_retag_knows),
+       case(t9_forget_known_unread),
+       case(t9_forget_observed_unread),
+       case(t9_forget_alone),
+       case(t10_lookup, np.array([0.1, 0.5, -0.2]))],
       [t6_cast_expr_err],
       runtime_errors=[(t1_zero_neg,)],
       grads=[grad(t2_abs, 1.0, 0.0),
              grad(t2_abs, 1.0, -0.0),
              grad(t2_near, 1.0, 2.0),
-             grad(t2_near, 1.0, 0.0)])
+             grad(t2_near, 1.0, 0.0),
+             grad(t10_lookup, [1.0, 1.0], np.array([0.1, 0.5, -0.2]))])
 
 
 # --- the parity corpus: memo's own test suite, demo/test.py, case by case ---------

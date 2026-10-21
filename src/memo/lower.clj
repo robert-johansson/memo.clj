@@ -364,9 +364,11 @@
   whole array, silently; this makes that loud, as gen.clj spot-checks its
   batched runs. Values are read on the host, primal values for those being
   differentiated, and only at those elements: read whole, demo-empowerment's
-  Tr would be four times 89M host numbers."
+  Tr would be four times 89M host numbers. Static arguments are passed as
+  given (an array parameter as its array), primal values for those being
+  differentiated."
   [name f pos statics kws r]
-  (let [on-host (fn [v] (if (or (tape/tracked? v) (array/array? v)) (array/->clj v) v))
+  (let [as-given (fn [v] (if (tape/tracked? v) (array/stop-gradient v) v))
         slots (concat (map vector pos statics) (map (fn [[_ v s]] [v s]) kws))
         dyn (keep (fn [[v s]] (when-not s v)) slots)
         shape (broadcast-shape (map array/shape dyn))
@@ -379,7 +381,7 @@
         num (fn [v] (double (if (boolean? v) (if v 1 0) v)))]
     (doseq [[j i] (map-indexed vector idxs)]
       (let [vals (first (reduce (fn [[out d] [v s]]
-                                  (if s [(conj out (on-host v)) d] [(conj out (nth (nth cols d) j)) (inc d)]))
+                                  (if s [(conj out (as-given v)) d] [(conj out (nth (nth cols d) j)) (inc d)]))
                                 [[] 0] slots))
             args (subvec vals 0 (count pos))
             kw (zipmap (map (comp keyword first) kws) (subvec vals (count pos)))
@@ -405,8 +407,12 @@
   [{:keys [fns resolve-memo]} env {:keys [name args statics kwargs guards]}]
   (let [v (get fns name)
         f (if v @v (resolve-memo name))
-        pos (mapv #(get env %) args)
-        kws (mapv (fn [[k s static]] [k (get env s) static]) kwargs)
+        vectorized? (or (:memo/vectorized (meta v)) (:memo/vectorized (meta f)))
+        ;; a vectorized function computes with gen.array: an array parameter
+        ;; given as a vector reaches it as an array (Python memo's are JAX's)
+        given (if vectorized? #(if (sequential? %) (array/array %) %) identity)
+        pos (mapv #(given (get env %)) args)
+        kws (mapv (fn [[k s static]] [k (given (get env s)) static]) kwargs)
         kw-map (zipmap (map (comp keyword first) kws) (map second kws))
         direct #(apply f (cond-> pos (seq kws) (conj kw-map)))
         vals (concat pos (map second kws))
@@ -419,9 +425,20 @@
         (direct)
         (array/zeros dyn-shape))
 
-      (or (:memo/vectorized (meta v)) (:memo/vectorized (meta f)))
+      vectorized?
       ;; elementwise: its result has at most the arguments' extent
-      (let [r (direct)
+      (let [r (try (direct)
+                   (catch Exception e
+                     (throw (if (err/memo-error? e)
+                              e
+                              (err/memo-error
+                               (str "The vectorized function " name " failed on whole arrays: "
+                                    (or (ex-message e) (.getSimpleName (class e))))
+                               {:hint (str "A function marked ^:memo/vectorized is called once on "
+                                           "gen.array arrays: write it with gen.array's operators "
+                                           "(array/exp, not Math/exp), or remove the mark, so that "
+                                           "memo.clj calls it on each value.")
+                                :cause e})))))
             rs (array/shape r)]
         (when-not (and (clojure.core/<= (count rs) (count dyn-shape))
                        (every? true? (map #(or (= 1 %1) (= %1 %2)) (rseq rs) (rseq dyn-shape))))
@@ -444,6 +461,33 @@
 ;; -----------------------------------------------------------------------------
 ;; programs
 
+(defn- inline-value
+  "The value of a #{...} form, f of the parameters' values: a number (as
+  Python memo would have it), a boolean or a gen.array array; anything, for
+  a form only passed to host functions and memo calls (args?)."
+  [f params args?]
+  (let [form (str "#{" (pr-str (:memo/form (meta f))) "}")
+        traced? (some tape/tracked? params)
+        v (try (apply f params)
+               (catch Exception e
+                 (throw (if (err/memo-error? e)
+                          e
+                          (err/memo-error
+                           (str "The inline form " form " failed: "
+                                (or (ex-message e) (.getSimpleName (class e))))
+                           {:hint (if traced?
+                                    (str "Its parameters are being differentiated, so they reach it "
+                                         "as gen.array values: compute with gen.array's operators, "
+                                         "e.g. #{(array/* 2 a)}, not clojure.core's.")
+                                    "It is Clojure, run with the memo's parameters.")
+                            :cause e})))))]
+    (cond
+      (number? v) (host-number form v)
+      (or (boolean? v) (array/array? v) (tape/tracked? v) args?) v
+      :else (err/raise (str "The inline form " form " gave " (pr-str v) ", not a number")
+                       {:hint (str "An inline form's value is used as a number (or a boolean, or "
+                                   "a gen.array array).")}))))
+
 (defn- step [ctx env instr]
   (let [arg #(get env %)]
     (assoc env (:out instr)
@@ -463,9 +507,8 @@
              :alias (arg (:arg instr))
              :call-memo (call-memo (:resolve-memo ctx) env instr)
              :ffi (host-call ctx env instr)
-             :inline (let [f (nth (:inlines ctx) (:idx instr))
-                           v (apply f (map env (:param-order ctx)))]
-                       (if (number? v) (host-number (str "#{" (pr-str (:memo/form (meta f))) "}") v) v))))))
+             :inline (inline-value (nth (:inlines ctx) (:idx instr)) (map env (:param-order ctx))
+                                   (contains? (:inline-args ctx) (:out instr)))))))
 
 (defn- table
   "A result value as the table over the memo's axes: the axes in declaration
@@ -519,7 +562,16 @@
   [compiled ctx]
   (let [{:keys [results]} compiled
         instrs (calls-first (:instrs compiled))
-        dead (drops instrs results)]
+        dead (drops instrs results)
+        ;; #{...} forms read only as arguments of host functions and memo
+        ;; calls, which may take any value (a vector, say)
+        readers (reduce (fn [m instr] (reduce #(update %1 %2 (fnil conj #{}) (:i instr)) m (ir/inputs instr)))
+                        {} instrs)
+        ctx (assoc ctx :inline-args
+                   (set (for [{:keys [i out]} instrs
+                              :when (and (= :inline i) (not (some #{out} results))
+                                         (every? #{:ffi :call-memo} (readers out)))]
+                          out)))]
     (fn [params]
       (let [env (reduce (fn [env [instr dead]] (apply dissoc (step ctx env instr) dead))
                         params (map vector instrs dead))

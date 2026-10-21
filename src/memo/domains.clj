@@ -15,7 +15,8 @@
   on a gen.array array (so in a ^:memo/vectorized host function too);
   `(S {:x 1 :y 2})` is the member with those fields; `(fields S s)` is all
   of s's fields, in order (Python's `S._tuple(s)`)."
-  (:require [gen.array :as array]))
+  (:require [gen.array :as array]
+            [memo.errors :as err]))
 
 (declare member-value)
 
@@ -92,6 +93,19 @@
         places (into {} (map vector (rseq ks) (reductions * 1 (map sizes (rseq ks)))))]
     (->ProductDomain name ks sizes places (reduce * (vals sizes)))))
 
+(defn domain?
+  "Whether d is a domain: a vector of numbers, an enum or a product."
+  [d]
+  (or (enum? d) (product? d) (and (sequential? d) (every? number? d))))
+
+(defn not-a-domain-hint
+  "What to write instead of d, which is not a domain."
+  [d]
+  (str "A domain is a vector of numbers, an enum (defenum) or a product (defdomain)."
+       (cond
+         (number? d) (str " Python memo takes a number n as the domain {n}; write [" d "] for that.")
+         (set? d) " A set has no order: write a vector, e.g. (vec (sort s)).")))
+
 (defn values
   "The values of a domain, as a vector of numbers."
   [d]
@@ -99,8 +113,7 @@
     (enum? d) (:values d)
     (product? d) (vec (range (:size d)))
     (and (sequential? d) (every? number? d)) (vec d)
-    :else (throw (ex-info (str "Not a domain: " (pr-str d))
-                          {:hint "A domain is a vector of numbers, an enum (defenum) or a product (defdomain)."}))))
+    :else (err/raise (str "Not a domain: " (pr-str d)) {:hint (not-a-domain-hint d)})))
 
 (defn labels
   "Display labels of a domain's members: enum names, or the values."

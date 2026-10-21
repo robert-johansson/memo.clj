@@ -114,7 +114,13 @@
   resolved when called); inlines are the #{...} forms as functions of the
   parameters."
   [{:keys [name ns parsed domains defaults opts fns inlines]}]
-  (let [domain-values (into {} (map (fn [[k d]] [k (domains/values d)])) domains)
+  (let [domain-values (into {} (map (fn [[k d]]
+                                      (when-not (domains/domain? d)
+                                        (err/raise (str k " is not a domain: " (pr-str d))
+                                                   {:hint (domains/not-a-domain-hint d)
+                                                    :loc {:name name}}))
+                                      [k (domains/values d)]))
+                            domains)
         compiled (analyze/analyze parsed domain-values opts)
         problems (ir/check compiled)
         _ (when (seq problems)
@@ -130,9 +136,19 @@
         _ (swap! definitions inc)]
     (with-meta
       (fn [& args]
-        (if (map? (last args))
-          (call (butlast args) (last args))
-          (call args {})))
+        (try
+          (if (map? (last args))
+            (call (butlast args) (last args))
+            (call args {}))
+          ;; memo calls nest on the JVM's stack (Python memo's RecursionError)
+          (catch StackOverflowError _
+            (err/raise (str "Maximum recursion depth exceeded in memo " name)
+                       {:hint (str "A recursive memo needs a base case: a condition on a parameter, "
+                                   "as in (if (> t 0) (f [..] (- t 1)) 0), that stops its memo calls. "
+                                   "A deep one needs a bigger stack: call it on a thread with one, "
+                                   "(Thread. nil f \"memo\" (* 1024 1024 1024)), or warm a ^:cache "
+                                   "memo in steps.")
+                        :loc {:name name}}))))
       {:memo/name name
        :memo/doc (:doc parsed)
        :memo/params (mapv :name params)
@@ -202,6 +218,20 @@
         refs (ast/collect parsed)
         domain-syms (sort (into (:domain-names refs) (map second axes)))
         param-syms (mapv :name (:params parsed))
+        _ (doseq [d domain-syms]
+            (when (some #{d} param-syms)
+              ;; Python memo would take the parameter's value as the domain
+              (err/raise (str "The name `" d "` is already used for a static parameter and "
+                              "cannot be used as a domain.")
+                         {:hint (str "Python memo would use the parameter's value as the domain "
+                                     "(" d " = 10 gives the domain {10}); memo.clj reads domains "
+                                     "from vars. Rename the parameter.")
+                          :loc {:name mname}}))
+            (when-not (or (contains? &env d) (resolve d) (domains/builtins d))
+              (err/raise (str "Unknown domain " d)
+                         {:hint (str "Domains must be defined (as vectors or with defenum) before "
+                                     "the defmemo that uses them.")
+                          :loc {:name mname}})))
         fn-ref (fn [f]
                  (let [v (resolve f)]
                    (cond
@@ -242,7 +272,19 @@
   "Print a memo's result as a table, one row per cell of its axes (Python
   memo's print_table)."
   [m result]
-  (let [{:memo/keys [axes domains domain-names num-results name]} (meta m)
+  (let [m (if (var? m) @m m)
+        {:memo/keys [axes domains domain-names num-results name shape]} (meta m)
+        _ (when-not name
+            (err/raise "print-table takes a memo and its result"
+                       {:hint "(print-table m (m args...)), with m a defmemo's model."}))
+        result (if (or (number? result) (boolean? result) (array/array? result))
+                 result
+                 (array/array result))
+        want (if (= 1 num-results) shape (into [num-results] shape))
+        _ (when (not= want (array/shape result))
+            (err/raise (str "print-table: the result has shape " (array/shape result)
+                            ", but " name "'s results have shape " want)
+                       {:hint (str "Pass " name "'s own result: (print-table " name " (" name " ...)).")}))
         data (array/->clj result)
         cells (reduce (fn [acc d] (for [a acc i (range (count (domains/values d)))] (conj a i)))
                       [[]] domains)

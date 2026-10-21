@@ -40,9 +40,11 @@
       :else (recur (ex-cause e)))))
 
 (defn format-error
-  "e rendered as Python memo renders its notes."
+  "e rendered as Python memo renders its notes: the memo error inside it,
+  when Clojure wrapped one (as a defmemo that fails to compile does)."
   [e]
-  (let [{:memo/keys [hint user loc frame-ctxt]} (ex-data e)]
+  (let [e (or (root-memo-error e) e)
+        {:memo/keys [hint user loc frame-ctxt]} (ex-data e)]
     (str "memo error: " (ex-message e)
          (when loc
            (str "\n  in: " (when (:name loc) (str "defmemo " (:name loc)))

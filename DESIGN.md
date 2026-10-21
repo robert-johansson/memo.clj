@@ -205,7 +205,13 @@ depends on them.
   still answers correctly. memo.clj makes the same swap, marks the frame,
   and makes a later read a compile error that names the cause and the
   repair, `observes-that`. (memo-clj rejected the observation itself,
-  which loses Python memo's valid answers.)
+  which loses Python memo's valid answers.) *The first acceptance pass
+  (2026-10-21) found the nested case:* a mind inside the observer that
+  observed the target first holds its own alias of it, which the
+  observation's repoint does not reach, and beliefs along its old dim.
+  Python memo fails with a shape error when they are read; memo.clj marks
+  them, and reading them is the same compile error, with the repair
+  `:knows` (a knows-copy shares the value and follows it).
 - **Var** is computed centered (decided, 2026-10-20), E[(X − E[X])²], as memo-clj does: Python
   memo's E[X²] − E[X]² is the same number but cancels in float32. A
   redundant Var (everything known) is zeros, as in Python memo.
@@ -294,6 +300,12 @@ kept in the upstream ledger (§9).
 - **Assertions instead of hints.** `Predict`/`EU` at the top level, and two
   `wants` with the same goal name, raise a bare `AssertionError`.
 - **`self` is not reserved** (§8).
+- **Forgetting a choice another mind refers to** (the first acceptance
+  pass). After `alice: forgets_about(x)`, reading a copy of alice.x that
+  bob holds (through `knows`, or an observation), or bob's beliefs that
+  vary with it, is a `KeyError` when the memo is defined. memo.clj marks
+  them, and reading one is a compile error; unread, they are harmless in
+  both.
 - **Integer arrays to negative powers are garbage** (the first acceptance
   pass). Under `jit`, `x ** -1` over int32 `[1 2 3]` is
   `[1 0 2111105451]`; eager JAX rejects it ("Integers cannot be raised to
