@@ -833,11 +833,26 @@ gen.array's own `+` counts booleans as 1 and 0 (Julia's rule), so the same
 expression gives other numbers outside a `defmemo`.
 
 **There are no bitwise operators.** `and`, `or`, `xor` and `not` work on
-booleans (and on the literals 0 and 1). Python memo computes `^` and `~`
-bitwise on other integers; memo.clj makes that an error:
+booleans and on integers that are 0 or 1, such as a `Bool` choice, where
+bitwise and logical agree. As in JAX, the result is a boolean when every
+operand is one and an integer otherwise (so `+` then adds). `Pr` with
+several conditions is their `and`:
 
 ```clojure
-;; error: memo.clj computes xor on booleans only
+(defmemo both [] []
+  (alice :chooses [p Bool] :uniformly)
+  (alice :chooses [q Bool] :uniformly)
+  (return (Pr alice.p alice.q)))
+
+(array/->clj (both))
+;=> 0.25
+```
+
+Python memo computes `&`, `|`, `^` and `~` bitwise on other integers;
+memo.clj makes that an error:
+
+```clojure
+;; error: memo.clj computes xor on booleans and on 0 and 1 only
 (defmemo bitwise [[x X] [y Y]] []
   (return (xor x y)))
 
@@ -1514,9 +1529,9 @@ What memo.clj computes differently, on purpose:
   `:wpp (exp ...)` (past about 709 instead of 88), and `:to-maximize` ties
   (0.1 + 0.2 ties with 0.3 in float32 only).
 - **No bitwise operators.** `and`, `or`, `xor` and `not` are logical, on
-  booleans and the literals 0 and 1. Python memo computes `&`, `|`, `^`
-  and `~` bitwise on other integers (its `~x` is `True ^ x`, so `~2` is
-  3); memo.clj makes those an error.
+  booleans and on integers that are 0 or 1. Python memo computes `&`,
+  `|`, `^` and `~` bitwise on other integers (its `~x` is `True ^ x`, so
+  `~2` is 3); memo.clj makes those an error.
 - **Loud errors where Python memo is silent or stuck.**
   - Differentiating through a tabulated host function is an error; Python
     memo gives a zero gradient.

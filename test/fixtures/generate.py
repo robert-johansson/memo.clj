@@ -1830,6 +1830,80 @@ def t4_host_bigint[x: X]():
     return t4_triple(x)
 
 
+# T5: and, or, xor, not and Pr with several conditions on 0/1 integers,
+# Bool choices among them; the result is an integer unless every operand is
+# a boolean, so + adds
+@memo
+def t5_pr_two():
+    alice: chooses(p in Bool, uniformly)
+    alice: chooses(q in Bool, uniformly)
+    return Pr[alice.p, alice.q]
+
+
+@memo
+def t5_and_table[p: Bool, q: Bool]():
+    return p and q
+
+
+@memo
+def t5_or_table[p: Bool, q: Bool]():
+    return p or q
+
+
+@memo
+def t5_xor_table[p: Bool, q: Bool]():
+    return p ^ q
+
+
+@memo
+def t5_not_table[p: Bool]():
+    return not p
+
+
+@memo
+def t5_and_sum[p: Bool, q: Bool]():
+    return (p and q) + (p and q)
+
+
+@memo
+def t5_and_literal_sum[p: Bool]():
+    return ((p == 1) and 1) + ((p == 1) and 1)
+
+
+@memo
+def t5_xor_mixed[p: Bool, q: Bool]():
+    return p ^ (q == 1)
+
+
+# T6: the cast binds top-level statements and the agents expressions name
+@memo
+def t6_cast_inner():
+    cast: [alice, bob]
+    alice: thinks[ carol: chooses(x in X, wpp=1) ]
+    return 0
+
+
+@memo
+def t6_cast_imagine():
+    cast: [alice]
+    alice: chooses(x in X, wpp=1)
+    return alice[imagine[carol: chooses(y in X, wpp=1), 1.0]]
+
+
+def t6_cast_expr_err():
+    cast: [alice]
+    alice: thinks[ carol: chooses(y in X, wpp=1) ]
+    return alice[E[carol.y]]
+
+
+# T7: knows with no names is no statement
+@memo
+def t7_knows_none():
+    alice: chooses(x in X, wpp=1)
+    bob: knows()
+    return E[alice.x]
+
+
 write("acceptance.edn",
       [case(t1_lit_neg),
        case(t1_lit_pos),
@@ -1846,8 +1920,19 @@ write("acceptance.edn",
        case(t4_host_ratio),
        case(t4_static_ratio),
        case(t4_inline_ratio),
-       case(t4_host_bigint)],
-      [],
+       case(t4_host_bigint),
+       case(t5_pr_two),
+       case(t5_and_table),
+       case(t5_or_table),
+       case(t5_xor_table),
+       case(t5_not_table),
+       case(t5_and_sum),
+       case(t5_and_literal_sum),
+       case(t5_xor_mixed),
+       case(t6_cast_inner),
+       case(t6_cast_imagine),
+       case(t7_knows_none)],
+      [t6_cast_expr_err],
       runtime_errors=[(t1_zero_neg,)],
       grads=[grad(t2_abs, 1.0, 0.0),
              grad(t2_abs, 1.0, -0.0),

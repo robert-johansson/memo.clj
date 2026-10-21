@@ -161,7 +161,8 @@
       (let [[state l] (eval-expr state (first args))
             [state r] (eval-expr state (second args))
             [state out] (fresh state (str "op_" (name op)))]
-        [(emit state {:i :op :op op :out out :args [(:tag l) (:tag r)]})
+        [(emit state (cond-> {:i :op :op op :out out :args [(:tag l) (:tag r)]}
+                       (:what e) (assoc :what (:what e))))
          {:tag out :known (and (:known l) (:known r)) :deps (into (:deps l) (:deps r))}])
 
       (contains? #{:exp :abs :log :uadd :neg :inv} op)

@@ -18,6 +18,8 @@
     {:i :domain :out s :dim d :values [v…]}  a domain's values along dim d
     {:i :ones   :out s :dim d :size n}       ones along dim d
     {:i :op     :out s :op k :args [s…]}     elementwise; k in memo.ast's ops
+                                             (:what, optional: the construct
+                                             written, for error messages)
     {:i :where  :out s :args [c t f]}        elementwise choice
     {:i :sum    :out s :arg s :dims [d…]}    sum over dims (kept, size 1)
     {:i :max    :out s :arg s :dims [d…]}    maximum over dims (kept, size 1)

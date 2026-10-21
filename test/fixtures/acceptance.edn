@@ -51,8 +51,41 @@
  :value 1.5} {:model :t4-host-bigint
  :args []
  :shape [3]
- :value [0.0 3.0 6.0]}]
- :errors {}
+ :value [0.0 3.0 6.0]} {:model :t5-pr-two
+ :args []
+ :shape []
+ :value 0.25} {:model :t5-and-table
+ :args []
+ :shape [2 2]
+ :value [[0.0 0.0] [0.0 1.0]]} {:model :t5-or-table
+ :args []
+ :shape [2 2]
+ :value [[0.0 1.0] [1.0 1.0]]} {:model :t5-xor-table
+ :args []
+ :shape [2 2]
+ :value [[0.0 1.0] [1.0 0.0]]} {:model :t5-not-table
+ :args []
+ :shape [2]
+ :value [1.0 0.0]} {:model :t5-and-sum
+ :args []
+ :shape [2 2]
+ :value [[0.0 0.0] [0.0 2.0]]} {:model :t5-and-literal-sum
+ :args []
+ :shape [2]
+ :value [0.0 2.0]} {:model :t5-xor-mixed
+ :args []
+ :shape [2 2]
+ :value [[0.0 1.0] [1.0 0.0]]} {:model :t6-cast-inner
+ :args []
+ :shape []
+ :value 0.0} {:model :t6-cast-imagine
+ :args []
+ :shape []
+ :value 1.0} {:model :t7-knows-none
+ :args []
+ :shape []
+ :value 1.0}]
+ :errors {:t6-cast-expr-err "agent `carol` is not in the cast"}
  :runtime-errors {:t1-zero-neg "zero to a negative power"}
  :grads [{:model :t2-abs
  :args [0.0]

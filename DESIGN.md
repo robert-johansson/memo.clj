@@ -313,7 +313,7 @@ Every code block and code-led table row has a twin run in both
 (`handbook.py`, `handbook_test.clj`). Where the Handbook and Python memo
 disagree, memo.clj follows Python memo:
 - `~x` is listed as bitwise inversion; memo computes `True ^ x`, so `~2`
-  is 3, not -3 (memo.clj: `not` on booleans only, §5).
+  is 3, not -3 (memo.clj: `not` on booleans and on 0 and 1 only, §5).
 - `observes [alice.x] is y` with `y` "the observer's own choice": a bare
   `y` names the enclosing frame's choices, and an agent's own choice is
   rejected ("Observation of unknown choice"); it is written `bob.y`.
@@ -458,7 +458,11 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
 - **No bitwise operators** (slice 1; decided, 2026-10-20). `&`, `|`, `^` and `not` are logical on
   booleans and on the literals 0 and 1, which covers memo's own uses
   (`to_be` builds `1 & (x == v)`). Python memo computes them bitwise on other
-  integers; gen.array cannot, so those are a loud error.
+  integers; gen.array cannot, so those are a loud error. *Widened by the
+  first acceptance pass (2026-10-21):* on integers that are all 0 or 1 too
+  (a `Bool` choice, `Pr[alice.p, alice.q]`), read on the host, and with
+  JAX's result type: a boolean when every operand is one, an integer
+  otherwise, so `(+ (and b 1) (and b 1))` is 2, as in Python memo.
 - **Memo calls run first** (2026-10-20, from demo-mdp). The lowering runs
   every `:call-memo` instruction, with what it reads (statics), before the
   rest of the program, as Python memo hoists its calls out of the kernel.

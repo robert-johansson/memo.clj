@@ -12,9 +12,11 @@
     them bool, where gen.array converts booleans to integers (Julia's rule,
     so (array/+ true true) is 2). Booleans have no - in JAX: there it is a
     TypeError, here a loud error.
-  - &, |, ^ and not are logical on booleans and on the literals 0 and 1.
-    Python memo computes them bitwise on other integers; gen.array has no
-    bitwise operators, so those are a loud error.
+  - &, |, ^ and not are logical on booleans and on integers that are 0 or
+    1, where bitwise is logical; as in JAX, the result is a boolean when
+    every operand is one, an integer otherwise. Python memo computes them
+    bitwise on other integers; gen.array has no bitwise operators, so those
+    are a loud error.
   - nan_to_num maps NaN to 0 and ±inf to ± the dtype's largest value
     (DESIGN.md §2.4): Python memo's 0/0 = 0, and the 0 · log 0 = 0 of its
     entropies.
@@ -96,9 +98,26 @@
   [x]
   (if (bool? x) (where x 1 0) x))
 
-(defn- as-bool [x] (if (bool? x) x (not (clojure.core/== x 0))))
+(defn- as-bool [x]
+  (cond (bool? x) x
+        (number? x) (not (clojure.core/== x 0))
+        :else (array/!= x 0)))
 
 (defn- integral? [x] (if (number? x) (integer? x) (not (float-max (array/dtype x)))))
+
+(defn- unit-valued?
+  "Whether x is a boolean, the literal 0 or 1, or integers that are all 0 or
+  1 (read on the host)."
+  [x]
+  (cond (bool? x) true
+        (number? x) (unit-literal? x)
+        (integral? x) (array/all-true? (array/logical-or (== x 0) (== x 1)))
+        :else false))
+
+(defn- as-int
+  "A logical result as JAX gives it from integer operands: 1 and 0."
+  [r]
+  (if (boolean? r) (if r 1 0) (where r 1 0)))
 
 (defn- python-pow
   "x ** y on host numbers, as Python computes it."
@@ -142,13 +161,14 @@
                            "(a TypeError there). Convert first, e.g. (if b 1 0).")})))
 
 (defn- logical [op f x y]
-  (if (and (or (bool? x) (unit-literal? x)) (or (bool? y) (unit-literal? y)))
-    (f (as-bool x) (as-bool y))
-    (err/raise (str "memo.clj computes " op " on booleans only")
-               {:hint (str "Python memo computes " op " bitwise on integers, which gen.array "
-                           "cannot do. Compare first, e.g. (= x 1).")})))
+  (if (and (unit-valued? x) (unit-valued? y))
+    (let [r (f (as-bool x) (as-bool y))]
+      (if (and (bool? x) (bool? y)) r (as-int r)))
+    (err/raise (str "memo.clj computes " op " on booleans and on 0 and 1 only")
+               {:hint (str "Python memo computes " op " bitwise on other integers, which "
+                           "gen.array cannot do. Compare first, e.g. (= x 1).")})))
 
-(defn- run-op [op [x y]]
+(defn- run-op [op [x y] what]
   (case op
     :add (if (and (bool? x) (bool? y)) (array/logical-or x y) (+ x y))
     :mul (if (and (bool? x) (bool? y)) (array/logical-and x y) (* x y))
@@ -162,7 +182,7 @@
     :lte (<= (as-number x) (as-number y))
     :gt (> (as-number x) (as-number y))
     :gte (>= (as-number x) (as-number y))
-    :and (logical "and" array/logical-and x y)
+    :and (logical (or what "and") array/logical-and x y)
     :or (logical "or" array/logical-or x y)
     :xor (logical "xor" array/!= x y)
     :exp (exp (as-number x))
@@ -170,12 +190,13 @@
     :abs (if (bool? x) x (abs* x))
     :uadd x
     :neg (do (no-bool "unary -" x) (array/negate x))
-    :inv (if (or (bool? x) (unit-literal? x))
-           (array/logical-not (as-bool x))
-           (err/raise "memo.clj computes not on booleans only"
-                      {:hint (str "Python memo computes it as True ^ x, bitwise on "
-                                  "integers, which gen.array cannot do. Compare first, "
-                                  "e.g. (= x 0).")}))))
+    :inv (cond
+           (bool? x) (array/logical-not x)
+           (unit-valued? x) (as-int (if (number? x) (clojure.core/== x 0) (array/logical-not (as-bool x))))
+           :else (err/raise "memo.clj computes not on booleans and on 0 and 1 only"
+                            {:hint (str "Python memo computes it as True ^ x, bitwise on "
+                                        "other integers, which gen.array cannot do. Compare "
+                                        "first, e.g. (= x 0).")}))))
 
 ;; -----------------------------------------------------------------------------
 ;; memo calls
@@ -431,7 +452,7 @@
              :param (get env (:name instr))
              :domain (along (:values instr) (:dim instr))
              :ones (array/ones (into [(:size instr)] (repeat (:dim instr) 1)))
-             :op (run-op (:op instr) (mapv arg (:args instr)))
+             :op (run-op (:op instr) (mapv arg (:args instr)) (:what instr))
              :where (let [[c t f] (map arg (:args instr))] (where c t f))
              :sum (reduce-dims array/sum (arg (:arg instr)) (:dims instr))
              :max (reduce-dims array/max (arg (:arg instr)) (:dims instr))

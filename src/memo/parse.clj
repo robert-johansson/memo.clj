@@ -303,7 +303,9 @@
           (do (when (empty? args)
                 (err/raise "Incorrect syntax in (Pr ...)" {:loc loc}))
               (let [parsed (mapv #(parse-expr % pctxt) args)
-                    conj-expr (reduce (fn [acc e] (op-node :and [acc e] loc)) parsed)]
+                    conj-expr (reduce (fn [acc e] (assoc (op-node :and [acc e] loc)
+                                                         :what "Pr with several conditions"))
+                                      parsed)]
                 {:node :expect :expr conj-expr
                  :reduction :expectation :warn true :surface 'Pr
                  :surface-n (count parsed)
@@ -508,7 +510,6 @@
 
 (defn parse-agent-stmt [who args form pctxt]
   (let [loc (loc-of form pctxt)
-        _ (check-cast who pctxt loc)
         _ (when (= 'self who)
             (err/raise "`self` cannot be the name of an agent"
                        {:hint (str "self is how an agent refers to itself (self.x is "
@@ -541,9 +542,7 @@
             :how :probability :loc loc}])
 
       (= kw :knows)
-      (do (when (empty? rest-args)
-            (err/raise "(:knows ...) needs at least one choice reference" {:loc loc}))
-          (mapv #(knows-ref % pctxt loc who) rest-args))
+      (mapv #(knows-ref % pctxt loc who) rest-args)   ; none is no statement, as in Python memo
 
       (= kw :thinks)
       (mapv (fn [s] {:node :with-stmt :who who :stmt s :loc (:loc s)})
@@ -691,6 +690,12 @@
                        {:loc (loc-of form pctxt)})
 
             :else
-            (recur (rest forms)
-                   (into stmts (parse-stmt-form form pctxt))
-                   retvals))))))))
+            ;; the cast binds the memo's own statements and the agents its
+            ;; expressions name, not the agents inside a mind or imagine
+            ;; (as Python memo checks it)
+            (do (when (and (seq? form) (symbol? (first form))
+                           (not (contains? reserved-heads (first form))))
+                  (check-cast (first form) pctxt (loc-of form pctxt)))
+                (recur (rest forms)
+                       (into stmts (parse-stmt-form form pctxt))
+                       retvals)))))))))

@@ -417,9 +417,9 @@
 (def divergences
   "Where memo.clj does not do what Python memo does, on purpose: memo.clj's
   error, at compile time or when called, and why."
-  {:op-xor-int {:call-error "memo.clj computes xor on booleans only"
+  {:op-xor-int {:call-error "memo.clj computes xor on booleans and on 0 and 1 only"
                 :why "no bitwise operators (DESIGN.md §5): Python memo's ^ on integers is bitwise"}
-   :op-inv-int {:call-error "memo.clj computes not on booleans only"
+   :op-inv-int {:call-error "memo.clj computes not on booleans and on 0 and 1 only"
                 :why (str "no bitwise operators (DESIGN.md §5): Python memo's ~x is True ^ x, so ~2 is 3, "
                           "not the bitwise inversion the Handbook describes")}
    :inline-agent {:compile-error "Cannot reference alice.x inside the inline escape hatch #{...}"

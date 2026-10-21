@@ -63,6 +63,41 @@
 (defmemo t4-inline-ratio [] [] (return #{(/ 3 2)}))
 (defmemo t4-host-bigint [[x X]] [] (return (t4-triple x)))
 
+;; T5: and, or, xor, not and Pr with several conditions on 0/1 integers;
+;; the result is an integer unless every operand is a boolean
+
+(defmemo t5-pr-two [] []
+  (alice :chooses [p Bool] :uniformly)
+  (alice :chooses [q Bool] :uniformly)
+  (return (Pr alice.p alice.q)))
+
+(defmemo t5-and-table [[p Bool] [q Bool]] [] (return (and p q)))
+(defmemo t5-or-table [[p Bool] [q Bool]] [] (return (or p q)))
+(defmemo t5-xor-table [[p Bool] [q Bool]] [] (return (xor p q)))
+(defmemo t5-not-table [[p Bool]] [] (return (not p)))
+(defmemo t5-and-sum [[p Bool] [q Bool]] [] (return (+ (and p q) (and p q))))
+(defmemo t5-and-literal-sum [[p Bool]] [] (return (+ (and (= p 1) 1) (and (= p 1) 1))))
+(defmemo t5-xor-mixed [[p Bool] [q Bool]] [] (return (xor p (= q 1))))
+
+;; T6: the cast binds top-level statements and the agents expressions name
+
+(defmemo t6-cast-inner [] []
+  (cast [alice bob])
+  (alice :thinks (carol :chooses [x X] :wpp 1))
+  (return 0))
+
+(defmemo t6-cast-imagine [] []
+  (cast [alice])
+  (alice :chooses [x X] :wpp 1)
+  (return (as alice (imagine (carol :chooses [y X] :wpp 1) 1.0))))
+
+;; T7: knows with no names is no statement
+
+(defmemo t7-knows-none [] []
+  (alice :chooses [x X] :wpp 1)
+  (bob :knows)
+  (return (E alice.x)))
+
 ;; against Python memo
 
 (def fixture (ts/fixture "acceptance.edn"))
@@ -72,6 +107,18 @@
 
 (deftest gradients-match-jax
   (ts/check-grads 'memo.acceptance-test fixture))
+
+(def error-forms
+  {:t6-cast-expr-err
+   '(defmemo t6-cast-expr-err [] []
+      (cast [alice])
+      (alice :thinks (carol :chooses [y X] :wpp 1))
+      (return (as alice (E carol.y))))})
+
+(deftest compile-errors-match-python-memo
+  (doseq [[k message] (:errors fixture)]
+    (testing (name k)
+      (is (= message (some-> (ts/compile-error 'memo.acceptance-test (error-forms k)) ex-message))))))
 
 (deftest runtime-errors-match-python-memo
   (doseq [[k message] (:runtime-errors fixture)]
@@ -135,3 +182,19 @@
       (let [e (thrown thunk)]
         (is (err/memo-error? e))
         (is (re-find #"an integer beyond 64 bits" (str (some-> e ex-message))))))))
+
+(defmemo t5-and-two [[x X] [q Bool]] [] (return (and x q)))
+
+(defmemo t5-pr-two-of-three [] []
+  (alice :chooses [x X] :uniformly)
+  (alice :chooses [q Bool] :uniformly)
+  (return (Pr alice.x alice.q)))
+
+(deftest logical-operators-on-other-integers-are-loud
+  ;; Python memo computes them bitwise there (2 & 1 is 0)
+  (let [e (thrown #(t5-and-two))]
+    (is (err/memo-error? e))
+    (is (= "memo.clj computes and on booleans and on 0 and 1 only" (some-> e ex-message))))
+  (testing "the message names the construct written"
+    (is (= "memo.clj computes Pr with several conditions on booleans and on 0 and 1 only"
+           (some-> (thrown #(t5-pr-two-of-three)) ex-message)))))
