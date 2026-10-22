@@ -1765,12 +1765,13 @@ What memo.clj computes differently, on purpose:
   (0.1 + 0.2 ties with 0.3 in float32 only). Values equal in exact
   arithmetic can also differ in the last bit between the JVM, MLX's CPU
   and Metal, so `:to-maximize` breaks such a tie differently on each.
-- **MLX's CPU in float32** adds the terms of a sum one at a time, so its
-  error grows with the sum's length: n copies of 1/n sum to 1 − 1.4e-5 at
-  n = 10,001 and to 1 − 1.2e-3 at a million, where Metal and JAX are
-  within one rounding of 1. Large models drift by that much (memo's
-  scalar and empowerment demos, by up to 5e-5 relative). Run MLX's CPU in
-  float64 (`-Dgen.mlx.dtypes=64`), as memo.clj's tests do.
+- **MLX's CPU in float32** sums in blocks of 256 terms, adding the terms
+  within a block one at a time. A long sum of unequal terms therefore
+  carries more rounding there than on Metal or under JAX.
+  - memo's empowerment demo, entropies over half a million cells, is
+    1.9e-5 from float64 on MLX's CPU, against 3.6e-6 under JAX.
+  - Run MLX's CPU in float64 (`-Dgen.mlx.dtypes=64`), as memo.clj's tests
+    do.
 - **Integers** are 64-bit on the JVM backend and 32-bit on MLX and in
   Python memo, which wrap silently past 2^31: `(* x 1000000000)` at x = 3
   is 3000000000 on the JVM, -1294967296 on MLX and in Python memo. A

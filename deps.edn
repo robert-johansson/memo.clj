@@ -5,7 +5,7 @@
         ;; on both projects and its own gen.clj pin wins, so a GenGDT that
         ;; takes this commit must pin the same gen.clj. :dev uses the working copy.
         gen.clj/gen.clj {:git/url "file:///Users/robert/code/gen.clj"
-                         :git/sha "34e9a44305c27f0388bc8d990f9d71d9c3c8e132"}}
+                         :git/sha "bd6b8b4b18c3906dda4f29a311088565f8f690b2"}}
 
  :aliases
  {;; clojure -X:test          every test
