@@ -1,11 +1,11 @@
 {:paths ["src"]
 
  :deps {org.clojure/clojure {:mvn/version "1.12.6"}
-        ;; gen.clj pinned to a commit of the local repository, the same pin as
-        ;; GenGDT's (GenGDT depends on both projects and tools.deps resolves one
-        ;; gen.clj, so move the two pins together). :dev uses the working copy.
+        ;; gen.clj pinned to a commit of the local repository. GenGDT depends
+        ;; on both projects and its own gen.clj pin wins, so a GenGDT that
+        ;; takes this commit must pin the same gen.clj. :dev uses the working copy.
         gen.clj/gen.clj {:git/url "file:///Users/robert/code/gen.clj"
-                         :git/sha "f646e97080cd6a505a835919fc4d31562c20f430"}}
+                         :git/sha "34e9a44305c27f0388bc8d990f9d71d9c3c8e132"}}
 
  :aliases
  {;; clojure -X:test          every test

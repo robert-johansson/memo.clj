@@ -38,14 +38,17 @@ clojure -X:test:fast                  # without the ^:slow tests (three demos, m
                                       #   demo-empowerment needing the 8 GB heap :test sets; the Python round trip, a fuzz campaign)
 clojure -X:test:mlx                   # on MLX (Metal, float32)
 clojure -J-Dgen.mlx.device=cpu -J-Dgen.mlx.dtypes=64 -X:test:mlx   # MLX's CPU, float64
+                                      #   (not float32: its sequential sums fail two demos, memoclj-rkvc)
 clojure -X:dev:test                   # against gen.clj's working copy
 memo-mcp/venv/bin/python -I test/fixtures/generate.py   # regenerate the fixtures
 MEMO_DEMOS=demo-rsa,demo-fib memo-mcp/venv/bin/python -I test/fixtures/generate.py   # only those demos
 clojure -X:test:fuzz :n 2000 :seed 1  # a differential fuzzing campaign against Python memo (memo.fuzz)
 ```
 
-gen.clj is pinned to GenGDT's commit (`deps.edn`); move the two pins together.
-After a fresh clone, run `clojure -X:deps prep` once (gen.clj compiles its
+gen.clj is pinned to a commit (`deps.edn`). GenGDT pins gen.clj too, and its
+pin silently overrides this one, so when GenGDT moves its memo.clj pin, its
+gen.clj pin must move to the one that memo.clj commit names
+(`gengdt.pins-test` checks it). After a fresh clone, run `clojure -X:deps prep` once (gen.clj compiles its
 Java binding).
 
 ## Layers

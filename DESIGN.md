@@ -27,6 +27,9 @@ In order:
    to gen.array programs, giving Python memo's numbers on every test and
    demo of its own.
    - It runs on every gen.clj backend: the JVM, MLX's CPU, Metal and CUDA.
+     Its whole suite passes on each (2026-10-22, gen.clj 34e9a44): the JVM
+     and Metal, MLX's CPU in float64 on the Mac and on x86, and CUDA on an
+     RTX PRO 6000 (fenrir). MLX's CPU in float32 is not tested (§5).
    - Gradients with respect to parameters come from gen.array's reverse-mode
      autodiff.
 2. **M2 — the GFI bridge.** A memo model is a gen.clj object:
@@ -482,7 +485,11 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
     along a leading axis for vmap over parameter grids or particles.
 - **Dtypes:** float64 on the JVM, float32 on MLX. Python memo runs float32
   under JAX, so parity tolerances are set per test. A few constructs give a
-  different answer under float64, not a nearby one (§2.4, §13).
+  different answer under float64, not a nearby one (§2.4, §13). MLX's CPU
+  in float32 sums sequentially (an error growing with the sum's length:
+  1.4e-5 at 10,001 terms), which puts demo-scalar and demo-empowerment
+  outside float32's tolerance there; MLX's CPU is tested in float64
+  (measured 2026-10-22, on the Mac and on x86; bean memoclj-rkvc).
 - **Results are full tables** (slice 1; decided, 2026-10-20). A call returns the table
   over the memo's axes in declaration order and at their full sizes; several
   returns are stacked on a leading axis. Python memo leaves size 1 the axes
