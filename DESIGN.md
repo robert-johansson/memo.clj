@@ -539,7 +539,7 @@ passes on the JVM, Metal and MLX's CPU in float64 on the Mac, and on MLX's
 CPU in float64 and CUDA on fenrir; each of eleven planted bugs is caught. gen.clj's GFI laws run over two models that trace memo
 distributions: the test puts the `test/` of the gen.clj in use (the pin's
 checkout, or the working copy under `:dev`) on the classpath, so the laws
-are that gen.clj's own. Still to do: the first client (§6.5), and the
+are that gen.clj's own. The first client is done (§6.5). Still to do: the
 speed research (§6.4, question 3).
 
 ### 6.1 What already works, and what is missing (measured 2026-10-22, gen.clj 34e9a44)
@@ -701,10 +701,27 @@ speed research (§6.4, question 3).
 
 ### 6.5 The first client
 
-GenGDT's observer infers the synthetic agent's goal value and temperature
-from its choices. That is third-person inference, with the agent's policy,
-`choose`, as an `mg/dist`. It runs by HMC, or on a grid with gen.clj's
-enumerative inference, once `eu` is vectorized (§6.1).
+GenGDT's observer infers the synthetic agent's goal value and temperature.
+That is third-person inference, with the agent's policy, `choose`, as an
+`mg/dist`. It runs by HMC, or on a grid with gen.clj's enumerative
+inference, once `eu` is vectorized (§6.1).
+
+*Done 2026-10-22* (GenGDT 1e99526, `gengdt.memo-agent/observer`):
+- **Wiring.** GenGDT pins memo.clj b7ef474. The stand-in is replaced by
+  `mg/dist`. `eu` and the affect report's mean are in gen.array's
+  operators, so v differentiates as β does.
+- **Identifiability.** The agent's choices alone identify only β·v,
+  because EU is v times an expected satisfaction. The observer therefore
+  uses every observation of a life: choices, outcomes and affect reports.
+  The reports' mean is v times a difference of satisfactions, and that
+  separates the two.
+- **Results at 150 cycles.**
+  - β's and v's gradients agree with finite differences.
+  - The grid posterior equals the hand posterior to 1e-9.
+  - v is identified: 2.00 ± 0.24, the true value 2.0.
+  - β is covered, but with a long tail: 6.2 ± 2.1, the true value 4.0.
+  - 200 HMC steps agree with the grid on v.
+- **Tests.** Four planted bugs in GenGDT's code are each caught.
 
 ## 7. Bounded minds (M3)
 
