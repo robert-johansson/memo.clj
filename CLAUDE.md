@@ -59,6 +59,7 @@ Java binding).
 | IR | `memo.ir`: single-assignment instructions over dims, with `check` |
 | lowering | `memo.lower`: the exact lowering, IR → gen.array |
 | API | `memo.core` (`defmemo`, calls, `print-table`, `program`), `memo.domains` (`defenum`), `memo.errors` |
+| GFI bridge (M2) | `memo.gen`: `dist` (a memo as a gen.clj distribution), `deterministic` (as a deterministic generative function); DESIGN.md §6 |
 
 ## Rules
 

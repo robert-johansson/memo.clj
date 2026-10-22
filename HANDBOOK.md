@@ -33,7 +33,10 @@ License, Copyright (c) 2024-2025 Kartik Chandra and Tony Chen.*
    (`imagine`).
 4. **[Running and Configuring memos](#running-and-configuring-memos)**:
    calling a model, reading its results, options, gradients and errors.
-5. **[Differences from Python memo](#differences-from-python-memo)**.
+5. **[Minds in gen.clj models](#minds-in-genclj-models)**: a memo as a
+   gen.clj distribution or deterministic generative function
+   (`memo.gen`).
+6. **[Differences from Python memo](#differences-from-python-memo)**.
 
 ## Setting Up
 
@@ -1589,6 +1592,125 @@ A memo that recurses without end, or too deep for the JVM's stack, is the
 memo error "Maximum recursion depth exceeded in memo ..." (Python memo's
 `RecursionError`). Its hint gives the two remedies: a base case, or a
 thread with a bigger stack.
+
+---
+
+# Minds in gen.clj models
+
+A memo is a function from its parameters to a table. `memo.gen` makes it
+part of a gen.clj model, where a scientist's model of a person can trace,
+condition on and fit what the person's mind does:
+
+- `mg/dist` turns a memo whose return is a probability over its axes
+  into a gen.clj distribution;
+- `mg/deterministic` turns any memo into a deterministic generative
+  function.
+
+```clojure
+(require '[memo.gen :as mg]
+         '[gen.choicemap :as cm]
+         '[gen.dist.core :as dc]
+         '[gen.dynamic :refer [gen]]
+         '[gen.gfi :as gfi]
+         '[gen.random :as rng])
+
+(defenum Move STAY HOP)
+
+(defmemo hop [[m Move]] [beta]
+  (frog :chooses [m Move] :wpp (exp (* beta m)))
+  (return (Pr (= frog.m m))))
+
+;; a distribution constructor, as gen.dist/categorical is
+(def hops (mg/dist hop))
+
+;; the log-probability that the frog hops (HOP is 1)
+(dc/log-prob (hops 1.0) 1)
+;=> -0.3132616875182228
+
+(def frog-model
+  (gen [beta]
+    (trace :m (hops beta))))
+
+(:weight (gfi/generate frog-model [1.0] (cm/choicemap :m 1) (rng/key 0)))
+;=> -0.3132616875182228
+```
+
+- **Calls.** The constructor takes the memo's parameters as the memo
+  does: positional, with defaults, or by name in a trailing map.
+- **Draws are domain values:** an enum member's value, or an element of a
+  vector domain, never its index. With several axes, a draw is the vector
+  of their values, in the order the axes are declared.
+- **log-prob** is the log of the drawn cell. A value outside the domain is
+  an error.
+- **The trace holds only the draw.** The mind's own choices (here the
+  frog's) are summed out exactly, as memo does.
+- **The table is checked at every call.** A table with NaN, a negative
+  cell, or a distribution not summing to 1 is an error naming the model.
+  memo returns an all-zero table silently when an observation is
+  impossible, and that table fails the check. On MLX the check evaluates
+  the table at each call.
+
+```clojure
+;; error: The table of memo nowhere does not sum to 1: it sums to 0.0
+(defmemo nowhere [[m Move]] []
+  (pond :knows m)
+  (pond :thinks (frog :chooses [n Move] :wpp 1))
+  (pond :observes-that (= frog.n 2))
+  (return (as pond (Pr (= frog.n m)))))
+
+((mg/dist nowhere))
+```
+
+**Gradients.** log-prob is differentiable in the memo's parameters, so
+gen.clj's gradient-based inference (`choice-gradients`, HMC, MAP, VI)
+reaches the parameters inside a mind. As in [Automatic
+Differentiation](#automatic-differentiation), a parameter that reaches a
+host function needs that function marked `^:memo/vectorized`.
+
+```clojure
+;; d/d(beta) of log e^beta / (1 + e^beta), at beta = 1
+((array/grad (fn [b] (dc/log-prob (hops b) 1))) 1.0)
+;=> 0.2689414213699951
+```
+
+A NaN gradient that reaches a parameter is an error naming the parameter
+and the model. A memo's values can be right while its gradient is NaN, as
+JAX's is. The usual case is a speaker written `(exp (* alpha (log p)))`,
+where p is 0 somewhere; `(** p alpha)` has the same values and a finite
+gradient.
+
+**Given axes.** `:given` names axes that are given as values, not
+sampled. The constructor then takes their values first, as a vector, as
+a memo call does:
+
+```clojure
+(def Gap [1 2 3])
+
+(defmemo hop-across [[g Gap] [m Move]] [beta]
+  (frog :knows g)
+  (frog :chooses [m Move] :wpp (exp (* beta m (- 2 g))))
+  (return (Pr (= frog.m m))))
+
+;; the gap is 3 (a value of Gap, not an index)
+(dc/log-prob ((mg/dist hop-across {:given '[g]}) [3] 1.0) 1)
+;=> -1.3132616875182228
+```
+
+A memo with several returns names the distribution's with `:return`:
+`(mg/dist m {:return 0})`.
+
+**Deterministic generative functions.** `mg/deterministic` returns the
+memo's table (or one return of it, with `:return`) as a deterministic
+generative function, for splicing a mind at an address where a trace
+should show it. Its score is 0. Outside a model, calling the memo itself
+is the same.
+
+```clojure
+(def frog-mind (mg/deterministic hop))
+
+(:retval (gfi/simulate (gen [beta] (splice :mind frog-mind beta)) [1.0] (rng/key 0)))
+;=> [0.2689414213699951 0.7310585786300049]
+```
 
 ---
 

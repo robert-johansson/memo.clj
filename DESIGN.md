@@ -529,9 +529,18 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
 
 ## 6. The GFI bridge (M2)
 
-*Proposed 2026-10-22, for the owner's decision (§13.1).* It replaces the
-sketch of 2026-10-20 (`memo/dist` and `memo/fn`). GenGDT code will be
-written against it, so it is settled before any M2 code.
+*Proposed 2026-10-22 and approved by the owner the same day (§13.1).* It
+replaces the sketch of 2026-10-20 (`memo/dist` and `memo/fn`). GenGDT code
+is written against it.
+
+*Built 2026-10-22* (`src/memo/gen.clj`, `test/memo/gen_test.clj`, the
+Handbook's "Minds in gen.clj models"), as specified below. The tests pass on
+the JVM, Metal and MLX's CPU in float64, and each of eleven planted bugs is
+caught. gen.clj's GFI laws run over two models that trace memo
+distributions: the test puts the `test/` of the gen.clj in use (the pin's
+checkout, or the working copy under `:dev`) on the classpath, so the laws
+are that gen.clj's own. Still to do: the first client (§6.5), and the
+speed research (§6.4, question 3).
 
 ### 6.1 What already works, and what is missing (measured 2026-10-22, gen.clj 34e9a44)
 
@@ -642,8 +651,9 @@ written against it, so it is settled before any M2 code.
     - draws in the domain.
 - **gen.clj's GFI laws over models that trace memo distributions.**
   `gen.laws` is under gen.clj's `test/`, not `src/`, so another project
-  cannot depend on it. Either gen.clj exports it (the owner's call, for
-  gen.clj), or memo.clj runs it under its `:dev` alias.
+  cannot depend on it. memo.clj's test adds the `test/` of the gen.clj in
+  use to the classpath at load time (its `:deps/root` in the basis), so it
+  needs nothing from gen.clj.
 - **Gradients** against finite differences, and against the gradient GenGDT
   checked by hand.
 - **The zero-cell gradient and the NaN guard,** each checked against a
