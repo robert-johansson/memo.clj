@@ -493,8 +493,13 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
   - demo-scalar now passes.
   - demo-empowerment, entropies over 528,125 unequal cells, is 1.9e-5 from
     float64, against 3.6e-6 under JAX and 2.2e-6 on Metal.
-  - The error is the sequential sum within each block: blocks of 8 give
-    2.4e-6, at the same run time.
+  - Each of its sums is within a few ulps: gen.clj measured 0.3 to 6
+    ε·Σ|x| on such terms at every block size. The error compounds through
+    the model's five levels and the cancellation in H(x) + H(y) − H(x,y).
+  - Blocks of 8 in the sums of more than 256 terms bring it to 2.4e-6, at
+    the same run time for the model. gen.clj measured blocks of 32 at 1.3
+    to 1.5 times the time of such sums. The block size is the owner's call
+    (genclj-v3uw).
   - MLX's CPU is tested in float64 (measured 2026-10-22, on the Mac and on
     x86; bean memoclj-rkvc).
 - **Results are full tables** (slice 1; decided, 2026-10-20). A call returns the table

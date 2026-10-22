@@ -1766,8 +1766,9 @@ What memo.clj computes differently, on purpose:
   arithmetic can also differ in the last bit between the JVM, MLX's CPU
   and Metal, so `:to-maximize` breaks such a tie differently on each.
 - **MLX's CPU in float32** sums in blocks of 256 terms, adding the terms
-  within a block one at a time. A long sum of unequal terms therefore
-  carries more rounding there than on Metal or under JAX.
+  within a block one at a time. Each sum is within a few roundings, but
+  in a model of many long sums those errors add up to more than on Metal
+  or under JAX.
   - memo's empowerment demo, entropies over half a million cells, is
     1.9e-5 from float64 on MLX's CPU, against 3.6e-6 under JAX.
   - Run MLX's CPU in float64 (`-Dgen.mlx.dtypes=64`), as memo.clj's tests
