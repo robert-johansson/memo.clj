@@ -398,7 +398,7 @@ disagree, memo.clj follows Python memo:
 
 ```
 L4  tooling           inspect, explain, print-table; transpile (test oracle from M1)
-L3  GFI bridge        memo/dist, memo/fn (M2) · bounded generative functions (M3)
+L3  GFI bridge        memo.gen: dist, deterministic (M2, proposed) · bounded generative functions (M3)
 L2  runtime           calls, sub-memo calls under path-condition guards, caching,
                       several returns, results as tables over named axes
 L1  compiler          read → parse → AST → epistemic analysis (frames, known/deps,
@@ -529,37 +529,172 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
 
 ## 6. The GFI bridge (M2)
 
-The contract GenGDT code depends on, so it is settled first (proposed):
+*Proposed 2026-10-22, for the owner's decision (§13.1).* It replaces the
+sketch of 2026-10-20 (`memo/dist` and `memo/fn`). GenGDT code will be
+written against it, so it is settled before any M2 code.
 
-- **`(memo/dist model opts & args)` → a gen.clj distribution.** Use it where a
-  return is a normalized distribution over one or more declared axes, such as
-  `(return (Pr (= alice.a a)))` over `[a Act]`.
-  - **Values** are domain values (memo's), not indices.
-  - **Sampling** is categorical on the table.
-  - **log-prob** reads the table.
-  - **Normalization** is checked at each call, loud beyond a tolerance.
-    memo produces all-zero rows silently (zero weights, impossible
-    observations; §2.4), and they fail this check.
-  - **Several axes.** For a return over several axes, `opts` names the axes
-    sampled. The others are given as values (conditioning by indexing).
-  - **Gradients.** log-prob is differentiable in the array parameters, so
-    HMC, MAP and VI reach parameters inside the mind.
-  - **A NaN gradient is a loud error** (decided, 2026-10-20, §13.10). The values keep
-    matching JAX; this only stops fitting from failing silently where they
-    are right and the gradient is NaN (the usual RSA speaker, §2.4).
-- **`(memo/fn model opts & args)` → the table**, as a gen.array value: for
-  expectations, utilities and anything else that is not a distribution.
-  Called in a model it is plain computation. Wrapped by
-  `gen.custom/deterministic`, it can be spliced at an address where needed.
-- **Laws:**
-  - gen.clj's distribution tests: normalization, sample frequencies, and
-    log-prob against the table;
-  - its GFI laws (`gen.laws`) over models that trace memo distributions;
-  - gradients against finite differences;
-  - batched against per-particle evaluation.
-- **First GenGDT client:** an observer inverting GenGDT's synthetic agent,
-  inferring its goal value and temperature from its choices. That is
-  third-person inference with the agent's policy as a memo model.
+### 6.1 What already works, and what is missing (measured 2026-10-22, gen.clj 34e9a44)
+
+- **A memo is already a function from parameters to a gen.array table.**
+  gen.clj's gradients flow through it. GenGDT's stand-in,
+  `(d/categorical (apply choose args))`, gives a β gradient from
+  `choice-gradients` that agrees with finite differences (GenGDT
+  notes/90).
+- **Batched runs work.** A memo called under gen.array's batch backend with
+  a batch of parameter values gives the batch of tables, tabulated host
+  functions included.
+- **What the bridge must add:**
+  - **The stand-in's gradient is NaN whenever any cell of the table is 0,**
+    whichever cell is observed. `d/categorical` takes the log of every cell,
+    then picks one, and the log's gradient at 0 is 0/0. memo tables often
+    have exact zeros, such as an option that never comes to mind. GenGDT's
+    `choose` at q = 0 is the table [1 0 0]. Observing PASS, the stand-in's
+    β gradient is NaN; logging only the observed cell gives the right
+    gradient, 0.
+  - **Draws are indices,** not domain values.
+  - **Nothing checks the table.** memo's silent all-zero rows (§2.4) are
+    sampled from and scored.
+  - **A NaN gradient inside the mind passes silently.** On slice 3's RSA
+    speaker S1, `array/grad` gives NaN.
+- **Not the bridge's to fix, but its first client meets it:** only
+  `^:memo/vectorized` host functions are differentiated (§5). GenGDT's `eu`
+  is tabulated, so `choose` differentiates in β and q but not in the goal
+  value v ("Cannot differentiate through the host function eu"). To fit v,
+  `eu` must be written with gen.array's operators and marked.
+
+### 6.2 The API: `memo.gen`
+
+```clojure
+(require '[memo.gen :as mg])
+
+(def choice (mg/dist choose))     ; a distribution constructor, as d/categorical is
+
+(gen [...]
+  (trace :o (choice beta q v s m-fix m-flee)))   ; a draw is a value of Opt
+```
+
+- **`(mg/dist model)` or `(mg/dist model opts)` gives a gen.clj
+  distribution constructor.** Called with the memo's parameters, as in a
+  memo call (positional, defaults, a trailing map by name), it gives a
+  distribution, as `(d/categorical p)` does.
+  - **Construction checks:** the model is a memo, `:given` names its axes,
+    and `:return` is in range. It is checked once, when the constructor is
+    made.
+  - **Draws are domain values:**
+    - an enum member's value;
+    - an element of a vector domain (20 of `[10 20 30]`);
+    - over several sampled axes, the vector of their values, in the order
+      the axes are declared.
+  - **Sampling** is categorical on the table, over its flattened cells when
+    several axes are sampled.
+  - **log-prob** is the log of the drawn cell: picked first, then logged,
+    so another cell's zero gives no NaN.
+    - A domain value of probability 0 scores −Inf.
+    - A value outside the domain is a loud error. A domain value is not its
+      index unless the domain is 0…n−1.
+  - **The table is checked at every call.** Each distribution in it (the
+    whole table, or one row per value of the given axes) must have no NaN
+    and no negative cell, and must sum to 1 within §6.4's tolerance.
+    Otherwise it is a loud error naming the model and the row. The hint
+    covers memo's silent zeros: an impossible observation, or all-zero
+    weights.
+  - **Gradients.** log-prob is differentiable in every array parameter,
+    under §5's rule that only vectorized host functions are differentiated.
+  - **The NaN guard** (§13.10). Each parameter enters the memo through an
+    identity whose gradient rule checks the gradient arriving for that
+    parameter. A NaN is a loud error naming the model and the parameter.
+    - Measured on S1: the guard throws "NaN gradient with respect to
+      alpha" where `array/grad` gives NaN.
+    - It passes S1-pow's finite gradient unchanged (−0.512 both ways).
+    - It costs nothing in the forward pass: it is one `array/custom-vjp`
+      per parameter.
+- **Options:**
+  - `:given [axis …]` lists the axes given as values, not sampled. The
+    constructor then takes their values first, as a vector, as a memo call
+    does. `((mg/dist L1 {:given '[u]}) [u] alpha)` is the listener's
+    distribution over r for utterance u.
+  - `:return i` picks the return that is the distribution, for a memo with
+    several. They stack on a leading axis.
+- **`(mg/deterministic model opts)` gives a `gen.custom/deterministic`
+  generative function** returning the memo's table, or one return of it,
+  through the same NaN guard. Use it to splice a mind at an address where a
+  trace should show it. Otherwise call the model directly: it already is
+  the plain function the old sketch's `memo/fn` described. A memo's
+  parameters as trainable `:params` (gen.clj's learning) can come later, if
+  a client needs them.
+- **`mg/dist` traces nothing inside the mind.** A mind's choices are summed
+  out exactly; that is memo. The scientist's trace holds only what the
+  scientist observes or infers.
+
+### 6.3 Laws (the tests)
+
+- **Distribution checks over a set of models:**
+  - The models:
+    - GenGDT's `choose`, including a table with zero cells;
+    - RSA's L1 and S1-pow;
+    - a joint over two axes;
+    - a conditional with a given axis;
+    - a domain whose values are not indices.
+  - The checks:
+    - normalization over the support;
+    - sample frequencies against the table, within five standard errors;
+    - log-prob against the log of the table;
+    - draws in the domain.
+- **gen.clj's GFI laws over models that trace memo distributions.**
+  `gen.laws` is under gen.clj's `test/`, not `src/`, so another project
+  cannot depend on it. Either gen.clj exports it (the owner's call, for
+  gen.clj), or memo.clj runs it under its `:dev` alias.
+- **Gradients** against finite differences, and against the gradient GenGDT
+  checked by hand.
+- **The zero-cell gradient and the NaN guard,** each checked against a
+  planted bug (CLAUDE.md rule 7).
+- **Batched against one particle at a time:** `simulate` and `generate`
+  under `gen.batched`.
+- **On every backend.**
+
+### 6.4 The five questions (answers proposed 2026-10-22)
+
+1. **Names.** A namespace, `memo.gen`, with `dist` and `deterministic`.
+   - `memo/fn` would shadow `clojure.core/fn` wherever it was referred.
+     Also, a memo already is the function.
+   - `deterministic` is named after `gen.custom/deterministic`, which it
+     builds on.
+2. **Several returns.** `:return i` is required when a memo has more than
+   one return. A memo with a single return needs nothing.
+3. **Speed.** The owner, 2026-10-22: research caching and compiling when M2
+   gets there (bean memoclj-c0xj). The leads:
+   - memo's `^:cache`, which remembers results by parameter values, but not
+     under differentiation;
+   - `array/compile`, one MLX graph per input shape (on the JVM it is the
+     function itself);
+   - `gen.custom/deterministic`, which keeps its trace when an update
+     leaves its arguments unchanged;
+   - HMC's cache of compiled steps.
+4. **Batched gradients.** gen.array's batch tracer and its tape still do
+   not combine. Measured: "arrays from different backends (:batch and
+   :jvm)". gen.clj's M5 did not change that. M2 does not need them:
+   - gen.clj's gradient-based inference (HMC, MALA, MAP, VI) runs one chain
+     or sample at a time, and the bridge's gradients work there;
+   - batched inference (importance sampling, SMC) takes no gradients, and
+     batched memo calls work there.
+
+   Batched gradients, for many chains at once, would be gen.clj's work, if
+   wanted.
+5. **Normalization tolerance.** |Σ − 1| ≤ 1e-6 + n·ε, where n is the number
+   of cells in the row and ε is the dtype's machine epsilon.
+   - The 1e-6 is `d/categorical`'s tolerance. n·ε widens it for long rows,
+     as the bound on rounding in a sum does.
+   - It accepts float32's rounding in a 10,001-cell row (a bound of 1.2e-3)
+     and MLX's CPU's sequential sums (1.4e-5 there, memoclj-rkvc).
+   - It rejects what the check is for: zero rows (Σ = 0), NaN, and tables
+     off by more than rounding.
+
+### 6.5 The first client
+
+GenGDT's observer infers the synthetic agent's goal value and temperature
+from its choices. That is third-person inference, with the agent's policy,
+`choose`, as an `mg/dist`. It runs by HMC, or on a grid with gen.clj's
+enumerative inference, once `eu` is vectorized (§6.1).
 
 ## 7. Bounded minds (M3)
 
@@ -820,6 +955,9 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
 
 1. **The bridge's API** (§6): `memo/dist` and `memo/fn` as proposed, or
    something else? This is what GenGDT models will be written against.
+   *2026-10-22:* §6 now proposes `memo.gen` (`dist` and `deterministic`),
+   with answers on names, several returns, speed, batched gradients and the
+   normalization tolerance; it awaits the owner's decision.
 2. **The budget's place** (§7.3): call-time and keyed by agent, as proposed?
    Or also declarable in the model text?
 3. **Choosing the bounded lowering** (§7.2): automatic below a size limit and
