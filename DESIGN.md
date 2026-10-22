@@ -27,9 +27,9 @@ In order:
    to gen.array programs, giving Python memo's numbers on every test and
    demo of its own.
    - It runs on every gen.clj backend: the JVM, MLX's CPU, Metal and CUDA.
-     Its whole suite passes on each (2026-10-22, gen.clj bd6b8b4): the JVM
-     and Metal, MLX's CPU in float64 on the Mac and on x86, and CUDA on an
-     RTX PRO 6000 (fenrir). MLX's CPU in float32 is not tested (§5).
+     Its whole suite passes on each (2026-10-22, gen.clj 3022944): the JVM
+     and Metal, MLX's CPU in float32 and in float64 on the Mac and on x86,
+     and CUDA on an RTX PRO 6000 (fenrir).
    - Gradients with respect to parameters come from gen.array's reverse-mode
      autodiff.
 2. **M2 — the GFI bridge.** A memo model is a gen.clj object:
@@ -485,23 +485,19 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
     along a leading axis for vmap over parameter grids or particles.
 - **Dtypes:** float64 on the JVM, float32 on MLX. Python memo runs float32
   under JAX, so parity tolerances are set per test. A few constructs give a
-  different answer under float64, not a nearby one (§2.4, §13). MLX's CPU
-  in float32 sums in blocks of 256 terms since gen.clj bd6b8b4
-  (genclj-y0mp), and sequentially within a block. Before, it summed
-  sequentially throughout, 1.4e-5 off at 10,001 terms, which put
-  demo-scalar and demo-empowerment outside float32's tolerance.
-  - demo-scalar now passes.
-  - demo-empowerment, entropies over 528,125 unequal cells, is 1.9e-5 from
-    float64, against 3.6e-6 under JAX and 2.2e-6 on Metal.
-  - Each of its sums is within a few ulps: gen.clj measured 0.3 to 6
-    ε·Σ|x| on such terms at every block size. The error compounds through
-    the model's five levels and the cancellation in H(x) + H(y) − H(x,y).
-  - Blocks of 8 in the sums of more than 256 terms bring it to 2.4e-6, at
-    the same run time for the model. gen.clj measured blocks of 32 at 1.3
-    to 1.5 times the time of such sums. The block size is the owner's call
-    (genclj-v3uw).
-  - MLX's CPU is tested in float64 (measured 2026-10-22, on the Mac and on
-    x86; bean memoclj-rkvc).
+  different answer under float64, not a nearby one (§2.4, §13).
+  - **MLX's CPU in float32** passes memo.clj's whole suite since gen.clj
+    73f22a0 (2026-10-22, on the Mac and on x86; memoclj-rkvc).
+  - Before, MLX's CPU summed float32 sequentially, 1.4e-5 off at 10,001
+    terms, which put demo-scalar and demo-empowerment outside float32's
+    tolerance.
+  - gen.clj now sums a float32 sum of more than 256 terms there in blocks
+    of 32 (genclj-y0mp, genclj-v3uw). demo-empowerment, entropies over
+    528,125 unequal cells, is 5.1e-6 from float64, against 3.6e-6 under
+    JAX and 2.2e-6 on Metal.
+  - Blocks of 256 had left it at 1.9e-5, though each sum was within a few
+    ulps: the error compounds through the model's five levels and the
+    cancellation in H(x) + H(y) − H(x,y).
 - **Results are full tables** (slice 1; decided, 2026-10-20). A call returns the table
   over the memo's axes in declaration order and at their full sizes; several
   returns are stacked on a leading axis. Python memo leaves size 1 the axes
@@ -548,7 +544,8 @@ is written against it.
 *Built 2026-10-22* (`src/memo/gen.clj`, `test/memo/gen_test.clj`, the
 Handbook's "Minds in gen.clj models"), as specified below. The whole suite
 passes on the JVM, Metal and MLX's CPU in float64 on the Mac, and on MLX's
-CPU in float64 and CUDA on fenrir; each of eleven planted bugs is caught. gen.clj's GFI laws run over two models that trace memo
+CPU in float64 and CUDA on fenrir; since gen.clj 73f22a0, MLX's CPU in
+float32 too, on both. Each of eleven planted bugs is caught. gen.clj's GFI laws run over two models that trace memo
 distributions: the test puts the `test/` of the gen.clj in use (the pin's
 checkout, or the working copy under `:dev`) on the classpath, so the laws
 are that gen.clj's own. The first client is done (§6.5). Still to do: the
