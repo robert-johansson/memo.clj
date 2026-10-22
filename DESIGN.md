@@ -534,9 +534,9 @@ replaces the sketch of 2026-10-20 (`memo/dist` and `memo/fn`). GenGDT code
 is written against it.
 
 *Built 2026-10-22* (`src/memo/gen.clj`, `test/memo/gen_test.clj`, the
-Handbook's "Minds in gen.clj models"), as specified below. The tests pass on
-the JVM, Metal and MLX's CPU in float64, and each of eleven planted bugs is
-caught. gen.clj's GFI laws run over two models that trace memo
+Handbook's "Minds in gen.clj models"), as specified below. The whole suite
+passes on the JVM, Metal and MLX's CPU in float64 on the Mac, and on MLX's
+CPU in float64 and CUDA on fenrir; each of eleven planted bugs is caught. gen.clj's GFI laws run over two models that trace memo
 distributions: the test puts the `test/` of the gen.clj in use (the pin's
 checkout, or the working copy under `:dev`) on the classpath, so the laws
 are that gen.clj's own. Still to do: the first client (§6.5), and the
