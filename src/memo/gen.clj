@@ -285,8 +285,9 @@
   - Its density, for a value, is the cell of the memo's table computed with
     the operation's key as :memo/key: an unbiased estimate of the bounded
     agent's choice probability (log ξ, the log of the estimate). simulate
-    draws the value from the table that key gives, and weighs it there: the
-    joint sampler of the value and the samples.
+    splits its key in two, draws a table with one and the value from that
+    table with the other, and weighs the value in that table: the joint
+    sampler of the value and the samples.
   - Pseudo-marginal MH and PMMH (gen.clj's MH on a model that splices it)
     then target the bounded model's exact posterior.
   - Without a Monte Carlo budget the table is exact, and so is the density.

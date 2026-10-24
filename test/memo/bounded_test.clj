@@ -683,6 +683,53 @@
   (alice :chooses [p A] :wpp (exp (* beta (+ 1 o) (E (utility p bob.y)))))
   (return (Pr (= alice.o a))))
 
+;; acceptance pass 3: a later observation made EU's samples per option,
+;; though nothing about them depends on the option
+(defmemo bets-later [[a A]] [beta]
+  (bob :chooses [y Y] :wpp (+ 1 y))
+  (alice :thinks (bob :chooses [y Y] :wpp (+ 1 y)))
+  (alice :wants w (utility a bob.y))
+  (alice :chooses [a A] :wpp (exp (* beta (EU w))))
+  (return (Pr (= alice.a a))))
+
+(defmemo bets-later-seen [[a A]] [beta]
+  (bob :chooses [y Y] :wpp (+ 1 y))
+  (alice :thinks (bob :chooses [y Y] :wpp (+ 1 y)))
+  (alice :wants w (utility a bob.y))
+  (alice :chooses [a A] :wpp (exp (* beta (EU w))))
+  (alice :observes bob.y :is bob.y)
+  (return (Pr (= alice.a a))))
+
+;; bob, bounded, in alice's mind: under a Monte Carlo budget his choice is
+;; exact over its samples, since alice's reasoning samples from it
+(defmemo bob-in-mind [[b A]] []
+  (alice :thinks
+         (bob :thinks (coin :chooses [c A] :wpp (+ 1 c)))
+         (bob :chooses [y A] :wpp (exp (* 3.0 (E (utility y coin.c))))))
+  (alice :chooses [b A] :wpp (exp (* 3.0 (E (utility b bob.y)))))
+  (return (Pr (= alice.b b))))
+
+(deftest sharing-and-monte-carlo-across-minds
+  (testing "a later observation leaves the options sharing samples"
+    (is (= (host (bets-later 1.5)) (host (bets-later-seen 1.5))) "exact, the same tables")
+    (doseq [k [1 2]]
+      (is (close-all? (host (bets-later 1.5 (budget {:samples k}))) (host (bets-later-seen 1.5 (budget {:samples k}))))
+          (str "k " k)))
+    (is (= [1] (map :sets (filter #(= "EU" (:what %)) (mapcat :sources (b/report bets-later-seen {'alice {:samples 2}})))))))
+  (testing "a bounded agent in another's mind is exact under Monte Carlo"
+    (let [b {:memo/budget {'alice {:samples 2} 'bob {:samples 1 :monte-carlo true}}}
+          exact (host (bob-in-mind {:memo/budget {'alice {:samples 2} 'bob {:samples 1}}}))]
+      (is (= exact (host (bob-in-mind (assoc b :memo/key (rng/key 0))))))
+      (is (= exact (host (bob-in-mind (assoc b :memo/key (rng/key 4))))))
+      (is (= [false false] (map :monte-carlo (b/report bob-in-mind {'alice {:samples 2} 'bob {:samples 1 :monte-carlo true}}))))))
+  (testing "above the limit there, the error says why Monte Carlo was not used"
+    (is (re-find #"^Monte Carlo is declared, but this choice is inside another agent's mind"
+                 (some-> (try (bob-in-mind {:memo/budget {'alice {:samples 2} 'bob {:samples 50 :monte-carlo true :limit 10}}
+                                            :memo/key (rng/key 0)})
+                              nil
+                              (catch Exception e (err/root-memo-error e)))
+                         ex-data :memo/hint)))))
+
 (deftest monte-carlo-with-nested-choices
   (testing "the guess of a future observation is not a query of the agent's"
     (is (= #{"Predict"} (set (map :what (mapcat :sources (b/report predict-observed {'alice {:samples 2}})))))))

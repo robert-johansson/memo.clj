@@ -1775,6 +1775,8 @@ An agent is a symbol or a keyword. A spec takes:
 | `:monte-carlo true` | the samples are drawn, not enumerated (with `:draws R`, default 1); the call then needs `:memo/key` |
 | `:limit n` | the enumerated states allowed at one of its choices (default 10^6) |
 
+A budget for an agent that evaluates no query (or, for `:options`, makes no
+`:chooses`) changes nothing: `bounded/report` shows what a budget bounds.
 The call's `:memo/limit` sets the limit for every agent that has no
 `:limit` of its own; an agent's `:limit` wins, higher or lower. A budget
 naming an agent the memo (and the memos it calls) does not have, an
@@ -1839,6 +1841,10 @@ in different memos cannot be bounded apart.
 (array/->clj (forager 1.0 {:memo/budget {'fox {:samples 2}}}))
 ;=> [0.43764976955024126 0.5623502304497587]
 ```
+
+  Ties among estimates (`:to-maximize`) are split by float equality, as
+  memo's ties are, so sample means equal in exact arithmetic but not in
+  floats (k not a power of 2) need not tie.
 
   `:per-option true` gives every option samples of its own even when the
   agent's belief does not depend on it. The two are different claims
@@ -1971,12 +1977,13 @@ turn from exact into noisy partway through.
 `:monte-carlo true` draws the samples (R times, with `:draws R`) instead of
 enumerating them, from the call's `:memo/key`; its cost grows with k times
 R, the limit does not apply, and `bounded/report` gives R as its
-`:states`. A choice inside another choice's weights (the future self's
-choice that `EU` replays, or another agent's in an imagined world) stays
-exact over its samples: the outer reasoning samples from its
-probabilities, and an estimate there would bias it. The table is then an
-unbiased estimate of the exact-over-samples one, the same for the same
-key:
+`:states`. Monte Carlo draws only at the choices the observer models
+directly, outside any choice's weights. A bounded agent inside another
+agent's mind, or a choice inside another choice's weights (the future
+self's choice that `EU` replays), stays exact over its samples, Monte Carlo
+declared or not: the reasoning above samples from its probabilities, and an
+estimate there would bias it. The table is then an unbiased estimate of
+the exact-over-samples one, the same for the same key:
 
 ```clojure
 (def mc {:memo/budget {'alice {:samples 8 :monte-carlo true :draws 4}}})

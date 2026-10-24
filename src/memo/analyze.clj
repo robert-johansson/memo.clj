@@ -78,6 +78,21 @@
   (set (keep (fn [[addr c]] (when (:known c) addr))
              (:choices (fr/get-frame state)))))
 
+(defn- query-deps
+  "The deps of a query's value, value-deps the known choices its expression
+  reads: every choice the frame knows (known-deps), or, with a budget, those
+  its beliefs vary along (:ll-dims) and value-deps. A bounded agent shares
+  samples along what its belief does not vary with (sample-ll), so the
+  coarser set would give options samples of their own where nothing about
+  them depends on the option (acceptance pass 3)."
+  [state value-deps]
+  (if-not (:bounded state)
+    (known-deps state)
+    (let [frm (fr/get-frame state)
+          own (set value-deps)]
+      (set (keep (fn [[addr c]] (when (and (:known c) (or (own addr) (contains? (:ll-dims frm) (:idx c)))) addr))
+                 (:choices frm))))))
+
 (defn- unknown-dims
   "The dims of the choices the current frame is uncertain about."
   [state]
@@ -183,12 +198,22 @@
   [n]
   (if (<= n Long/MAX_VALUE) (long n) n))
 
-(defn- too-many-states [what n limit opts]
-  (err/raise (str what " enumerates " n " states, above the limit of " limit)
-             (assoc opts :hint (str "Exact over samples enumerates every way the samples can fall. Use fewer "
-                                    "samples, sample fewer or smaller variables (a query samples only those it "
-                                    "depends on), raise the limit (:limit in the agent's budget, or :memo/limit "
-                                    "for the call), or declare Monte Carlo (:monte-carlo true)."))))
+(defn- too-many-states
+  "The loud error of a size above the limit. With declared, the agent's
+  budget declares Monte Carlo, which this choice cannot use."
+  ([what n limit opts] (too-many-states what n limit opts false))
+  ([what n limit opts declared]
+   (err/raise (str what " enumerates " n " states, above the limit of " limit)
+              (assoc opts :hint (if declared
+                                  (str "Monte Carlo is declared, but this choice is inside another agent's mind or "
+                                       "inside a choice's weights, where memo.clj keeps it exact over its samples "
+                                       "(an estimate there would bias the reasoning that uses it). Use fewer "
+                                       "samples, sample fewer or smaller variables, or raise the limit (:limit in "
+                                       "the agent's budget, or :memo/limit for the call).")
+                                  (str "Exact over samples enumerates every way the samples can fall. Use fewer "
+                                       "samples, sample fewer or smaller variables (a query samples only those it "
+                                       "depends on), raise the limit (:limit in the agent's budget, or :memo/limit "
+                                       "for the call), or declare Monte Carlo (:monte-carlo true)."))))))
 
 (defn- sample-ll
   "A bounded agent's query: the empirical belief of k samples of the dims in
@@ -228,7 +253,8 @@
         states (if mc? (:draws spec) (b/power (b/states k mprime) n))
         limit (b/limit-of spec (:limit state))
         _ (when (and (not mc?) (> states limit) (not (:report-only state)))
-            (too-many-states (str owner "'s " what " from " k " samples") states limit (frame-err-opts state loc)))
+            (too-many-states (str owner "'s " what " from " k " samples") states limit (frame-err-opts state loc)
+                             (:monte-carlo spec)))
         [state omega] (if mc? [state (:mc-dim choosing)] (alloc-dim state))
         [state p] (cond
                     (nil? ll) (let [[st one] (fresh state "ll")] [(emit st {:i :const :out one :value 1.0}) one])
@@ -258,7 +284,7 @@
   [state loc sample-dims what]
   (let [ll (read-ll state loc)
         spec (frame-budget state)]
-    (if (:samples spec)
+    (if (and (:samples spec) (not (:exact state)))
       (sample-ll state loc ll sample-dims spec what)
       [state ll])))
 
@@ -409,7 +435,7 @@
                                  o]))
                             [state out]
                             (map vector query var))]
-    [state {:tag out :known true :deps (known-deps state)}]))
+    [state {:tag out :known true :deps (query-deps state query)}]))
 
 (defn- posterior-pairs
   "The [known-addr uncertain-addr] pairs of an expression of the form
@@ -493,7 +519,7 @@
               :expectation
               (let [[state out] (fresh state "exp")]
                 [(emit state {:i :sum :out out :arg lv :dims dims})
-                 {:tag out :known true :deps (known-deps state)}])
+                 {:tag out :known true :deps (query-deps state (:deps val))}])
               ;; Python memo's E[X^2] - E[X]^2, over the frame's weights w of
               ;; total mass M (below 1 where a branch has zero mass), computed
               ;; as sum w (X - m)^2 + m^2 (1 - M), m = E[X]: the same number,
@@ -519,7 +545,7 @@
                     [state centered] (fresh state "var")
                     state (emit state {:i :sum :out centered :arg lv2 :dims dims})]
                 (if-not frame-ll
-                  [state {:tag centered :known true :deps (known-deps state)}]
+                  [state {:tag centered :known true :deps (query-deps state (:deps val))}]
                   (let [[state mass] (fresh state "mass")
                         state (emit state {:i :sum :out mass :arg ll :dims dims})
                         [state missing] (fresh state "missing")
@@ -530,7 +556,7 @@
                         state (emit state {:i :op :op :mul :out corr :args [m2 missing]})
                         [state out] (fresh state "var")]
                     [(emit state {:i :op :op :add :out out :args [centered corr]})
-                     {:tag out :known true :deps (known-deps state)}]))))))))))
+                     {:tag out :known true :deps (query-deps state (:deps val))}]))))))))))
 
 (def ^:private not-static-hint
   (str "When calling a memo, you can only pass in parameters that are fixed (\"static\") "
@@ -664,7 +690,7 @@
           [state s] (fresh state "sum")
           state (emit state {:i :sum :out s :arg t :dims (dims named)})
           [state out] (emit-op state "entropy" :neg s)]
-      [state {:tag out :known true :deps (known-deps state)}])))
+      [state {:tag out :known true :deps (query-deps state [])}])))
 
 (defn- eval-kl
   "(KL p.x q.y): the KL divergence from the frame's marginal over q.y to its
@@ -702,7 +728,7 @@
           [state t] (emit-op state "term" :mul pp z)
           [state out] (fresh state "kl")
           state (emit state {:i :sum :out out :arg t :dims [(:idx p)]})]
-      [state {:tag out :known true :deps (known-deps state)}])))
+      [state {:tag out :known true :deps (query-deps state [])}])))
 
 (defn- eval-imagine
   "(imagine stmts... e): e in a hypothetical world, the current frame's copy
@@ -872,7 +898,8 @@
             states (if mc? (:draws spec) (b/binomial cells k))
             limit (b/limit-of spec (:limit state))
             _ (when (and (not mc?) (> states limit) (not (:report-only state)))
-                (too-many-states (str owner " considering " k " of " cells " options") states limit {:loc loc}))
+                (too-many-states (str owner " considering " k " of " cells " options") states limit {:loc loc}
+                                 (:monte-carlo spec)))
             [state sigma] (if mc? [state mc-dim] (alloc-dim state))
             [state mask] (fresh state "considered")
             state (emit state {:i :subsets :out mask :omega sigma :dims dims :sizes sizes :k k
@@ -905,7 +932,7 @@
           states (if mc? (:draws spec) (reduce * 1N (map :states sources)))
           limit (b/limit-of spec (:limit state))
           _ (when (and (not mc?) (> states limit) (not (:report-only state)))
-              (too-many-states (str owner "'s choice") states limit {:loc loc}))
+              (too-many-states (str owner "'s choice") states limit {:loc loc} (:monte-carlo spec)))
           [state prod] (reduce (fn [[st acc] w] (emit-op st "drawn" :mul acc w))
                                [state nrm] (keep :weight sources))
           [state out] (fresh state "bounded")
@@ -958,12 +985,16 @@
         ;; with a budget, the choice opens a scope for the samples drawn while
         ;; its weights are computed (sample-ll)
         outer (select-keys state [:pending :mixing :choosing])
-        ;; Monte Carlo draws at a choice not inside another choice's weights:
-        ;; a nested one (a future self's, replayed by EU; another agent's in
-        ;; an imagined world) is exact over its samples, since the outer
-        ;; reasoning samples from, or weighs by, its probabilities, and an
-        ;; estimate there would bias it
-        [state mc-dim] (if (and (:bounded state) (:monte-carlo spec) (nil? (:choosing state)))
+        ;; Monte Carlo draws only at a choice the observer models directly,
+        ;; outside any choice's weights: one inside another agent's mind, or
+        ;; inside a choice's weights (a future self's, replayed by EU), is
+        ;; exact over its samples, since the reasoning above samples from, or
+        ;; weighs by, its probabilities, and an estimate there would bias it
+        ;; (acceptance passes 2 and 3)
+        ;; (the path is the chooser's frame here: the observer's own models
+        ;; are one deep)
+        [state mc-dim] (if (and (:bounded state) (:monte-carlo spec) (nil? (:choosing state))
+                                (= 1 (count (:path state))))
                          (alloc-dim state)
                          [state nil])
         state (if (:bounded state)
@@ -1303,14 +1334,13 @@
   agent's query over that future samples (sampling the guess first too would
   sample it twice, and, by Monte Carlo, bias the outer query)."
   [state {:keys [who id target-who target-id loc]}]
-  (let [ch (get-in (fr/get-frame state) [:children who :choices [target-who target-id]])
-        bounded (:bounded state)]
+  (let [ch (get-in (fr/get-frame state) [:children who :choices [target-who target-id]])]
     (when-not ch
       (err/raise "Observing unknown choice"
                  (assoc (frame-err-opts state loc)
                         :hint (str who " does not model " target-who "'s choice of " target-id "."))))
     (-> state
-        (assoc :bounded nil)
+        (assoc :exact true)
         (eval-stmt
                {:node :choose :who who :choices [[id (:domain ch)]] :reduction :normalize :loc loc
                 :wpp {:node :expect :reduction :expectation :warn false :loc loc :static false
@@ -1318,7 +1348,7 @@
                              :args [{:node :choice :id id :loc loc :static false}
                                     {:node :with :who target-who :loc loc :static false
                                      :expr {:node :choice :id target-id :loc loc :static false}}]}}})
-        (assoc :bounded bounded))))
+        (assoc :exact false))))
 
 (defn- forget-copies
   "frame after who forgot the choices of by-idx (dim -> id): the copies of
@@ -1454,6 +1484,7 @@
    :pending []
    :mixing []
    :choosing nil
+   :exact false
    :report []})
 
 (defn analyze

@@ -909,7 +909,11 @@ its reference.*
     enclosing query averages over.
   - "Its belief varies" is structural: the frame's `:ll-dims`. The lowering
     checks it (a belief varying along a mixed dim without samples of its
-    own is an internal error, `check-mixing`).
+    own is an internal error, `check-mixing`). For it to be precise, a
+    query's value depends, under a budget, on the known dims its beliefs
+    vary along and the known choices its expression reads (`query-deps`),
+    not on every choice the frame knows, which made a later observation's
+    guess give options samples of their own (acceptance pass 3).
   - So options share samples when the agent's model of what follows does not
     depend on the option (alice judges both bets against one imagined score:
     Vul, Goodman, Griffiths & Tenenbaum's "one and done", 2014), and each
@@ -1160,11 +1164,13 @@ sample from **finite** sets: outcomes, options, other agents' types.
 - **Monte Carlo** (`:monte-carlo true`, `:draws R`) uses the same IR: the
   draws' dim holds R random draws, shared by all the sources one choice
   marginalizes (each drawn independently, from its own key), averaged with
-  weight 1/R. Only a choice not inside another choice's weights is drawn:
-  a nested one (the future self's choice EU replays, another agent's in an
-  imagined world) stays exact over its samples, since the outer reasoning
-  samples from (or weighs by) its probabilities, and an estimate there
-  enters nonlinearly, a bias (acceptance pass 2). Draws come from the call's `:memo/key` folded with the
+  weight 1/R. Only a choice the observer models directly, outside any
+  choice's weights, is drawn: one inside another agent's mind, or inside a
+  choice's weights (the future self's choice EU replays), stays exact over
+  its samples, since the reasoning above samples from (or weighs by) its
+  probabilities, and an estimate there enters nonlinearly, a bias
+  (acceptance passes 2 and 3). Its size error then says why Monte Carlo was
+  not used. Draws come from the call's `:memo/key` folded with the
   instruction's position, so a key reproduces its table; they are never
   folded into constants (memo.lower's `constant`). The samples carry no
   gradient through the belief they are drawn from: a belief being
@@ -1335,7 +1341,7 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
     the temperature, at an outcome of probability 0 too.
   - **The budget's checks, the limit, the report, the loud errors** for an
     estimate outside its agent's choice, each message compared.
-  - **Planted bugs** (CLAUDE.md rule 7): 27, each caught (the gradient at a
+  - **Planted bugs** (CLAUDE.md rule 7): 30, each caught (the gradient at a
     zero outcome, the multinomial coefficient, sharing without the options'
     or the enclosing queries' own samples, `:per-option` ignored, rejection
     without evidence, with evidence not moved by an observed choice, with
@@ -1346,7 +1352,8 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
     check, and, after the acceptance pass, the negative-belief and
     negative-acceptance checks, the report's callees and its report-only
     mode; after pass 2, a sampled guess, nested choices drawn, the event
-    weights unchecked, and the report's budget check).
+    weights unchecked, and the report's budget check; after pass 3, coarse
+    query deps, Monte Carlo inside another's mind, and the guess sampled).
   - **Acceptance pass 1** (2026-10-24, one agent, the Handbook and
     docstrings alone, ~70 models against its own brute force;
     `tmp/acceptance-m3/report.md`): everything checked agreed, except two
@@ -1367,6 +1374,15 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
     the agent or line, a limit beyond a long refused, rejection's category
     counted with nothing observed, caches bounded by size; the rest were
     doc gaps, closed.
+  - **Acceptance pass 3** (2026-10-24, focused on Monte Carlo;
+    `tmp/acceptance-m3-pass3/`): about 70 Monte Carlo checks against exact
+    over samples (up to 2·10^6 keys), the exact limit on seven models, and
+    brute force for EU and Predict with later observations. Two defects,
+    fixed: Monte Carlo on an agent inside another's mind was biased (z =
+    −30, −47; now exact there), and a later observation gave EU's samples
+    per option where nothing depended on the option (query deps refined).
+    Doc gaps closed: ties among estimates are float equality, `estimated`'s
+    split key, a budget that bounds nothing.
 - **Acceptance passes** before each milestone closes: independent agents
   working as memo users from the Handbook and the docstrings alone, against
   Python memo's answers.
