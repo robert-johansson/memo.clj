@@ -50,9 +50,12 @@ In order:
      targets the 1.0 APIs, and moves its pins there. *2026-10-24
      (memoclj-p6zs):* memo.clj's 1.0 waits for gen.clj's 1.0 (gen.clj's
      owner, via its session gen-clj-65; genclj-04h2, a draft without scope
-     or date), and pins it by gen.clj's GitHub URL (memoclj-kxj1). Until
-     then memo.clj runs against gen.clj's HEAD now and then, and settles
-     which gen.clj surface it needs frozen (memoclj-x05s).
+     or date), and pins it by gen.clj's GitHub URL (memoclj-kxj1). gen.clj's
+     1.0 is months out, not weeks (gen-clj-65, the same day: the 1.0 scope,
+     the post-M5 review's fixes, a gen.clj book, feature work), and there
+     is no rush for memo.clj's. Until then memo.clj pins gen.clj commits as
+     before, runs against gen.clj's HEAD now and then, and settles which
+     gen.clj surface it needs frozen (memoclj-x05s).
    - *The API review (2026-10-24, memoclj-qgr0):* an independent read of
      the four namespaces and the Handbook. Applied: internals private or
      `^:no-doc` (`make-memo`, `definitions`, the domain record
