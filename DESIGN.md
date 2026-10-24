@@ -825,7 +825,9 @@ decision of 2026-10-23):
 **experimental**: the `:memo/budget` call option, `memo.bounded` and
 `memo.gen/estimated` stay outside what 1.0 freezes. §7.1–§7.3 keep the
 owner's decisions of 2026-10-24 (§13.2, §13.3, §13.5); what M3 decided
-while it was built is marked (proposed, built), for the owner's review.
+while it was built was marked (proposed, built) for the owner's review, and
+the owner kept every choice on 2026-10-24 (§13.11): those marks now read
+(built; decided 2026-10-24).
 The code: `src/memo/bounded.clj`, the analysis's `sample-ll` and
 `eval-choose` (`memo.analyze`), three IR instructions (§7.5). The tests:
 `test/memo/bounded_test.clj` (§9). The Handbook's "Bounded minds" part is
@@ -868,7 +870,7 @@ its reference.*
   - They would always lower by Monte Carlo, since their samples cannot be
     enumerated.
 
-**What M3 built (proposed, built 2026-10-24):**
+**What M3 built (built; decided 2026-10-24):**
 
 - **Plug-in on sampled beliefs.** Every query a bounded agent evaluates that
   is an expectation (`E`, `Pr`, `Var`, `H`, `KL`, the posterior shortcut,
@@ -901,7 +903,7 @@ its reference.*
   acceptance pass found it undocumented, and the Handbook now says so. A
   joint-futures algorithm (sample k complete futures) would need EU's two
   expectations fused, and is not built.
-- **Sharing (proposed, built; a claim about minds, flagged by a side agent
+- **Sharing (built; decided 2026-10-24; a claim about minds, flagged by a side agent
   and filed for GenGDT as gengdt-lu5i).** Within one query the samples are
   shared across the values the agent knows, except along the dims its
   reasoning *mixes* before the choice, where its belief varies: there each
@@ -979,7 +981,7 @@ sample from **finite** sets: outcomes, options, other agents' types.
   converges to the exact-over-samples table (a law, §9). Declaring Monte
   Carlo below the limit gives the comparison.
 
-**As built (proposed, built 2026-10-24):**
+**As built (built; decided 2026-10-24):**
 - **The sufficient statistic is the count vector** over the joint cells of
   the sampled dims (m = the product of their sizes): an estimate is a
   function of the counts whatever the query, since every query is a plug-in
@@ -1040,7 +1042,7 @@ sample from **finite** sets: outcomes, options, other agents' types.
   - The budget can itself be a function of the outer model's state, or a
     random variable. Urgency narrowing computation is then expressible in
     GenGDT as `budget = f(goal value)`.
-- **As built (proposed, built 2026-10-24):**
+- **As built (built; decided 2026-10-24):**
   - **The key is namespaced,** `:memo/budget`, in the call's trailing map,
     so that a parameter named `budget` never collides: `(choose 2.0
     {:memo/budget {'alice {:samples 8}}})`. The call's other options are
@@ -1076,7 +1078,7 @@ sample from **finite** sets: outcomes, options, other agents' types.
     %}}}) ks))`, each budget compiled once. A budget computed from a fitted
     value is read on the host, which `array/compile` and gen.batched's
     batching cannot do (GenGDT's to weigh, gengdt-3xne).
-- **First algorithms (proposed 2026-10-20; built 2026-10-24):**
+- **First algorithms (proposed 2026-10-20; built and decided 2026-10-24):**
   - **Sample the agent's belief and average** (`:one-and-done`): samples
     from its current belief, after what it observed (forward sampling where
     nothing is observed; Vul et al. assume posterior samples). This also
@@ -1132,7 +1134,7 @@ sample from **finite** sets: outcomes, options, other agents' types.
   chooses, with the exact agent (k → ∞) as its limit. GenGDT's to build:
   gengdt-lu5i, starting when GenGDT pins the commit that closes M3.
 
-### 7.4 Where a bounded estimate can go (proposed, built 2026-10-24)
+### 7.4 Where a bounded estimate can go (built; decided 2026-10-24)
 
 - **The agent's own choice.** The samples are marginalized there, so an
   estimate can drive that choice's `:wpp`, `:to-maximize` or `:to-be`.
@@ -1152,7 +1154,7 @@ sample from **finite** sets: outcomes, options, other agents' types.
   its own uncertainty (linear, so well defined), and soft-evidence
   weighting.
 
-### 7.5 The lowering (proposed, built 2026-10-24)
+### 7.5 The lowering (built; decided 2026-10-24)
 
 - **The analysis takes the budget** (`:bounded`, normalized, and the call's
   `:limit`). At a bounded agent's query, `sample-ll` emits, instead of
@@ -1453,9 +1455,11 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
    model? That would go beyond memo's semantics, so it would be an extension
    by principle 1. *Decided 2026-10-24:* finite in M3 (discretize); the
    extension later, once a client needs it (§7.1).
-11. **M3's choices made while building it** (§7.1–§7.5, proposed and built
-    2026-10-24, for review before GenGDT's first fit, gengdt-lu5i;
-    memoclj-3eap). *Those that change what a model predicts:*
+11. **M3's choices made while building it** (§7.1–§7.5, built
+    2026-10-24). *Decided 2026-10-24: the owner kept every recommendation
+    below (memoclj-3eap); the sharing rule stays GenGDT's to choose for
+    its imagined outcomes, default or `:per-option` (gengdt-lu5i).*
+    *Those that change what a model predicts:*
     - **Every query the agent evaluates is a plug-in on k samples,** in
       every frame it owns, its future selves included (§7.1). So where a
       goal depends on something the agent will observe and something it
