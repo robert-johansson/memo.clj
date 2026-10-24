@@ -172,6 +172,36 @@
                             "It has no agents.")
                     :loc {:name mname}})))))
 
+(defn- check-effect
+  "Each part of each agent's budget bounds something in m or a memo it calls:
+  :samples a query the agent evaluates about what it is uncertain of,
+  :options a choice it narrows. Otherwise the call would give the exact
+  table, as if that part were not there."
+  [m budget]
+  (let [bounded (loop [todo [m] seen #{} acc #{}]
+                  (if-let [f (peek todo)]
+                    (if (seen f)
+                      (recur (pop todo) seen acc)
+                      (recur (into (pop todo) (callees f)) (conj seen f)
+                             (into acc ((:memo/bounded-parts (meta f)) budget))))
+                    acc))
+        mname (:memo/name (meta m))]
+    (doseq [[a {:keys [samples options]}] budget]
+      (when (and samples (not (bounded [a :samples])))
+        (err/raise (str "The :samples of " a "'s budget bound nothing in memo " mname)
+                   {:hint (str a " evaluates no query (E, Pr, EU, ...) about what it is uncertain of, "
+                               "here or in the memos called, so its choices would be the exact ones. "
+                               "To bound how it imagines what follows a choice, make that a choice in "
+                               "its model and read it through a query: (" a " :thinks (world :chooses "
+                               "...)), then (E ...) or (EU ...) in its choice's weights.")
+                    :loc {:name mname}}))
+      (when (and options (not (bounded [a :options])))
+        (err/raise (str "The :options of " a "'s budget bound nothing in memo " mname)
+                   {:hint (str ":options narrows a choice " a " makes by weight, :to-maximize, "
+                               ":to-minimize or :uniformly, here or in the memos called; " a
+                               " makes none.")
+                    :loc {:name mname}})))))
+
 (def ^:private call-keys #{:memo/budget :memo/limit :memo/key})
 
 (defn- call-options
@@ -273,6 +303,7 @@
                 (let [epoch @definitions]
                   (when-not (= epoch (get @checked budget))
                     (check-agents @self budget)
+                    (check-effect @self budget)
                     (swap! checked assoc budget epoch))))
         _ (swap! definitions inc)]
     (let [m (with-meta
@@ -310,6 +341,8 @@
                                             (some->> limit (bounded/limit-value ":memo/limit"))
                                             (boolean report-only)))
            :memo/callees #(callees @self)
+           ;; [agent part] for each part of a normalized budget bounding something here
+           :memo/bounded-parts #(:bounded-parts (:compiled (bounded-program % nil true)))
            :memo/check-budget (fn [budget] (some-> (bounded/normalize-budget name budget) check))})]
       (deliver self m)
       m)))

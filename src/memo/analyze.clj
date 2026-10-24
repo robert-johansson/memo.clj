@@ -892,8 +892,11 @@
   [state {:keys [spec owner mc-dim dims sizes surface-alias surface-spec loc]}]
   (let [k (:options spec)
         cells (reduce * 1 sizes)]
-    (if-not (and k (= :chooses surface-alias) (considered-specs surface-spec) (< k cells))
-      [state nil]
+    (cond
+      (not (and k (= :chooses surface-alias) (considered-specs surface-spec))) [state nil]
+      ;; every option considered: the budget reaches the choice, and changes nothing
+      (>= k cells) [(update state :all-considered (fnil conj #{}) owner) nil]
+      :else
       (let [mc? (some? mc-dim)
             states (if mc? (:draws spec) (b/binomial cells k))
             limit (b/limit-of spec (:limit state))
@@ -1496,7 +1499,9 @@
   :defaults #{..} :num-results n}; with a budget (M3), :bounded, a normalized
   budget (memo.bounded/normalize-budget), and :limit, the call's (with
   :report-only, sizes above it are reported, not errors). A bounded program
-  also has :bounded-report, its choices' sizes."
+  also has :bounded-report, its choices' sizes, and :bounded-parts, [agent
+  part] for each part of the budget (:samples, :options) that reaches a query
+  or a choice (:options k reaches a choice of k or fewer options too)."
   [{:keys [pctxt stmts retvals]} domains {:keys [variant callee bounded limit report-only]}]
   (let [state (reduce (fn [st [i s]]
                         (eval-stmt (assoc st :continuation (subvec stmts (inc i))) s))
@@ -1522,4 +1527,7 @@
      :domains (mapv #(nth % 2) forall)
      :shape (mapv (fn [[_ _ dom]] (count (get domains dom))) forall)
      :n-dims (:next-dim state)
-     :bounded-report (:report state)}))
+     :bounded-report (:report state)
+     :bounded-parts (into (set (map (fn [a] [a :options]) (:all-considered state)))
+                          (for [{:keys [agent sources]} (:report state), {:keys [kind]} sources]
+                            [agent kind]))}))

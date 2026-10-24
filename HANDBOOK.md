@@ -1775,8 +1775,25 @@ An agent is a symbol or a keyword. A spec takes:
 | `:monte-carlo true` | the samples are drawn, not enumerated (with `:draws R`, default 1); the call then needs `:memo/key` |
 | `:limit n` | the enumerated states allowed at one of its choices (default 10^6) |
 
-A budget for an agent that evaluates no query (or, for `:options`, makes no
-`:chooses`) changes nothing: `bounded/report` shows what a budget bounds.
+Each part of a budget must bound something, in the memo or the memos it
+calls: `:samples` a query the agent evaluates about what it is uncertain
+of, `:options` a `:chooses` it makes by weight, `:to-maximize`,
+`:to-minimize` or `:uniformly`. Otherwise the call is an error, since its
+table would be the exact one: fitting k to a mind whose choice reads no
+query would find nothing to fit. `:options k` at or above a choice's
+number of options considers them all (the limit of k), which is no error.
+`bounded/report` shows what a budget bounds.
+
+```clojure
+;; error: The :samples of alice's budget bound nothing in memo hunch
+;; alice's weights read no query: she judges by a fixed guess of 1 point
+(defmemo hunch [[b Bet]] [beta]
+  (alice :chooses [b Bet] :wpp (exp (* beta (payoff b 1))))
+  (return (Pr (= alice.b b))))
+
+(hunch 2.0 {:memo/budget {'alice {:samples 8}}})
+```
+
 The call's `:memo/limit` sets the limit for every agent that has no
 `:limit` of its own; an agent's `:limit` wins, higher or lower. A budget
 naming an agent the memo (and the memos it calls) does not have, an

@@ -269,6 +269,11 @@
   (alice :given [o Three] :wpp (weight3 o))
   (return (Pr (= alice.o a))))
 
+(defmemo given-and-chosen [[g Three] [a Three]] []
+  (alice :given [h Three] :wpp (weight3 h))
+  (alice :chooses [o Three] :wpp (weight3 o))
+  (return (Pr (and (= alice.h g) (= alice.o a)))))
+
 (defn- three-brute [k rule]
   (let [subsets (filter #(= k (count %)) (map (fn [m] (filterv #(bit-test m %) [0 1 2])) (range 8)))]
     (average (for [s subsets]
@@ -403,7 +408,9 @@
     (testing "every option considered is the exact choice"
       (is (= (host (three)) (host (three (budget {:options 3}))))))
     (testing "a :given is not a deliberate choice: all its options count"
-      (is (= (host (three-given)) (host (three-given (budget {:options 1})))))))
+      (let [h (host (three-given))]
+        (is (close-all? (vec (for [g Three] (vec (for [_ Three] (/ (h g) 3.0)))))
+                        (host (given-and-chosen (budget {:options 1}))))))))
   (testing "as another agent models it"
     (is (close-all? (pick-brute 2 1.0 false) (host (nested 1.0 (budget {:samples 2}))))))
   (testing "an observer's inference marginalizes the samples first"
@@ -480,6 +487,28 @@
            (message #(pick 1.0 (budget {:samples 2 :monte-carlo true}))))))
   (testing "an empty budget is the exact memo"
     (is (= (host (pick 1.0)) (host (pick 1.0 {:memo/budget {}}))))))
+
+(defmemo three-known [[a Three]] []
+  (alice :chooses [o Three] :wpp (exp (E (weight3 o))))
+  (return (Pr (= alice.o a))))
+
+(defmemo reports [[r Y]] []
+  (alice :thinks (bob :chooses [y Y] :wpp (+ 1 y)))
+  (alice :chooses [r Y] :to-be (> (E bob.y) 0.5))
+  (return (Pr (= alice.r r))))
+
+(deftest a-budget-bounds-something
+  (doseq [[f spec msg] [[three {:samples 2} "The :samples of alice's budget bound nothing in memo three"]
+                        [three-known {:samples 2} "The :samples of alice's budget bound nothing in memo three-known"]
+                        [three {:samples 2 :options 2} "The :samples of alice's budget bound nothing in memo three"]
+                        [three-given {:options 1} "The :options of alice's budget bound nothing in memo three-given"]
+                        [reports {:samples 2 :options 1} "The :options of alice's budget bound nothing in memo reports"]]]
+    (is (= msg (message #(f (budget spec)))) (str msg " " spec))
+    (is (= msg (message #(b/report f {'alice spec}))) "the report checks it too"))
+  (testing "a part that bounds something passes"
+    (is (some? (host (three (budget {:options 2})))))
+    (is (some? (host (three (budget {:options 3})))) "every option considered: the limit of :options k")
+    (is (some? (host (calls-pick 1.0 (budget {:samples 2})))) "in a memo called")))
 
 (defmemo snap [[a A]] []
   (alice :snapshots-self-as past)

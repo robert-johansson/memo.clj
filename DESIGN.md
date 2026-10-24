@@ -1049,6 +1049,14 @@ sample from **finite** sets: outcomes, options, other agents' types.
   - **An agent** is a symbol or a keyword; `self`, the observer and a
     snapshot's alias cannot be given one; an agent that neither the memo
     nor a memo it calls has is an error.
+  - **Each part of a budget bounds something** (memoclj-wxuc, 2026-10-24),
+    in the memo or a memo it calls: `:samples` a query the agent evaluates
+    about what it is uncertain of, `:options` a choice it can narrow
+    (`:options k` at or above the choice's options is its limit, and
+    passes). Otherwise a loud error, checked once per budget with the
+    agents (and by `bounded/report`). First built as a silent no-op, the
+    exact table: GenGDT's `memo-agent/choose`, whose weights come from a
+    host function, would have fitted k to a flat likelihood.
   - **A spec:** `:samples k`, `:algorithm` (`:one-and-done`, the default,
     or `:rejection`), `:per-option`, `:options k`, `:monte-carlo` with
     `:draws R`, `:limit n`. Unknown keys and values of the wrong kind are
@@ -1446,12 +1454,45 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
    by principle 1. *Decided 2026-10-24:* finite in M3 (discretize); the
    extension later, once a client needs it (§7.1).
 11. **M3's choices made while building it** (§7.1–§7.5, proposed and built
-    2026-10-24, for review): queries as plug-in estimates on sampled
-    beliefs; the sharing rule and `:per-option`; the agent as every frame it
-    owns; estimates marginalized at the agent's own choice, elsewhere a loud
-    error; `:rejection` for observations (soft-evidence weighting not
-    built); `:options k` as uniform subsets of `:chooses`; the budget reaching
-    the memos called; the namespaced call options.
+    2026-10-24, for review before GenGDT's first fit, gengdt-lu5i;
+    memoclj-3eap). *Those that change what a model predicts:*
+    - **Every query the agent evaluates is a plug-in on k samples,** in
+      every frame it owns, its future selves included (§7.1). So where a
+      goal depends on something the agent will observe and something it
+      never will, `EU`'s two queries average over every pair of their
+      samples, not over k joint futures; and a later choice of the agent's
+      that `EU` replays is bounded too, averaged exactly over its own
+      samples: the present self anticipates a bounded future self.
+      Alternatives: an exact future self (only the present self samples),
+      or k joint futures (not built). Neither of GenGDT's models meets the
+      first case: `cope`'s agent observes nothing before its goal (one
+      query), and the first client's goal is over the outcome, which it
+      observes. In `cope`, `future` is an agent of its own, bounded only if
+      the budget names it.
+    - **Options share samples** unless the agent's belief depends on the
+      option; `:per-option true` gives each its own (§7.1, gengdt-lu5i).
+    - **Observations** (§7.3): `:one-and-done`, the default, samples the
+      exact posterior; `:rejection` samples the prior and keeps a sample
+      with probability equal to an observation's weight. Weighting samples
+      instead (self-normalized importance sampling) is not built; for hard
+      evidence it coincides with rejection.
+    - **`:options k`** draws k-subsets uniformly, of `:chooses` by weight,
+      `:to-maximize`, `:to-minimize` or `:uniformly` only (§7.3).
+    - **The budget reaches the memos called,** by agent name (§7.3): agents
+      of the same name in different memos cannot be bounded apart.
+
+    *Those that only allow or refuse programs, changing no table:*
+    - **An estimate drives only its agent's own choice** (§7.4), elsewhere
+      a loud error; a reported estimate is written as a choice. Lifting it
+      later adds programs.
+    - **Each part of a budget bounds something,** else a loud error
+      (§7.3, memoclj-wxuc).
+    - **The call option is `:memo/budget`,** not the `:budget` of the
+      owner's decision (§13.2), since a call's trailing map also passes
+      parameters by name; `:memo/limit` and `:memo/key` likewise (§7.3).
+    - **The limit** (§7.2): checked per query and per choice ("per agent
+      query" read as one choice), the agent's `:limit` winning over the
+      call's, not applied under Monte Carlo.
 6. **The name:** check that "memo.clj" does not collide with an existing
    project ("gen.clj" collided with probcomp's Gen.clj).
 7. **Git and tracking:** a repository and a beans prefix (`memoclj-`?) from
