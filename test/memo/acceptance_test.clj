@@ -401,7 +401,12 @@
   (testing "a result of another shape"
     (let [e (thrown #(memo/print-table t1-float-exp (t2-abs-int)))]
       (is (err/memo-error? e))
-      (is (str/starts-with? (str (some-> e ex-message)) "print-table: the result has shape [5]")))))
+      (is (str/starts-with? (str (some-> e ex-message)) "print-table: the result has shape [5]"))))
+  (testing "a result being differentiated prints its values (gen.clj refuses a host read that
+            loses a gradient, genclj-de4g; printing has none to lose)"
+    (is (str/includes? (with-out-str ((array/grad (fn [a] (let [r (t1-int-param a)] (memo/print-table t1-int-param r) (array/sum r))))
+                                      2.0))
+                       "t1-int-param"))))
 
 (defmemo t16-forever [[x X]] [t] (return (t16-forever [x] (+ t 1))))
 

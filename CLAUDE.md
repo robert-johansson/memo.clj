@@ -85,8 +85,11 @@ Java binding).
    operators in place of clojure.core's (`(:refer-clojure :exclude [+ - * / <
    > <= >= == abs])`); never refer `max`, `min`, `take` or `flatten`.
 6. **Tests run on every backend.** Read results with `memo.test-support/host`
-   and compare with `close?` (float32 aware). Never call `array/item` inside a
-   function being differentiated: it reads the primal and drops the gradient.
+   and compare with `close?` (float32 aware). Never read a value being
+   differentiated on the host (`array/item`, `array/->clj`, clojure.core
+   arithmetic): gen.clj refuses it loudly (genclj-de4g). A read with no
+   gradient to lose (a spot check, a message, a printout) reads
+   `(array/stop-gradient x)`.
 7. **A test must be able to fail.** Check new tests against a planted bug.
 8. **Host functions** are tabulated on host numbers unless marked
    `^:memo/vectorized` (gen.array operators, elementwise); only those are

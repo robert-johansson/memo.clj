@@ -418,9 +418,12 @@
 
 (defn- samples
   "x's values at the row-major indices idxs of shape (x broadcast to it), on
-  the host: only those elements are read."
+  the host: only those elements are read, primal values for a value being
+  differentiated (gen.clj refuses a host read that would lose a gradient;
+  a spot check has none to lose)."
   [x shape idxs]
-  (let [s (array/shape x)]
+  (let [x (if (tape/tracked? x) (array/stop-gradient x) x)
+        s (array/shape x)]
     (if (empty? s)
       (vec (repeat (count idxs) (array/->clj x)))
       (let [r (count shape)

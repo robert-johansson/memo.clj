@@ -113,7 +113,9 @@
           tol (+ 1e-6 (* n (eps (array/dtype probs))))]
       (when (array/any-true? (> (array/abs (- sums 1.0)) tol))
         (err/raise (str "The table of memo " mname " does not sum to 1" at
-                        (when (zero? (array/ndim sums)) (str ": it sums to " (array/item sums))))
+                        ;; stop-gradient: a message has no gradient to lose, and
+                        ;; gen.clj refuses a host read of a value being differentiated
+                        (when (zero? (array/ndim sums)) (str ": it sums to " (array/item (array/stop-gradient sums)))))
                    {:hint (str "memo returns an all-zero table silently when an observation is impossible "
                                "or every :wpp weight is zero (DESIGN.md §2.4); a distribution cannot "
                                "be drawn from it. " dist-hint)

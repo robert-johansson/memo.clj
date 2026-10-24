@@ -265,7 +265,11 @@
   (testing "a given axis names its row"
     ;; L0 is 1/2 at r = 9's two utterances: 0.5 ** 2000 underflows
     (is (= "The table of memo S1-pow does not sum to 1 for r = 9: it sums to 0.0"
-           (memo-message #((mg/dist S1-pow {:given '[r]}) [9] 2000.0))))))
+           (memo-message #((mg/dist S1-pow {:given '[r]}) [9] 2000.0)))))
+  (testing "under gradients: memo's error, not gen.clj's refusal of a host read (genclj-de4g)"
+    (is (= "The table of memo S1-pow does not sum to 1 for r = 9: it sums to 0.0"
+           (memo-message #((array/grad (fn [a] (dc/log-prob ((mg/dist S1-pow {:given '[r]}) [9] a) 1)))
+                           2000.0))))))
 
 (deftest construction-and-calls-are-checked
   (is (re-find #"^dist takes a memo" (str (memo-message #(mg/dist inc)))))

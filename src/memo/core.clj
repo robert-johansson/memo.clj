@@ -560,7 +560,7 @@
             (err/raise (str "print-table: the result has shape " (array/shape result)
                             ", but " name "'s results have shape " want)
                        {:hint (str "Pass " name "'s own result: (print-table " name " (" name " ...)).")}))
-        data (array/->clj result)
+        data (array/->clj (array/stop-gradient result))    ; printed: no gradient to lose
         cells (reduce (fn [acc d] (for [a acc i (range (count (domains/values d)))] (conj a i)))
                       [[]] domains)
         value (fn [path] (str (if (sequential? data) (get-in data path) data)))
