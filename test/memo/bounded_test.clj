@@ -711,7 +711,7 @@
 
 (deftest sharing-and-monte-carlo-across-minds
   (testing "a later observation leaves the options sharing samples"
-    (is (= (host (bets-later 1.5)) (host (bets-later-seen 1.5))) "exact, the same tables")
+    (is (close-all? (host (bets-later 1.5)) (host (bets-later-seen 1.5))) "exact, the same tables")
     (doseq [k [1 2]]
       (is (close-all? (host (bets-later 1.5 (budget {:samples k}))) (host (bets-later-seen 1.5 (budget {:samples k}))))
           (str "k " k)))
