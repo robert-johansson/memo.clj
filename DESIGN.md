@@ -47,7 +47,12 @@ In order:
    - the Handbook complete for both;
    - §13's open questions decided (4, 6, 8, 9);
    - a tag, timed with gen.clj's 1.0 if it has one by then. GenGDT's Phase A
-     targets the 1.0 APIs, and moves its pins there.
+     targets the 1.0 APIs, and moves its pins there. *2026-10-24
+     (memoclj-p6zs):* memo.clj's 1.0 waits for gen.clj's 1.0 (gen.clj's
+     owner, via its session gen-clj-65; genclj-04h2, a draft without scope
+     or date), and pins it by gen.clj's GitHub URL (memoclj-kxj1). Until
+     then memo.clj runs against gen.clj's HEAD now and then, and settles
+     which gen.clj surface it needs frozen (memoclj-x05s).
 4. **M3 — bounded minds.** An agent's reasoning can be evaluated by a
    declared algorithm with a budget, instead of by exact inference over its
    beliefs. There are two lowerings, tried in this order:
@@ -1449,7 +1454,12 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
 4. **Upstream:** does the exact core track new memo releases, with the pin
    moved deliberately? Or freeze at 1.3.2 until M3? *(2026-10-21: the owner
    moved the pin to 1.3.3 for upstream's snapshot fix, bean memoclj-0s5l;
-   whether to track every release stays open.)*
+   whether to track every release stays open.)* *Decided 2026-10-24
+   (memoclj-v4kh):* tracked, deliberately. Each Python memo release gets a
+   bean: the pin moved, the fixtures regenerated, differences into §2.4 and
+   the ledger (§9). New constructs come in minor releases of memo.clj,
+   upstream bug fixes in patch releases, each called out in the release
+   notes.
 5. **Continuous variables in minds:** memo is finite. Is discretizing enough,
    or should bounded minds (M3) admit gen.clj distributions inside an agent's
    model? That would go beyond memo's semantics, so it would be an extension
@@ -1498,11 +1508,18 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
       query" read as one choice), the agent's `:limit` winning over the
       call's, not applied under Monte Carlo.
 6. **The name:** check that "memo.clj" does not collide with an existing
-   project ("gen.clj" collided with probcomp's Gen.clj).
+   project ("gen.clj" collided with probcomp's Gen.clj). *Checked and
+   decided 2026-10-24 (memoclj-idgc):* no project of that name on GitHub,
+   Clojars or Maven Central (Clojars has no `memo` artifact or group;
+   Maven Central's `memo` artifacts are unrelated Android libraries); the
+   closest is the owner's earlier port, robert-johansson/memo-clj. The
+   name stays memo.clj.
 7. **Git and tracking:** a repository and a beans prefix (`memoclj-`?) from
    the start, as gen.clj has. *Decided 2026-10-20:* this repository (no
    remote yet), beans with the prefix `memoclj-`, set up as gen.clj's (the
-   private remote of the beans repository is pending).
+   private remote of the beans repository is pending). *Decided 2026-10-24
+   (memoclj-okbr):* published as a private GitHub repository,
+   robert-johansson/memo.clj, as gen.clj, memo-clj and GenGDT are.
 8. **Float64 against float32 parity** for the constructs where the dtype
    changes the answer (§2.4): run those parity tests in float32, keep them
    out of the fuzzer's grammar, or accept documented differences?
@@ -1512,11 +1529,16 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
    against a zero as that known difference when both values are past
    float32's largest number; the demo tests accept documented differences
    (persuasion's ties, checked to be exact ties; an absolute tolerance
-   where results cancel).
+   where results cancel). *Decided 2026-10-24 (memoclj-mths):* documented
+   differences, as above, made the rule; the Handbook says where float64
+   and JAX's float32 differ.
 9. **Zero-mass distributions:** memo returns them silently (§2.4). Keep
    that for parity, warn, or make it an error outside a parity mode? This
    is where principle 1 (same semantics) meets principle 6 (no silent wrong
-   numbers).
+   numbers). *Decided 2026-10-24 (memoclj-xz4k):* parity. Tables stay
+   memo's (an all-zero distribution, silently), and the bridge refuses
+   them: `memo.gen/dist` checks that a table sums to 1 at every call, so
+   a fit cannot use one silently. The Handbook says so.
 10. **NaN gradients where the values are right** (§2.4). *Decided
     2026-10-20:* the values keep matching JAX, and the M2 bridge makes a
     NaN gradient a loud error, so fitting never fails silently. Repairing
