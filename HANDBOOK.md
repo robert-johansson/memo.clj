@@ -36,7 +36,10 @@ License, Copyright (c) 2024-2025 Kartik Chandra and Tony Chen.*
 5. **[Minds in gen.clj models](#minds-in-genclj-models)**: a memo as a
    gen.clj distribution or deterministic generative function
    (`memo.gen`).
-6. **[Differences from Python memo](#differences-from-python-memo)**.
+6. **[Bounded minds](#bounded-minds)** (experimental): an agent that
+   reasons from a few samples, with a budget given at the call
+   (`memo.bounded`).
+7. **[Differences from Python memo](#differences-from-python-memo)**.
 
 ## Setting Up
 
@@ -1714,10 +1717,267 @@ is the same.
 
 ---
 
+# Bounded minds
+
+*Experimental (memo.clj's M3): outside what 1.0 freezes, and a memo.clj
+extension, not part of Python memo.*
+
+memo's agents reason exactly: every expectation is computed over
+everything the agent is uncertain about. A **bounded** agent instead
+imagines a few samples of what it is uncertain about, and judges from
+those. Its budget is given when the memo is called, keyed by agent, so the
+model text does not change:
+
+```clojure
+(require '[memo.bounded :as bounded]
+         '[gen.dist :as d])
+
+(def Points [0 1 2])
+(defenum Bet UNDER OVER)
+
+;; alice bets on how many points bob scored: UNDER pays 2 - points, OVER
+;; pays points
+(defn payoff [bet points] (if (= bet 0) (- 2 points) points))
+
+(defmemo bettor [[b Bet]] [beta]
+  (alice :thinks (bob :chooses [points Points] :wpp (+ 1 points)))
+  (alice :chooses [b Bet] :wpp (exp (* beta (E (payoff b bob.points)))))
+  (return (Pr (= alice.b b))))
+
+(array/->clj (bettor 2.0))
+;=> [0.20860852732604496 0.791391472673955]
+
+;; alice imagines one score, and bets on it
+(array/->clj (bettor 2.0 {:memo/budget {'alice {:samples 1}}}))
+;=> [0.3393287366540305 0.6606712633459695]
+
+;; eight
+(array/->clj (bettor 2.0 {:memo/budget {'alice {:samples 8}}}))
+;=> [0.24991496729434712 0.7500850327056535]
+```
+
+The table is still exact. The agent's samples are random, but the
+observer does not see them: alice's choice probability is the average
+over every way her samples can fall, P(b) = E_ω[π(b | estimates(ω))],
+computed by enumerating them. As the budget grows, the table approaches
+the exact one.
+
+**The budget** is `{agent spec}` under `:memo/budget` in the call's
+trailing map (namespaced, so a parameter named `budget` never collides).
+An agent is a symbol or a keyword. A spec takes:
+
+| Key | Meaning |
+|---|---|
+| `:samples k` | each query the agent evaluates is estimated from k samples |
+| `:algorithm` | `:one-and-done` (the default): samples from its current beliefs; `:rejection`: samples from its prior, kept when consistent with what it observed |
+| `:per-option true` | every option of a choice has samples of its own (below) |
+| `:options k` | each of its `:chooses` considers only k options, drawn uniformly |
+| `:monte-carlo true` | the samples are drawn, not enumerated (with `:draws R`, default 1); the call then needs `:memo/key` |
+| `:limit n` | the enumerated states allowed at one of its choices (default 10^6) |
+
+The call's `:memo/limit` sets the limit for every agent. A budget naming
+an agent the memo (and the memos it calls) does not have, an unknown key,
+or a value of the wrong kind is an error.
+
+## What is sampled
+
+- **Every query the agent evaluates** is estimated: `E`, `Pr`, `Var`, `H`,
+  `KL`, and the expectation inside `EU` and `Predict`, each computed on
+  the samples in place of the agent's beliefs. That holds in every frame
+  the agent owns: its own, wherever another agent models it, its imagined
+  worlds, and its future selves and snapshots. A query whose value the
+  agent already knows is not an expectation, and stays exact.
+- **Only what a query depends on** is sampled, so a query over one choice
+  of a large model samples that choice alone.
+- **Samples are fresh for each query,** and the agent's choice averages
+  over them.
+- **Options share samples** when the agent's belief about what it samples
+  does not depend on the option. Above, alice imagines bob's score once
+  and judges both bets against it (Vul et al.'s "one and done"). When
+  what follows depends on the option, each option has samples of its
+  own:
+
+```clojure
+(defenum Patch NEAR FAR)
+(def Yield [0 1 2 3])
+
+;; NEAR yields 1 or 2; FAR yields 0 or 3
+(defn yield-odds [patch y] (if (= patch 0) ([0.0 0.5 0.5 0.0] y) ([0.4 0.0 0.0 0.6] y)))
+
+(defmemo forager [[p Patch]] [beta]
+  (fox :wants food y)
+  (fox :chooses [p Patch] :wpp (exp (* beta (EU food))))
+  (fox :given [y Yield] :wpp (yield-odds p y))
+  (return (Pr (= fox.p p))))
+
+;; the fox imagines two yields of each patch
+(array/->clj (forager 1.0 {:memo/budget {'fox {:samples 2}}}))
+;=> [0.43764976955024126 0.5623502304497587]
+```
+
+  `:per-option true` gives every option samples of its own even when the
+  agent's belief does not depend on it. The two are different claims
+  about how a mind works, and predict different choices:
+
+```clojure
+(array/->clj (bettor 2.0 {:memo/budget {'alice {:samples 1 :per-option true}}}))
+;=> [0.30826425155204645 0.6917357484479536]
+```
+
+## Observations
+
+With `:one-and-done`, the agent samples its beliefs after what it
+observed. With `:rejection`, it samples its prior and keeps the samples
+consistent with its observations: an `:observes-event` weight is the
+probability of keeping one, and must not exceed 1. When none is kept, its
+beliefs have no mass, as after an impossible observation in memo.
+
+```clojure
+(defmemo hopeful [[b Bet]] [beta]
+  (alice :thinks (bob :chooses [points Points] :wpp (+ 1 points)))
+  (alice :observes-that (> bob.points 0))
+  (alice :chooses [b Bet] :wpp (exp (* beta (E (payoff b bob.points)))))
+  (return (Pr (= alice.b b))))
+
+(array/->clj (hopeful 2.0 {:memo/budget {'alice {:samples 2}}}))
+;=> [0.1436924381569694 0.8563075618430307]
+(array/->clj (hopeful 2.0 {:memo/budget {'alice {:samples 2 :algorithm :rejection}}}))
+;=> [0.17222856149157736 0.8277714385084228]
+```
+
+## Options considered
+
+`:options k` narrows each of the agent's `:chooses` (by weight, by
+`:to-maximize` or `:to-minimize`, or `:uniformly`) to k of its options,
+drawn uniformly without replacement, and the agent chooses among those.
+A `:given`, `:draws`, `:assigned` or `:guesses`, and a `:to-be` or
+`:such-that`, are not deliberate choices, and keep all their options.
+`:options` combines with `:samples`.
+
+```clojure
+(defenum Snack APPLE BAR CAKE)
+(defn appeal [s] ([1.0 2.0 4.0] s))
+
+(defmemo snacker [[s Snack]] []
+  (kid :chooses [s Snack] :wpp (appeal s))
+  (return (Pr (= kid.s s))))
+
+(array/->clj (snacker {:memo/budget {'kid {:options 2}}}))
+;=> [0.17777777777777776 0.3333333333333333 0.4888888888888889]
+```
+
+## Where a bounded estimate can go
+
+The samples are averaged at the agent's own choice, so an estimate can
+drive that choice (`:wpp`, `:to-maximize`, `:to-be`), and nothing else:
+returned, read by another agent, or weighting an observation, it is an
+error. To model a reported estimate, make the report a choice of the
+agent's, as `(alice :chooses [r R] :to-be ...)`.
+
+```clojure
+;; error: alice's bounded estimate is used outside alice's own choice
+(defmemo guess [] []
+  (alice :thinks (bob :chooses [points Points] :wpp (+ 1 points)))
+  (return (as alice (E bob.points))))
+
+(guess {:memo/budget {'alice {:samples 2}}})
+```
+
+## Sizes and the limit
+
+Exact over samples enumerates the samples' count vectors: C(k + m - 1,
+m - 1) for k samples of m values, and its power for options with samples
+of their own. `bounded/report` gives the sizes of each choice that averages
+over samples:
+
+```clojure
+(def sizes (first (bounded/report forager {'fox {:samples 2}})))
+
+(dissoc sizes :line :sources)
+;=> {:agent fox :states 100 :limit 1000000 :monte-carlo false}
+
+;; the fox's EU: 10 count vectors for 2 samples of 4 yields, for each of
+;; the 2 patches
+(dissoc (first (:sources sizes)) :line)
+;=> {:kind :samples :what "E" :k 2 :categories 4 :sets 2 :states 100}
+```
+
+Above the limit, the call is an error naming the size. The ways out: fewer
+samples, a smaller sampled variable (sample what the goal depends on, at
+its natural size), a higher `:limit`, or Monte Carlo.
+
+```clojure
+;; error: fox's E from 30 samples enumerates 29767936 states, above the limit of 1000000
+(forager 1.0 {:memo/budget {'fox {:samples 30}}})
+```
+
+memo.clj never switches to Monte Carlo by itself: a fit's density would
+turn from exact into noisy partway through.
+
+## Monte Carlo
+
+`:monte-carlo true` draws the samples (R times, with `:draws R`) instead of
+enumerating them, from the call's `:memo/key`. The table is then an
+unbiased estimate of the exact-over-samples one, the same for the same
+key:
+
+```clojure
+(def mc {:memo/budget {'alice {:samples 8 :monte-carlo true :draws 4}}})
+
+(= (array/->clj (bettor 2.0 (assoc mc :memo/key (rng/key 0))))
+   (array/->clj (bettor 2.0 (assoc mc :memo/key (rng/key 0)))))
+;=> true
+```
+
+`mg/dist` refuses such a budget: a distribution needs exact probabilities.
+`mg/estimated` gives instead a gen.clj generative function whose density is
+estimated (`gen.custom/estimated`): its one choice, at `:value`, is drawn
+as `mg/dist`'s draws, and its density is the estimated cell, computed with
+the operation's key. Pseudo-marginal MH and PMMH on a model that splices it
+then target the bounded model's exact posterior:
+
+```clojure
+(def bets (mg/estimated bettor))
+
+;; define the budget once: gen.clj sees a splice's argument unchanged
+;; only when it is the same object, and then keeps its estimate
+(def bettor-model
+  (gen [] (let [beta (trace :beta (d/uniform 0.5 4.0))]
+            (splice :bet bets beta mc))))
+```
+
+How noisy the estimate is matters for pseudo-marginal MCMC, which mixes
+well while the standard deviation of a participant's log-likelihood
+estimate is about 1 to 1.7. `mg/log-estimate-variance` measures it over
+a participant's trials, each `[args observed-value]`; more draws per trial
+(`:draws`) lower it:
+
+```clojure
+(:draws (mg/log-estimate-variance bets (repeat 50 [[2.0 mc] 1]) {:draws 20 :key (rng/key 1)}))
+;=> 20
+```
+
+## Gradients
+
+Exact over samples is differentiable, in the agent's beliefs and in what it
+values, so a bounded mind is fitted as an exact one is (the budget itself
+is an integer, and is not differentiated). Under Monte Carlo the samples
+carry no gradient through the beliefs they are drawn from, and
+differentiating there is an error.
+
+```clojure
+((array/grad (fn [beta] (array/take (bettor beta {:memo/budget {'alice {:samples 2}}}) 1 0))) 2.0)
+;=> 0.03118199951779749
+```
+
+---
+
 # Differences from Python memo
 
 memo.clj implements every statement and expression of the memo Handbook
-(1.3.3) except cost reflection. The syntax:
+(1.3.3) except cost reflection. It adds two things Python memo does not
+have: minds in gen.clj models (`memo.gen`), and bounded minds
+(`memo.bounded`, experimental). The syntax:
 
 | Python memo | memo.clj |
 |---|---|

@@ -11,6 +11,10 @@
   (flip 0.3)           ; a gen.array array of shape [2]: the table over c
   (flip {:p 0.3})      ; parameters by name, in a trailing map
 
+  The trailing map also takes a call's options, namespaced: :memo/budget,
+  bounded minds (M3, experimental; memo.bounded), with :memo/limit and
+  :memo/key.
+
   Parsing happens when the macro expands; analysis and lowering when the def
   is evaluated, so domains must be defined first (Python memo compiles when
   its decorator runs). A call returns the table over the memo's axes, in
@@ -20,8 +24,10 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [gen.array :as array]
+            [gen.random :as rng]
             [memo.analyze :as analyze]
             [memo.ast :as ast]
+            [memo.bounded :as bounded]
             [memo.domains :as domains]
             [memo.errors :as err]
             [memo.ir :as ir]
@@ -66,19 +72,20 @@
 
 (defn- cached
   "call, memoized by its arguments when they are host numbers or booleans
-  (so never for values being differentiated), until any memo is redefined."
+  (so never for values being differentiated), and its budget, until any memo
+  is redefined; never a Monte Carlo call (one with a key)."
   [call]
   (let [cache (atom {:epoch -1 :table {}})
         host? #(or (number? %) (boolean? %))]
-    (fn [args kwargs]
-      (if-not (and (every? host? args) (every? host? (vals kwargs)))
-        (call args kwargs)
+    (fn [args kwargs opts]
+      (if-not (and (every? host? args) (every? host? (vals kwargs)) (nil? (:key opts)))
+        (call args kwargs opts)
         (let [epoch @definitions
-              k [(vec args) kwargs]
+              k [(vec args) kwargs (select-keys opts [:budget :limit])]
               c (swap! cache #(if (= epoch (:epoch %)) % {:epoch epoch :table {}}))]
           (if-let [[_ v] (find (:table c) k)]
             v
-            (let [v (call args kwargs)]
+            (let [v (call args kwargs opts)]
               (swap! cache #(if (= epoch (:epoch %)) (assoc-in % [:table k] v) %))
               v)))))))
 
@@ -121,6 +128,77 @@
                    {:hint (str "A memo call (" sym " [axes ...] args ...) needs " sym
                                " to be a defmemo, defined by the time it is called.")})))))
 
+(defn- callees
+  "The memos m calls (as memos or as host functions), resolved now."
+  [m]
+  (let [{:memo/keys [compiled ns]} (meta m)]
+    (into #{}
+          (keep (fn [{:keys [i name]}]
+                  (when (#{:call-memo :ffi} i)
+                    (let [f (some-> (ns-resolve (the-ns ns) name) deref)]
+                      (when (:memo/call (meta f)) f)))))
+          (:instrs compiled))))
+
+(defn- reachable-agents
+  "The agents of m and of the memos it calls, transitively: {:agents
+  :snapshots} as memo.ast/agents gives them."
+  [m]
+  (loop [todo [m] seen #{} acc {:agents #{} :snapshots {}}]
+    (if-let [f (peek todo)]
+      (if (seen f)
+        (recur (pop todo) seen acc)
+        (recur (into (pop todo) (callees f)) (conj seen f)
+               (merge-with into acc (:memo/agents (meta f)))))
+      acc)))
+
+(defn- check-agents
+  "Each agent a budget names is one of m's, or of a memo it calls."
+  [m budget]
+  (let [{:keys [agents snapshots]} (reachable-agents m)
+        mname (:memo/name (meta m))]
+    (doseq [a (keys budget)]
+      (cond
+        (contains? agents a) nil
+        (contains? snapshots a)
+        (err/raise (str "The budget names " a ", " (snapshots a) "'s snapshot")
+                   {:hint (str "A snapshot belongs to the agent that took it, and has its budget: give "
+                               (snapshots a) " the budget.")
+                    :loc {:name mname}})
+        :else
+        (err/raise (str "The budget names " a ", who is not an agent of memo " mname)
+                   {:hint (if (seq agents)
+                            (str "Its agents (and those of the memos it calls) are "
+                                 (str/join ", " (sort-by str agents)) ".")
+                            "It has no agents.")
+                    :loc {:name mname}})))))
+
+(def ^:private call-keys #{:memo/budget :memo/limit :memo/key})
+
+(defn- call-options
+  "A call's trailing map split into the parameters by name and the call's
+  options {:budget :limit :key} (nil when it has none), the budget
+  normalized."
+  [mname m]
+  (let [mine (into {} (filter (fn [[k _]] (and (keyword? k) (= "memo" (namespace k))))) m)]
+    (when-let [k (first (remove call-keys (keys mine)))]
+      (err/raise (str "Unknown call option " k)
+                 {:hint "A memo call's options are :memo/budget, :memo/limit and :memo/key."
+                  :loc {:name mname}}))
+    (when (and (contains? mine :memo/key) (not (rng/key? (:memo/key mine))))
+      (err/raise (str ":memo/key is " (pr-str (:memo/key mine)) ", not a key")
+                 {:hint "A key is made by gen.random/key, e.g. (gen.random/key 0)." :loc {:name mname}}))
+    [(apply dissoc m (keys mine))
+     (when (seq mine)
+       (let [budget (bounded/normalize-budget mname (:memo/budget mine))
+             limit (some->> (:memo/limit mine) (bounded/limit-value ":memo/limit"))]
+         (when (and (bounded/monte-carlo? budget) (not (:memo/key mine)))
+           (err/raise "A Monte Carlo budget needs a key: call with :memo/key"
+                      {:hint (str "The budget declares :monte-carlo, so the call draws samples: "
+                                  "(f args... {:memo/budget {...} :memo/key (gen.random/key 0)}).")
+                       :loc {:name mname}}))
+         (when budget
+           {:budget budget :limit limit :key (:memo/key mine) :check-agents true})))]))
+
 (defn make-memo
   "Analyze and lower a parsed memo; the callable model. Called by defmemo.
   fns maps each host function's name to its var (nil for the memo itself,
@@ -155,47 +233,82 @@
                      (when (:memo/axes m)
                        {:axes (count (:memo/axes m)) :params (:memo/params m)
                         :defaults (:memo/defaults m) :num-results (:memo/num-results m)}))))
-        compiled (analyze/analyze parsed domain-values (assoc opts :callee callee))
-        problems (ir/check compiled)
-        _ (when (seq problems)
-            (err/raise (str "memo.clj built an ill-formed program for " name)
-                       {:user false :hint (str/join "; " problems)}))
         params (:params parsed)
-        run (lower/program compiled {:resolve-memo (memo-resolver ns)
-                                     :name name
-                                     :domain-values domain-values
-                                     :fns fns
-                                     :inlines inlines
-                                     :param-order (mapv :name params)})
-        call (cond-> (fn [args kwargs] (run (bind-params name params defaults args kwargs)))
+        ;; the program, exact (budget nil) or for a normalized budget (M3)
+        compile-for (fn [budget limit]
+                      (let [compiled (analyze/analyze parsed domain-values
+                                                      (assoc opts :callee callee :bounded budget :limit limit))
+                            problems (ir/check compiled)]
+                        (when (seq problems)
+                          (err/raise (str "memo.clj built an ill-formed program for " name)
+                                     {:user false :hint (str/join "; " problems)}))
+                        {:compiled compiled
+                         :run (lower/program compiled {:resolve-memo (memo-resolver ns)
+                                                       :name name
+                                                       :domain-values domain-values
+                                                       :fns fns
+                                                       :inlines inlines
+                                                       :param-order (mapv :name params)})}))
+        {:keys [compiled run]} (compile-for nil nil)
+        agents (ast/agents parsed)
+        programs (atom {})
+        bounded-program (fn [budget limit]
+                          (let [k [budget limit]]
+                            (or (get @programs k)
+                                (let [p (compile-for budget limit)]
+                                  (swap! programs assoc k p)
+                                  p))))
+        call (cond-> (fn [args kwargs {:keys [budget limit] :as call-opts}]
+                       (let [env (bind-params name params defaults args kwargs)]
+                         (if budget
+                           ((:run (bounded-program budget limit)) env call-opts)
+                           (run env))))
                (:cache opts) cached)
+        ;; the model itself, for checking a budget's agents against the memos
+        ;; it calls (once per budget, until any memo is redefined)
+        self (promise)
+        checked (atom {})
+        check (fn [budget]
+                (let [epoch @definitions]
+                  (when-not (= epoch (get @checked budget))
+                    (check-agents @self budget)
+                    (swap! checked assoc budget epoch))))
         _ (swap! definitions inc)]
-    (with-meta
-      (fn [& args]
-        (try
-          (if (map? (last args))
-            (call (butlast args) (last args))
-            (call args {}))
-          ;; memo calls nest on the JVM's stack (Python memo's RecursionError)
-          (catch StackOverflowError _
-            (err/raise (str "Maximum recursion depth exceeded in memo " name)
-                       {:hint (str "A recursive memo needs a base case: a condition on a parameter, "
-                                   "as in (if (> t 0) (f [..] (- t 1)) 0), that stops its memo calls. "
-                                   "A deep one needs a bigger stack: call it on a thread with one, "
-                                   "(Thread. nil f \"memo\" (* 1024 1024 1024)), or warm a ^:cache "
-                                   "memo in steps.")
-                        :loc {:name name}}))))
-      {:memo/name name
-       :memo/doc (:doc parsed)
-       :memo/params (mapv :name params)
-       :memo/defaults (set (keys defaults))
-       :memo/axes (:axes compiled)
-       :memo/domain-names (:domains compiled)
-       :memo/domains (mapv domains (:domains compiled))
-       :memo/shape (:shape compiled)
-       :memo/num-results (count (:results compiled))
-       :memo/call call
-       :memo/compiled compiled})))
+    (let [m (with-meta
+          (fn [& args]
+            (try
+              (if (map? (last args))
+                (let [[kwargs call-opts] (call-options name (last args))]
+                  (when (:check-agents call-opts) (check (:budget call-opts)))
+                  (call (butlast args) kwargs (dissoc call-opts :check-agents)))
+                (call args {} nil))
+              ;; memo calls nest on the JVM's stack (Python memo's RecursionError)
+              (catch StackOverflowError _
+                (err/raise (str "Maximum recursion depth exceeded in memo " name)
+                           {:hint (str "A recursive memo needs a base case: a condition on a parameter, "
+                                       "as in (if (> t 0) (f [..] (- t 1)) 0), that stops its memo calls. "
+                                       "A deep one needs a bigger stack: call it on a thread with one, "
+                                       "(Thread. nil f \"memo\" (* 1024 1024 1024)), or warm a ^:cache "
+                                       "memo in steps.")
+                            :loc {:name name}}))))
+          {:memo/name name
+           :memo/doc (:doc parsed)
+           :memo/params (mapv :name params)
+           :memo/defaults (set (keys defaults))
+           :memo/axes (:axes compiled)
+           :memo/domain-names (:domains compiled)
+           :memo/domains (mapv domains (:domains compiled))
+           :memo/shape (:shape compiled)
+           :memo/num-results (count (:results compiled))
+           :memo/call call
+           :memo/compiled compiled
+           :memo/ns ns
+           :memo/agents agents
+           :memo/compile (fn [budget limit]
+                           (bounded-program (bounded/normalize-budget name budget)
+                                            (some->> limit (bounded/limit-value ":memo/limit"))))})]
+      (deliver self m)
+      m)))
 
 (defn- member-resolver
   "Resolves Enum.MEMBER when the macro expands, in namespace ns."

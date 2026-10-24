@@ -40,7 +40,8 @@ In order:
    with gen.clj's laws as tests. Minds can then be traced, conditioned on and
    fitted inside gen.clj models. *Closed 2026-10-24.*
 3. **1.0 — the release** (added by the owner, 2026-10-24). The exact core
-   and the bridge, frozen:
+   and the bridge, frozen (M3, built first, stays outside the freeze as
+   experimental):
    - the API of `memo.core`, `memo.domains`, `memo.errors` and `memo.gen`
      stable, with breaking changes only in a new major version;
    - the Handbook complete for both;
@@ -61,6 +62,10 @@ In order:
      of the bounded agent's choice probability.
 
    The exact core is the limit of both.
+
+   *Built 2026-10-24, before 1.0 (the owner's decision that day), and
+   experimental: the `:memo/budget` call option, `memo.bounded` and
+   `memo.gen/estimated` are outside what 1.0 freezes (§7).*
 5. **M4 — the rest, as needed.** The Python transpiler as user tooling (it is
    test tooling from M1), cost reflection, certification, model synthesis,
    and the static graph that gen.clj's static modeling language provides.
@@ -424,7 +429,10 @@ Namespaces (decided, 2026-10-20; root `memo`):
 - The IR: `memo.ir`, with its verifier.
 - `memo.lower` (exact) and `memo.runtime`.
 - `memo.gen`, the bridge (M2).
-- `memo.bounded` (M3).
+- `memo.bounded` (M3; built 2026-10-24, experimental): the budget, the
+  combinatorics, and the lowering of the bounded IR instructions. The
+  analysis (`memo.analyze`) emits them when it is given a budget; the exact
+  program is compiled without one.
 - `memo.pygen`, the transpiler: under `test` until M4.
 
 memo-clj's single `compile` namespace (1.3k lines) is split along the
@@ -812,6 +820,16 @@ decision of 2026-10-23):
 
 ## 7. Bounded minds (M3)
 
+*Built 2026-10-24, before 1.0 (the owner's decision of that day), and
+**experimental**: the `:memo/budget` call option, `memo.bounded` and
+`memo.gen/estimated` stay outside what 1.0 freezes. §7.1–§7.3 keep the
+owner's decisions of 2026-10-24 (§13.2, §13.3, §13.5); what M3 decided
+while it was built is marked (proposed, built), for the owner's review.
+The code: `src/memo/bounded.clj`, the analysis's `sample-ll` and
+`eval-choose` (`memo.analyze`), three IR instructions (§7.5). The tests:
+`test/memo/bounded_test.clj` (§9). The Handbook's "Bounded minds" part is
+its reference.*
+
 ### 7.1 Semantics
 
 - **What becomes bounded:** an agent's reasoning inside `thinks` (its models
@@ -839,7 +857,8 @@ decision of 2026-10-23):
   exact core's tables. This is a statistical law checked against the exact
   lowering of the same program.
 - **The front end is unchanged** (principle 4). The same programs are legal
-  and illegal under both lowerings.
+  and illegal under both lowerings, with one M3 restriction (§7.4): a
+  bounded estimate drives only its agent's own choice.
 - **Finite in M3** (decided 2026-10-24, §13.5). Bounded agents sample from
   finite domains, as memo's agents reason over them. Continuous variables
   are discretized.
@@ -847,6 +866,49 @@ decision of 2026-10-23):
     extension (principle 1), once a client needs one.
   - They would always lower by Monte Carlo, since their samples cannot be
     enumerated.
+
+**What M3 built (proposed, built 2026-10-24):**
+
+- **Plug-in on sampled beliefs.** Every query a bounded agent evaluates that
+  is an expectation (`E`, `Pr`, `Var`, `H`, `KL`, the posterior shortcut,
+  and the expectation inside `EU` and `Predict`) is computed with the same
+  formula on an empirical belief, k samples, in place of the agent's
+  belief. A query whose value the agent already knows (memo's redundant
+  expectation) is not one, and stays exact.
+- **Only what the query depends on is sampled:** the frame's uncertain dims
+  in the value's deps (the queried choices, for the posterior, `H` and
+  `KL`), the others summed out first. In distribution that is the same as
+  sampling everything and reading the marginal, and much smaller.
+- **The agent is every frame it owns.** A frame's owner is the agent it was
+  made for; a snapshot, an imagined world and a future self (EU's and
+  Predict's) keep their agent's. So a budget for alice bounds alice's
+  frame wherever it is modeled (`[alice]`, `[bob alice]`), her imagined
+  worlds, her future selves, and her snapshots; a snapshot's alias cannot
+  be given a budget of its own.
+- **Fresh samples for each query,** marginalized at the innermost choice of
+  the same agent that encloses the query (the "consumer"). A query inside a
+  nested choice of that agent (its future self's choice, replayed by EU) is
+  marginalized there.
+- **Sharing (proposed, built; a claim about minds, flagged by a side agent
+  and filed for GenGDT as gengdt-lu5i).** Within one query the samples are
+  shared across the values the agent knows, except along the dims its
+  reasoning *mixes* before the choice, where its belief varies: there each
+  value has samples of its own.
+  - The mixed dims are the options of the consuming choice, and the dims an
+    enclosing query averages over.
+  - "Its belief varies" is structural: the frame's `:ll-dims`. The lowering
+    checks it (a belief varying along a mixed dim without samples of its
+    own is an internal error, `check-mixing`).
+  - So options share samples when the agent's model of what follows does not
+    depend on the option (alice judges both bets against one imagined score:
+    Vul, Goodman, Griffiths & Tenenbaum's "one and done", 2014), and each
+    option has samples of its own when it does (outcomes imagined per
+    option). A future self whose belief depends on its outcome samples
+    afresh for each outcome its present self averages over.
+  - `:per-option true` gives every option samples of its own even when the
+    belief does not depend on it: a different hypothesis, with different
+    predictions. Which one GDT's imagined outcomes follow is GenGDT's to
+    decide (gengdt-lu5i).
 
 ### 7.2 Exact over the agent's own samples first (decided 2026-10-24; from a side note, 2026-10-20)
 
@@ -901,7 +963,36 @@ sample from **finite** sets: outcomes, options, other agents' types.
   converges to the exact-over-samples table (a law, §9). Declaring Monte
   Carlo below the limit gives the comparison.
 
-### 7.3 The budget (decided 2026-10-24) and the first algorithms (proposed)
+**As built (proposed, built 2026-10-24):**
+- **The sufficient statistic is the count vector** over the joint cells of
+  the sampled dims (m = the product of their sizes): an estimate is a
+  function of the counts whatever the query, since every query is a plug-in
+  on the empirical belief. n sets of samples (one per cell of the dims with
+  samples of their own) enumerate S^n states, S = C(k+m−1, m−1).
+- **The limit is checked twice,** both when the analysis compiles the budget:
+  on each query's states, and on the product at each choice (all the
+  queries and options it marginalizes). Per agent (`:limit`), or for the
+  call (`:memo/limit`); the error names the size, the agent and the query,
+  and its hint lists the ways out. "Per agent query" is read as one choice
+  of the agent: what one decision enumerates.
+- **The report:** `(memo.bounded/report model budget)` lists each choice
+  that marginalizes samples, with its states, limit, and sources (the
+  query, k, the categories m, the sets n). `memo.bounded/program` prints
+  the bounded IR.
+- **The multinomial probabilities are computed in log space,** with their
+  gradient written out (`array/custom-vjp`): an outcome of probability 0
+  keeps its exact first derivative, which log space would make NaN, and
+  which pruning it would lose. A large k (m = 2 allows k near 10^6) then
+  neither overflows the coefficient nor underflows the powers.
+- **Zero mass.** A belief of no mass (after an impossible observation) gives
+  estimates of 0, as the exact query's, whatever the samples.
+- **Not built:** pruning the count vectors of probability 0, which would
+  shrink GenGDT's case (3 options, 4 outcome levels, 2 of them possible)
+  from 4.5 million to thousands, exactly in values and first derivatives.
+  It waits for a client that needs it; meanwhile, a sampled variable at its
+  natural size (whether a level was gained, not the level) keeps m small.
+
+### 7.3 The budget (decided 2026-10-24) and the first algorithms (built)
 
 - **The budget is a call-time argument, keyed by agent**, so the model text
   does not change, e.g. `{:budget {alice {:samples 8 :algorithm
@@ -914,26 +1005,133 @@ sample from **finite** sets: outcomes, options, other agents' types.
   - The budget can itself be a function of the outer model's state, or a
     random variable. Urgency narrowing computation is then expressible in
     GenGDT as `budget = f(goal value)`.
-- **First algorithms:**
-  - sample the agent's belief and average (forward sampling where nothing is
-    observed);
-  - likelihood weighting or self-normalized importance sampling where the
-    agent observes;
-  - a fixed number of sampled futures for `Predict`/`EU` ("one and done",
-    Vul et al.);
-  - a few options considered (Moors' accessibility).
+- **As built (proposed, built 2026-10-24):**
+  - **The key is namespaced,** `:memo/budget`, in the call's trailing map,
+    so that a parameter named `budget` never collides: `(choose 2.0
+    {:memo/budget {'alice {:samples 8}}})`. The call's other options are
+    `:memo/limit` and `:memo/key`. `mg/dist` and `mg/deterministic` pass
+    them through as they pass any trailing map.
+  - **An agent** is a symbol or a keyword; `self`, the observer and a
+    snapshot's alias cannot be given one; an agent that neither the memo
+    nor a memo it calls has is an error.
+  - **A spec:** `:samples k`, `:algorithm` (`:one-and-done`, the default,
+    or `:rejection`), `:per-option`, `:options k`, `:monte-carlo` with
+    `:draws R`, `:limit n`. Unknown keys and values of the wrong kind are
+    errors.
+  - **A budget reaches the memos called** (as memos, or as host functions):
+    an agent is bounded wherever its name appears in the call, so a
+    recursive planner is bounded at every level. Each memo call gets a key
+    of its own (the call's folded with the instruction's position).
+  - **Programs are compiled per budget**, on the first call with it, and
+    cached; a `^:cache` memo caches by budget too (never under Monte Carlo).
+  - **The exact program is compiled without a budget,** so its IR is the
+    same as before M3, instruction for instruction.
+- **First algorithms (proposed 2026-10-20; built 2026-10-24):**
+  - **Sample the agent's belief and average** (`:one-and-done`): samples
+    from its current belief, after what it observed (forward sampling where
+    nothing is observed; Vul et al. assume posterior samples). This also
+    covers "a fixed number of sampled futures for `Predict`/`EU`": their
+    expectation is a query in the agent's imagined future, and k = 1 is
+    "one and done" literally.
+  - **Where the agent observes:** `:rejection`, the prior sampled and the
+    samples consistent with the observations kept. An `:observes-event`
+    weight is the probability of keeping a sample (it must not exceed 1, a
+    loud error otherwise); with none kept, the agent's beliefs have no mass.
+    Exactly: count vectors over m + 1 categories, the last "rejected" with
+    probability 1 − Z, Z the probability of the observations (the product
+    of their normalizers, tracked per frame as `:evidence` when a budget is
+    given, and moved with the beliefs by an observed choice).
+    - Self-normalized importance sampling coincides with it for hard
+      evidence (`:observes`, `:observes-that`). For soft evidence it
+      differs (weights, not acceptance), and is **not built**: it needs the
+      prior and the weights over the sampled cells separately.
+  - **A few options considered** (`:options k`, Moors' accessibility): each
+    of the agent's `:chooses` (by weight, `:to-maximize`, `:to-minimize` or
+    `:uniformly`; not a `:given`/`:draws`/`:assigned`/`:guesses`, nor a
+    `:to-be` or `:such-that`) considers k of its options, drawn uniformly
+    without replacement, and chooses among those: C(n, k) subsets, each its
+    own draw. Accessibility weights (GenGDT's options coming to mind with
+    probability q) stay in the model text, as GenGDT writes them now.
 
   Each is a cognitive hypothesis, not only a technique.
 - **Open research questions:**
   - which algorithms are psychologically meaningful;
   - how bounded observation (rejection vs weighting) interacts with
-    snapshots and continuations;
+    snapshots and continuations. *As built:* a snapshot copies its agent's
+    evidence with its beliefs, and observations after it do not reach it; a
+    future self replays later observations as memo does (a guess, then an
+    observation of it), so with `:rejection` it keeps the samples consistent
+    with what it will observe, and its guess is itself sampled (its
+    expectation is a query of the future self's: with `:one-and-done` the
+    guess's distribution is the exact one, the expectation of a sample
+    frequency);
   - what cost means (op counts vs samples), and how it relates to memo's
     `cost @`.
 - **Dependencies:** gen.clj's encapsulated randomness (genclj-1ogo) and its
-  law set.
+  law set. *At the pin (3022944):* `gen.custom/estimated`, which
+  `memo.gen/estimated` builds on, and `gen.laws/encapsulated`, which the
+  tests run.
 - **First GenGDT client:** the agent that imagines k outcomes before it
-  chooses, with the exact agent (k → ∞) as its limit.
+  chooses, with the exact agent (k → ∞) as its limit. GenGDT's to build:
+  gengdt-lu5i, starting when GenGDT pins the commit that closes M3.
+
+### 7.4 Where a bounded estimate can go (proposed, built 2026-10-24)
+
+- **The agent's own choice.** The samples are marginalized there, so an
+  estimate can drive that choice's `:wpp`, `:to-maximize` or `:to-be`.
+  The marginalization multiplies the choice's normalized weights (per draw)
+  by the draws' probabilities and sums over the draws' dims, before the
+  parent frame's beliefs are multiplied: so an observer conditioning later
+  on the choice normalizes over the samples too (the posterior over the
+  agent's type from its choice is P(type) P_bounded(choice | type), as the
+  tests check).
+- **Anywhere else is a loud error in M3:** an estimate returned, read by
+  another agent (another agent cannot know alice's samples; a frame that
+  models her would be uncertain of them), or weighting an observation. The
+  error's hint gives the way to model a reported estimate: a choice of the
+  agent's, `(alice :chooses [r R] :to-be ...)`.
+- **Later, if a client needs it:** an estimate read by an enclosing query of
+  a frame that models the agent, which would average over the samples with
+  its own uncertainty (linear, so well defined), and soft-evidence
+  weighting.
+
+### 7.5 The lowering (proposed, built 2026-10-24)
+
+- **The analysis takes the budget** (`:bounded`, normalized, and the call's
+  `:limit`). At a bounded agent's query, `sample-ll` emits, instead of
+  reading the frame's beliefs:
+  - the belief summed to the sampled dims;
+  - `{:i :sample-belief}`: the empirical belief of each draw, on a new dim of
+    draws ω (allocated as any choice's dim, so the IR stays single
+    assignment over dims);
+  - `{:i :sample-weight}`: each draw's probability (exact over samples).
+
+  The query's formula then reads the empirical belief. The draw is pending
+  until `eval-choose` marginalizes it. With `:options`, `{:i :subsets}`
+  masks the options not considered, before the softmax, the argmax or the
+  normalization.
+- **`memo.bounded` lowers the three instructions:** layout (the dims moved
+  to the front, the cells flattened, and back), the count vectors and their
+  probabilities (§7.2), the empirical beliefs, the subsets.
+- **Monte Carlo** (`:monte-carlo true`, `:draws R`) uses the same IR: the
+  draws' dim holds R random draws, shared by all the sources one choice
+  marginalizes (each drawn independently, from its own key), averaged with
+  weight 1/R. Draws come from the call's `:memo/key` folded with the
+  instruction's position, so a key reproduces its table; they are never
+  folded into constants (memo.lower's `constant`). The samples carry no
+  gradient through the belief they are drawn from: a belief being
+  differentiated is a loud error, while values the agent judges may be.
+- **`memo.gen/estimated`** is the generative function of §7.1's scientist's
+  view: `gen.custom/estimated`, one choice at `:value` (as `mg/dist`'s
+  draws), its density the table's cell computed with the operation's key
+  (log ξ), its joint sampler a draw from that key's table (the thesis's
+  importance-sampler construction: the value from the averaged table, the
+  draws given it). `mg/dist` refuses a Monte Carlo budget. A model that
+  splices it should pass the same budget object at each run: gen.clj sees a
+  splice's argument unchanged only when it is identical, and only then keeps
+  ω on an identity update.
+- **The log-estimate variance** per participant:
+  `memo.gen/log-estimate-variance` over a participant's trials.
 
 ## 8. Surface syntax (decided, 2026-10-20)
 
@@ -1056,6 +1254,40 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
   - gen.clj's laws for encapsulated randomness;
   - convergence to the exact core as the budget grows;
   - the outer estimate's unbiasedness in exp space.
+
+  *Built 2026-10-24* (`test/memo/bounded_test.clj`):
+  - **Brute force:** the tests enumerate the raw sample sequences on the
+    host (m^k of them, per option where options have their own) and compare
+    every model to within 1e-9: shared and per-option samples, EU per
+    option, argmax with ties, a query inside a query (a future self sampling
+    afresh per outcome), one-and-done and rejection after `:observes-that`,
+    soft evidence and an observed choice, options considered (alone and with
+    samples), a bounded agent modeled by another, an observer's posterior
+    over a bounded agent's type, and Var, H, the posterior shortcut and KL
+    as plug-in estimates.
+  - **The exact limit:** the error against the exact table falls with k
+    (1 to 64), by more than 8 times.
+  - **Monte Carlo:** its mean over 1500 keys within five standard errors of
+    the exact-over-samples cell (shared, per option, rejection, options); a
+    key reproduces its table, another does not; E[ξ] of `mg/estimated` is
+    the exact-over-samples cell; its joint sampler satisfies the thesis's
+    Eq. 4.4, E[[value = v] / ξ] = 1.
+  - **gen.clj's laws:** `laws/encapsulated` (less the same-key score law,
+    as for gen.clj's own estimated densities) over `mg/estimated` and a
+    model splicing it.
+  - **Gradients** against finite differences, in the belief sampled and in
+    the temperature, at an outcome of probability 0 too.
+  - **The budget's checks, the limit, the report, the loud errors** for an
+    estimate outside its agent's choice, each message compared.
+  - **Planted bugs** (CLAUDE.md rule 7): 19, each caught (the gradient at a
+    zero outcome, the multinomial coefficient, sharing without the options'
+    or the enclosing queries' own samples, `:per-option` ignored, rejection
+    without evidence, with evidence not moved by an observed choice, with
+    soft evidence always kept, or dividing by k, unweighted draws, the
+    options mask, a `:given` narrowed, Monte Carlo draws folded into
+    constants, subsets not random, one draw reused, no 1/R, the consumer
+    check, `estimated`'s joint sampler weighing on another table, and the
+    agent check).
 - **Acceptance passes** before each milestone closes: independent agents
   working as memo users from the Handbook and the docstrings alone, against
   Python memo's answers.
@@ -1100,12 +1332,14 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
    answers of §6.4; approved by the owner.
 2. **The budget's place** (§7.3): call-time and keyed by agent, as proposed?
    Or also declarable in the model text? *Decided 2026-10-24:* call-time
-   only, keyed by agent.
+   only, keyed by agent. *Built 2026-10-24* as `:memo/budget` in the call's
+   trailing map (namespaced, §7.3).
 3. **Choosing the bounded lowering** (§7.2): automatic below a size limit and
    reported, as proposed, or always declared by the modeler? And what limit?
    *Decided 2026-10-24:* exact over samples by default; Monte Carlo only
    when declared, so a space above the limit is a loud error otherwise. The
-   limit is 10^6 states per agent query, overridable at the call.
+   limit is 10^6 states per agent query, overridable at the call. *Built
+   2026-10-24* (§7.2, §7.5).
 4. **Upstream:** does the exact core track new memo releases, with the pin
    moved deliberately? Or freeze at 1.3.2 until M3? *(2026-10-21: the owner
    moved the pin to 1.3.3 for upstream's snapshot fix, bean memoclj-0s5l;
@@ -1115,6 +1349,13 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
    model? That would go beyond memo's semantics, so it would be an extension
    by principle 1. *Decided 2026-10-24:* finite in M3 (discretize); the
    extension later, once a client needs it (§7.1).
+11. **M3's choices made while building it** (§7.1–§7.5, proposed and built
+    2026-10-24, for review): queries as plug-in estimates on sampled
+    beliefs; the sharing rule and `:per-option`; the agent as every frame it
+    owns; estimates marginalized at the agent's own choice, elsewhere a loud
+    error; `:rejection` for observations (soft-evidence weighting not
+    built); `:options k` as uniform subsets of `:chooses`; the budget reaching
+    the memos called; the namespaced call options.
 6. **The name:** check that "memo.clj" does not collide with an existing
    project ("gen.clj" collided with probcomp's Gen.clj).
 7. **Git and tracking:** a repository and a beans prefix (`memoclj-`?) from

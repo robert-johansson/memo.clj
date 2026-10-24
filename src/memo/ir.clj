@@ -39,18 +39,32 @@
      :kwargs [[k s static?]…] :guards [s…]}
         the host function f, of scalars, at every element of its dynamic
         arguments (the static ones passed whole), as Python memo's vmap
-    {:i :inline :out s :idx k}                 the k-th #{…} form's value"
+    {:i :inline :out s :idx k}                 the k-th #{…} form's value
+
+  With a budget (M3; memo.bounded):
+    {:i :sample-belief :out s :arg s :evidence s? :omega d :sample [d…]
+     :sample-sizes [n…] :indep [d…] :indep-sizes [n…] :shared [d…] :k k
+     :algorithm a :draws R?}
+        a bounded agent's empirical belief over the sampled dims (arg is its
+        belief summed to them), for each draw of k samples on dim omega:
+        every set of count vectors (one per cell of the indep dims), or R
+        random draws
+    {:i :sample-weight …the same…}             the probability of each draw
+    {:i :subsets :out s :omega d :dims [d…] :sizes [n…] :k k :draws R?}
+        for each draw on dim omega, which cells of the chosen dims are
+        considered (k of them)"
   (:require [clojure.string :as str]))
 
 (def kinds
   #{:const :param :domain :ones :op :where :sum :max :nan-to-num :posterior-align
-    :swap-dims :alias :call-memo :ffi :inline})
+    :swap-dims :alias :call-memo :ffi :inline :sample-belief :sample-weight :subsets})
 
 (defn inputs
   "The symbols an instruction reads."
   [instr]
   (case (:i instr)
-    (:const :param :domain :ones :inline) []
+    (:const :param :domain :ones :inline :subsets) []
+    (:sample-belief :sample-weight) (cond-> [(:arg instr)] (:evidence instr) (conj (:evidence instr)))
     :ffi (concat (:args instr) (map second (:kwargs instr)) (:guards instr))
     (:op :where) (:args instr)
     (:sum :max :nan-to-num :posterior-align :swap-dims :alias) [(:arg instr)]

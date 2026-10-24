@@ -29,6 +29,8 @@
   (:require [gen.array :as array :refer [+ - * / < > <= >= == exp log abs where]]
             [gen.array.batch :as batch]
             [gen.array.tape :as tape]
+            [gen.random :as rng]
+            [memo.bounded :as bounded]
             [memo.domains :as domains]
             [memo.errors :as err]
             [memo.ir :as ir]))
@@ -289,8 +291,23 @@
                    :else (recur (inc p) (inc filler) (conj out filler))))]
       (array/transpose x perm))))
 
+(defn- instr-key
+  "The key of an instruction's draws in this call (M3's Monte Carlo): the
+  call's :key folded with the instruction's position."
+  [ctx {:keys [out]}]
+  (when-let [k (get-in ctx [:call :key])]
+    (rng/fold-in k (get (:positions ctx) out))))
+
+(defn- callee-opts
+  "What a memo call inside a bounded call passes on: the budget and the limit,
+  and a key of its own (instr-key); nil for an exact call."
+  [ctx instr]
+  (when-let [c (:call ctx)]
+    (cond-> (assoc (select-keys c [:budget :limit]) :propagated true)
+      (:key c) (assoc :key (instr-key ctx instr)))))
+
 (defn- call-memo [{:keys [resolve-memo domain-values] :as ctx} env
-                  {:keys [name which args kwargs guards dims domains]}]
+                  {:keys [name which args kwargs guards dims domains] :as instr}]
   (let [f (resolve-memo name)
         {:memo/keys [num-results domain-names shape call] callee-domains :memo/domains} (meta f)
         _ (check-which num-results which {:name (:name ctx)})
@@ -298,7 +315,8 @@
                          (mapv domain-values domains) {:name (:name ctx)})
         table (if (every? #(array/truthy? (get env %)) guards)
                 (let [res (call (mapv #(get env %) args)
-                                (into {} (map (fn [[k s]] [k (get env s)])) kwargs))]
+                                (into {} (map (fn [[k s]] [k (get env s)])) kwargs)
+                                (callee-opts ctx instr))]
                   (if (some? which) (array/take res which 0) res))
                 (array/zeros shape))]
     (place table dims)))
@@ -492,7 +510,7 @@
   differentiated reaching it is a loud error (Python memo gives a silent zero
   gradient there). A memo called this way (one without axes) is called
   directly, under its path conditions, as a memo call is."
-  [{:keys [fns resolve-memo]} env {:keys [name args statics kwargs guards]}]
+  [{:keys [fns resolve-memo] :as ctx} env {:keys [name args statics kwargs guards] :as instr}]
   (let [v (get fns name)
         f (if v @v (resolve-memo name))
         vectorized? (or (:memo/vectorized (meta v)) (:memo/vectorized (meta f)))
@@ -510,7 +528,7 @@
     (cond
       (and (:memo/call (meta f)) (every? true? statics) (every? #(nth % 2) kws))
       (if (every? #(array/truthy? (get env %)) guards)
-        (direct)
+        ((:memo/call (meta f)) pos kw-map (callee-opts ctx instr))
         (array/zeros dyn-shape))
 
       vectorized?
@@ -608,6 +626,10 @@
              :alias (arg (:arg instr))
              :call-memo (call-memo ctx env instr)
              :ffi (host-call ctx env instr)
+             :sample-belief (bounded/sample-belief (arg (:arg instr)) (some-> (:evidence instr) arg) instr
+                                                   (instr-key ctx instr))
+             :sample-weight (bounded/sample-weight (arg (:arg instr)) (some-> (:evidence instr) arg) instr)
+             :subsets (bounded/subsets instr (instr-key ctx instr))
              :inline (inline-value (nth (:inlines ctx) (:idx instr)) (map env (:param-order ctx))
                                    (contains? (:inline-args ctx) (:out instr)))))))
 
@@ -665,6 +687,9 @@
             (if (case i
                   (:const :domain :ones) true
                   (:param :inline :call-memo :ffi) false
+                  ;; Monte Carlo draws differ at every call (M3)
+                  (:sample-belief :sample-weight :subsets) (and (not (:draws instr))
+                                                                (every? const (ir/inputs instr)))
                   (every? const (ir/inputs instr)))
               (conj const out)
               const))
@@ -672,13 +697,15 @@
 
 (defn program
   "The function computing a compiled memo's result: from a map of parameter
-  values to its table, or, for several returns, their tables stacked on a
-  leading axis. ctx: :resolve-memo, from a memo's name to the memo, at call
-  time (so a memo may call itself); :name, the memo's; :domain-values, from
-  its domains' names to their values; :fns, :inlines, :param-order. Memo
-  calls run first (calls-first), and no value is kept past its last use
-  (drops). What does not depend on the call (constant) is computed once per
-  backend, at its first call there."
+  values (and, for a bounded program, the call's options {:budget :limit
+  :key}, passed on to the memos it calls) to its table, or, for several
+  returns, their tables stacked on a leading axis. ctx: :resolve-memo, from
+  a memo's name to the memo, at call time (so a memo may call itself);
+  :name, the memo's; :domain-values, from its domains' names to their
+  values; :fns, :inlines, :param-order. Memo calls run first (calls-first),
+  and no value is kept past its last use (drops). What does not depend on
+  the call (constant) is computed once per backend, at its first call
+  there."
   [compiled ctx]
   (let [{:keys [results]} compiled
         all (calls-first (:instrs compiled))
@@ -693,11 +720,12 @@
         ;; calls, which may take any value (a vector, say)
         readers (reduce (fn [m instr] (reduce #(update %1 %2 (fnil conj #{}) (:i instr)) m (ir/inputs instr)))
                         {} all)
-        ctx (assoc ctx :inline-args
-                   (set (for [{:keys [i out]} all
-                              :when (and (= :inline i) (not (some #{out} results))
-                                         (every? #{:ffi :call-memo} (readers out)))]
-                          out)))
+        ctx (assoc ctx
+                   :inline-args (set (for [{:keys [i out]} all
+                                           :when (and (= :inline i) (not (some #{out} results))
+                                                      (every? #{:ffi :call-memo} (readers out)))]
+                                       out))
+                   :positions (into {} (map-indexed (fn [i {:keys [out]}] [out i])) all))
         ;; by backend, since an array belongs to one (the JVM's and MLX's
         ;; meet in one process); a batch backend is one per batch shape, so
         ;; the cache starts over past four
@@ -708,8 +736,11 @@
                           (let [env (select-keys (reduce #(step ctx %1 %2) {} const-instrs) kept-consts)]
                             (swap! cache (fn [m] (assoc (if (clojure.core/>= (count m) 4) {} m) b env)))
                             env))))]
-    (fn [params]
-      (let [env (reduce (fn [env [instr dead]] (apply dissoc (step ctx env instr) dead))
-                        (merge (constants) params) (map vector instrs dead))
-            tables (mapv #(table (get env %) compiled) results)]
-        (if (= 1 (count tables)) (first tables) (array/stack tables))))))
+    (fn run
+      ([params] (run params nil))
+      ([params call]
+       (let [ctx (assoc ctx :call call)
+             env (reduce (fn [env [instr dead]] (apply dissoc (step ctx env instr) dead))
+                         (merge (constants) params) (map vector instrs dead))
+             tables (mapv #(table (get env %) compiled) results)]
+         (if (= 1 (count tables)) (first tables) (array/stack tables)))))))

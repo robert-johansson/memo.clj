@@ -3,13 +3,18 @@
   perspective:
 
   {:name sym :variant :adult|:child|…
+   :owner sym                        ; the agent it belongs to: its name, or
+                                     ; the agent a snapshot or an imagined
+                                     ; world copies (a bounded mind's budget)
    :choices {[who id] {:tag sym :idx dim :known bool :domain sym}}
    :children {name frame}
    :conditions {[who id] [who id]}   ; aliases into the parent frame
    :goals {id expr}
    :ll sym-or-nil                    ; the frame's belief array
    :ll-dims #{dim}                   ; the dims it varies along
-   :scrambled nil-or-info}           ; set when an observation scrambled it
+   :scrambled nil-or-info            ; set when an observation scrambled it
+   :evidence sym-or-nil}             ; with a budget: the probability of its
+                                     ; observations (a rejection sampler's)
 
   The tree lives in the analysis state under :root, and :path (child names
   from the root) addresses the current frame. Frames are immutable values, so
@@ -19,7 +24,7 @@
 (def root-name 'observer)
 
 (defn frame [name variant]
-  {:name name :variant variant
+  {:name name :variant variant :owner name
    :choices {} :children {} :conditions {} :goals {} :ll nil :ll-dims #{} :scrambled nil})
 
 (defn frame-path [path]

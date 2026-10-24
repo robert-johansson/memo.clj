@@ -15,7 +15,9 @@
 
   Lifted from memo-clj's compile after review against core.py. It covers the
   constructs built so far (M1, slice 1); the others are errors that say so."
-  (:require [clojure.string :as str]
+  (:require [clojure.set :as set]
+            [clojure.string :as str]
+            [memo.bounded :as b]
             [memo.errors :as err]
             [memo.frames :as fr]))
 
@@ -154,6 +156,116 @@
     (update state :root walk)))
 
 ;; -----------------------------------------------------------------------------
+;; bounded minds (M3, DESIGN.md §7): with a budget, a bounded agent's queries
+;; read an empirical belief, k samples of what they depend on, and its choice
+;; marginalizes the samples. The state then has :bounded (the normalized
+;; budget), :limit (the call's), :pending (the samples drawn since the
+;; innermost choice began), :mixing (the dims that choice's reasoning mixes:
+;; its options, and what enclosing queries average over), :choosing (that
+;; choice: {:owner :dims :mc-dim :draws}) and :report.
+
+(defn- alloc-dim [state]
+  (let [d (:next-dim state)] [(assoc state :next-dim (inc d)) d]))
+
+(defn- frame-budget
+  "The budget of the current frame's owner, or nil."
+  [state]
+  (when-let [budget (:bounded state)]
+    (get budget (:owner (fr/get-frame state)))))
+
+(defn- dim-domains
+  "From each dim of the frame's choices to its domain."
+  [frm]
+  (into {} (map (fn [[_ c]] [(:idx c) (:domain c)])) (:choices frm)))
+
+(defn- too-many-states [what n limit opts]
+  (err/raise (str what " enumerates " n " states, above the limit of " limit)
+             (assoc opts :hint (str "Exact over samples enumerates every way the samples can fall. Use fewer "
+                                    "samples, sample fewer or smaller variables (a query samples only those it "
+                                    "depends on), raise the limit (:limit in the agent's budget, or :memo/limit "
+                                    "for the call), or declare Monte Carlo (:monte-carlo true)."))))
+
+(defn- sample-ll
+  "A bounded agent's query: the empirical belief of k samples of the dims in
+  sample-dims (the frame's uncertain dims the query depends on), the others
+  summed out, on a new dim of draws: [state sym]. The draws are pending
+  until the agent's choice marginalizes them (eval-choose). Each value of a
+  dim the choice's reasoning mixes, and along which the belief varies, has
+  samples of its own; so does each option, with :per-option."
+  [state loc ll sample-dims spec what]
+  (let [frm (fr/get-frame state)
+        owner (:owner frm)
+        {:keys [choosing]} state
+        _ (when-not (and choosing (= owner (:owner choosing)))
+            (err/raise (str owner "'s bounded estimate is used outside " owner "'s own choice")
+                       (assoc (frame-err-opts state loc)
+                              :hint (str owner " has a budget, so this " what " is estimated from samples, and "
+                                         "in M3 such an estimate can only drive " owner "'s own choice (:wpp or "
+                                         ":to-maximize). Here it is returned, read by another agent, or weights "
+                                         "an observation. To model a reported estimate, make the report a "
+                                         "choice of " owner "'s, e.g. (" owner " :chooses [r R] :to-be ...)."))))
+        unknown (unknown-dims state)
+        U (vec (sort (filter (set unknown) sample-dims)))
+        R (vec (remove (set U) unknown))
+        doms (dim-domains frm)
+        size (fn [d] (count (domain-values state (doms d) loc)))
+        known (set (keep (fn [[_ c]] (when (:known c) (:idx c))) (:choices frm)))
+        mixing (set (:mixing state))
+        X (vec (sort (into (set/intersection (:ll-dims frm) known mixing)
+                           (when (:per-option spec) (set/intersection known (set (:dims choosing)))))))
+        rejection? (= :rejection (:algorithm spec))
+        k (:samples spec)
+        m (reduce * 1 (map size U))
+        n (reduce * 1 (map size X))
+        mprime (if rejection? (inc m) m)
+        mc? (:monte-carlo spec)
+        states (if mc? (:draws spec) (b/power (b/states k mprime) n))
+        limit (b/limit-of spec (:limit state))
+        _ (when (and (not mc?) (> states limit))
+            (too-many-states (str owner "'s " what " from " k " samples") states limit (frame-err-opts state loc)))
+        [state omega] (if mc? [state (:mc-dim choosing)] (alloc-dim state))
+        [state p] (cond
+                    (nil? ll) (let [[st one] (fresh state "ll")] [(emit st {:i :const :out one :value 1.0}) one])
+                    (empty? R) [state ll]
+                    :else (let [[st o] (fresh state "belief")] [(emit st {:i :sum :out o :arg ll :dims R}) o]))
+        z (when rejection? (:evidence frm))
+        instr (cond-> {:arg p :omega omega :sample U :sample-sizes (mapv size U) :indep X
+                       :indep-sizes (mapv size X)
+                       :shared (vec (sort (set/difference (set/intersection mixing known) (set X))))
+                       :k k :algorithm (:algorithm spec) :draws (when mc? (:draws spec))}
+                z (assoc :evidence z))
+        [state q] (fresh state "sampled")
+        state (emit state (assoc instr :i :sample-belief :out q))
+        [state w] (if mc?
+                    [state nil]
+                    (let [[st w] (fresh state "draws")] [(emit st (assoc instr :i :sample-weight :out w)) w]))]
+    [(update state :pending conj {:kind :samples :owner owner :omega omega :weight w :states states
+                                  :what what :line (:line loc) :k k :categories mprime :sets n})
+     q]))
+
+(defn- query-ll
+  "The belief a query reads, [state sym-or-nil]: the frame's ll (read-ll), or,
+  in a bounded agent's frame, an empirical belief from samples of the dims in
+  sample-dims (sample-ll)."
+  [state loc sample-dims what]
+  (let [ll (read-ll state loc)
+        spec (frame-budget state)]
+    (if (:samples spec)
+      (sample-ll state loc ll sample-dims spec what)
+      [state ll])))
+
+(defn- add-evidence
+  "With a budget, the frame's evidence (the probability of its observations,
+  what a rejection sampler keeps) times the normalizer of a new observation."
+  [state total]
+  (if-not (:bounded state)
+    state
+    (if-let [ev (:evidence (fr/get-frame state))]
+      (let [[st out] (fresh state "evidence")]
+        (fr/update-frame (emit st {:i :op :op :mul :out out :args [ev total]}) assoc :evidence out))
+      (fr/update-frame state assoc :evidence total))))
+
+;; -----------------------------------------------------------------------------
 ;; expressions
 
 (declare eval-expr eval-stmt)
@@ -273,8 +385,8 @@
   memory without it."
   [state {:keys [query var loc]}]
   (let [frm (fr/get-frame state)
-        ll (read-ll state loc)
         var-idxs (set (map #(get-in frm [:choices % :idx]) var))
+        [state ll] (query-ll state loc var-idxs "Pr")
         marg-dims (vec (distinct (keep (fn [[_ c]]
                                          (when-not (or (:known c) (var-idxs (:idx c)))
                                            (:idx c)))
@@ -333,7 +445,12 @@
                            (= (count (set idxs)) (count idxs))))]
     (if (and pairs distinct-axes?)
       (eval-posterior state {:query (mapv first pairs) :var (mapv second pairs) :loc (:loc e)})
-      (let [[state val] (eval-expr state expr)
+      (let [[state val] (if (:bounded state)
+                          ;; what this query averages over is mixed by it
+                          (let [mixing (:mixing state)
+                                [st v] (eval-expr (update state :mixing (fnil into []) (unknown-dims state)) expr)]
+                            [(assoc st :mixing mixing) v])
+                          (eval-expr state expr))
             frm (fr/get-frame state)
             all-known? (every? #(get-in frm [:choices % :known]) (:deps val))]
         (when (and all-known? warn)
@@ -355,7 +472,9 @@
 
           :else
           (let [dims (unknown-dims state)
-                frame-ll (read-ll state (:loc e))
+                [state frame-ll] (query-ll state (:loc e)
+                                           (deps->dims frm (remove #(get-in frm [:choices % :known]) (:deps val)))
+                                           (str (or (:surface e) 'E)))
                 [state ll] (if frame-ll
                              [state frame-ll]
                              (let [[st one] (fresh state "ll")]
@@ -525,7 +644,7 @@
                      (assoc (frame-err-opts state loc)
                             :hint (str w "." i " is already known to " (:name frm)
                                        ", so its entropy is zero."))))))
-    (let [ll (read-ll state loc)
+    (let [[state ll] (query-ll state loc (keep #(get-in frm [:choices % :idx]) rvs) "H")
           dims (fn [pred] (vec (distinct (keep (fn [[addr c]] (when (and (not (:known c)) (pred addr)) (:idx c)))
                                                (:choices frm)))))
           [state m] (fresh state "marginal")
@@ -558,7 +677,7 @@
       (err/raise "KL-divergence mismatched support"
                  (assoc err-opts :hint (str "Domains of " p-who "." p-id " (" (:domain p) ") and "
                                             q-who "." q-id " (" (:domain q) ") do not match."))))
-    (let [ll (read-ll state loc)
+    (let [[state ll] (query-ll state loc [(:idx p) (:idx q)] "KL")
           others (fn [c] (vec (distinct (keep (fn [[_ c']] (when (and (not (:known c')) (not= c' c)) (:idx c')))
                                               (:choices frm)))))
           [state pp] (fresh state "p")
@@ -725,12 +844,83 @@
                                {:tag tag :idx idx :known true :domain domain})]
     (update state :forall conj [idx id domain])))
 
+(def ^:private considered-specs
+  "The choices whose options a budget's :options narrows: an agent's own
+  :chooses by weight or value, not a :given, :draws, :assigned or :guesses,
+  nor a :to-be or :such-that."
+  #{:wpp :uniformly :to-maximize :to-minimize})
+
+(defn- options-source
+  "With :options k in the budget of who, k of the choice's options considered,
+  drawn uniformly: [state mask-or-nil], the mask (true where considered) on a
+  new dim of draws, pending as a source."
+  [state {:keys [spec owner mc-dim dims sizes surface-alias surface-spec loc]}]
+  (let [k (:options spec)
+        cells (reduce * 1 sizes)]
+    (if-not (and k (= :chooses surface-alias) (considered-specs surface-spec) (< k cells))
+      [state nil]
+      (let [mc? (:monte-carlo spec)
+            states (if mc? (:draws spec) (b/binomial cells k))
+            limit (b/limit-of spec (:limit state))
+            _ (when (and (not mc?) (> states limit))
+                (too-many-states (str owner " considering " k " of " cells " options") states limit {:loc loc}))
+            [state sigma] (if mc? [state mc-dim] (alloc-dim state))
+            [state mask] (fresh state "considered")
+            state (emit state {:i :subsets :out mask :omega sigma :dims dims :sizes sizes :k k
+                               :draws (when mc? (:draws spec))})
+            [state w] (if mc?
+                        [state nil]
+                        (let [[st w] (fresh state "draws")]
+                          [(emit st {:i :const :out w :value (/ 1.0 (double states))}) w]))]
+        [(update state :pending conj {:kind :options :owner owner :omega sigma :weight w :states states
+                                      :line (:line loc) :k k :options cells})
+         mask]))))
+
+(defn- masked
+  "ll where the mask is true, value elsewhere: [state sym]."
+  [state ll mask value]
+  (let [[state c] (fresh state "lit")
+        state (emit state {:i :const :out c :value value})
+        [state out] (fresh state "w")]
+    [(emit state {:i :where :out out :args [mask ll c]}) out]))
+
+(defn- marginalize
+  "nrm, a bounded agent's choice probabilities given its draws, averaged over
+  the draws of sources (its samples and options considered): the sum over
+  their dims of nrm times their probabilities, or, by Monte Carlo, the mean
+  over the draws. [state sym]; nrm when there are no sources."
+  [state nrm sources {:keys [owner spec mc-dim loc]}]
+  (if (empty? sources)
+    [state nrm]
+    (let [mc? (some? mc-dim)
+          states (if mc? (:draws spec) (reduce * 1N (map :states sources)))
+          limit (b/limit-of spec (:limit state))
+          _ (when (and (not mc?) (> states limit))
+              (too-many-states (str owner "'s choice") states limit {:loc loc}))
+          [state prod] (reduce (fn [[st acc] w] (emit-op st "drawn" :mul acc w))
+                               [state nrm] (keep :weight sources))
+          [state out] (fresh state "bounded")
+          state (emit state {:i :sum :out out :arg prod :dims (vec (distinct (map :omega sources)))})
+          [state out] (if mc?
+                        (let [[st c] (fresh state "lit")
+                              st (emit st {:i :const :out c :value (/ 1.0 (double (:draws spec)))})]
+                          (emit-op st "bounded" :mul out c))
+                        [state out])]
+      [(update state :report conj
+               {:agent owner :line (:line loc) :states states :limit limit :monte-carlo mc?
+                :sources (mapv #(dissoc % :owner :omega :weight) sources)})
+       out])))
+
 (defn- eval-choose
   "who chooses: the choices join who's own frame (known to who) and the
   current frame (uncertain), and the current frame's beliefs are multiplied
-  by the choice's normalized weights."
-  [state {:keys [who choices wpp reduction loc]}]
+  by the choice's normalized weights. With a budget for who, the samples its
+  weights were computed from, and the options it considers, are drawn here
+  and marginalized (marginalize)."
+  [state {:keys [who choices wpp reduction loc surface-alias surface-spec]}]
   (let [state (fr/ensure-child state who)
+        owner (get-in (fr/get-frame state) [:children who :owner])
+        spec (get (:bounded state) owner)
         state (fr/enter state who)
         [state dims]
         (reduce
@@ -754,6 +944,14 @@
              [st (conj dims idx)]))
          [state []]
          choices)
+        ;; with a budget, the choice opens a scope for the samples drawn while
+        ;; its weights are computed (sample-ll)
+        outer (select-keys state [:pending :mixing :choosing])
+        [state mc-dim] (if (and (:bounded state) (:monte-carlo spec)) (alloc-dim state) [state nil])
+        state (if (:bounded state)
+                (assoc state :pending [] :mixing dims
+                       :choosing {:owner owner :dims dims :mc-dim mc-dim})
+                state)
         ;; wpp = (exp logit) is computed as a softmax of the logit, which
         ;; does not overflow; the same weight written otherwise can (core.py)
         softmax? (and (= :op (:node wpp)) (= :exp (:op wpp)))
@@ -782,36 +980,48 @@
                                             :known false :domain dom})))
                       state
                       choices)
+        sizes (mapv (fn [[_ dom]] (count (domain-values state dom loc))) choices)
         ;; the weights, with extent along every chosen dim
-        [state ll] (reduce (fn [[st acc] [[_ dom] dim]]
+        [state ll] (reduce (fn [[st acc] [size dim]]
                              (let [[st o] (fresh st "ones")
-                                   st (emit st {:i :ones :out o :dim dim
-                                                :size (count (domain-values st dom loc))})
+                                   st (emit st {:i :ones :out o :dim dim :size size})
                                    [st m] (fresh st "w")]
                                [(emit st {:i :op :op :mul :out m :args [acc o]}) m]))
                            [state (:tag w)]
-                           (map vector choices dims))
+                           (map vector sizes dims))
+        [state mask] (if spec
+                       (options-source state {:spec spec :owner owner :mc-dim mc-dim :dims dims :sizes sizes
+                                              :surface-alias surface-alias :surface-spec surface-spec :loc loc})
+                       [state nil])
         [state ll] (if softmax?
-                     (let [[st mx] (fresh state "max")
-                           st (emit st {:i :max :out mx :arg ll :dims dims})
+                     (let [[st lm] (if mask (masked state ll mask Double/NEGATIVE_INFINITY) [state ll])
+                           [st mx] (fresh st "max")
+                           st (emit st {:i :max :out mx :arg lm :dims dims})
                            [st sh] (fresh st "shift")
-                           st (emit st {:i :op :op :sub :out sh :args [ll mx]})
+                           st (emit st {:i :op :op :sub :out sh :args [lm mx]})
                            [st ex] (fresh st "softmax")]
                        [(emit st {:i :op :op :exp :out ex :args [sh]}) ex])
                      [state ll])
         ;; argmax: the values equal to the maximum, exactly (core.py)
         [state ll] (if (= reduction :maximize)
-                     (let [[st mx] (fresh state "max")
-                           st (emit st {:i :max :out mx :arg ll :dims dims})
-                           [st eq] (fresh st "argmax")]
-                       [(emit st {:i :op :op :eq :out eq :args [ll mx]}) eq])
+                     (let [[st lm] (if (and mask (not softmax?)) (masked state ll mask Double/NEGATIVE_INFINITY) [state ll])
+                           [st mx] (fresh st "max")
+                           st (emit st {:i :max :out mx :arg lm :dims dims})
+                           [st eq] (fresh st "argmax")
+                           st (emit st {:i :op :op :eq :out eq :args [lm mx]})]
+                       (if mask (emit-op st "argmax" :and eq mask) [st eq]))
                      [state ll])
+        [state ll] (if (and mask (not softmax?) (not= reduction :maximize)) (masked state ll mask 0) [state ll])
         [state total] (fresh state "total")
         state (emit state {:i :sum :out total :arg ll :dims dims})
         [state q] (fresh state "ratio")
         state (emit state {:i :op :op :div :out q :args [ll total]})
         [state nrm] (fresh state "p")
         state (emit state {:i :nan-to-num :out nrm :arg q})
+        [state nrm] (marginalize state nrm (:pending state) {:owner owner :spec spec :mc-dim mc-dim :loc loc})
+        state (if (:bounded state)
+                (assoc state :pending (:pending outer) :mixing (:mixing outer) :choosing (:choosing outer))
+                state)
         frm (fr/get-frame state)
         [state prev] (if (:ll frm)
                        [state (:ll frm)]
@@ -865,6 +1075,7 @@
           ll (:ll (fr/get-frame state))
           [state total] (fresh state "total")
           state (emit state {:i :sum :out total :arg ll :dims (unknown-dims state)})
+          state (add-evidence state total)
           [state q] (fresh state "ratio")
           state (emit state {:i :op :op :div :out q :args [ll total]})
           [state nll] (fresh state "ll")
@@ -918,12 +1129,18 @@
                         {:source (label source) :target (label target)})
             [state sw] (fresh state "ll")
             state (emit state {:i :swap-dims :out sw :arg (:ll child) :d1 sidx :d2 tidx})
+            ;; a rejection sampler's evidence moves with the beliefs
+            [state ev] (if-let [ev (and (:bounded state) (:evidence child))]
+                         (let [[st e] (fresh state "evidence")]
+                           [(emit st {:i :swap-dims :out e :arg ev :d1 sidx :d2 tidx}) e])
+                         [state nil])
             [state value] (fresh state (str target-who "_" target-id))
             state (emit state {:i :alias :out value :arg (:tag source-ch)})
             state (fr/update-frame state update-in [:children who]
                                    (fn [c]
                                      (-> c
                                          (assoc :ll sw)
+                                         (cond-> ev (assoc :evidence ev))
                                          (update :ll-dims #(conj (disj % tidx) sidx))
                                          (update :scrambled #(or % scrambled))
                                          (assoc-in [:conditions target] source)
@@ -961,7 +1178,10 @@
                      [state ll]
                      (let [[st one] (fresh state "ll")]
                        [(emit st {:i :const :out one :value 1.0}) one]))
-        [state v] (eval-expr state what)
+        ;; no choice consumes a bounded estimate here (sample-ll)
+        choosing (:choosing state)
+        [state v] (eval-expr (assoc state :choosing nil) what)
+        state (assoc state :choosing choosing)
         [state w] (if (= how :boolean)
                     ;; jnp.bool(x) * 1.0
                     (let [[st z] (fresh state "lit")
@@ -973,6 +1193,7 @@
         state (emit state {:i :op :op :mul :out f :args [ll w]})
         [state total] (fresh state "total")
         state (emit state {:i :sum :out total :arg f :dims (unknown-dims state)})
+        state (add-evidence state total)
         [state q] (fresh state "ratio")
         state (emit state {:i :op :op :div :out q :args [f total]})
         [state nll] (fresh state "ll")
@@ -1199,7 +1420,13 @@
    :continuation []
    :forall []
    :pctxt pctxt
-   :domains domains})
+   :domains domains
+   :bounded nil
+   :limit nil
+   :pending []
+   :mixing []
+   :choosing nil
+   :report []})
 
 (defn analyze
   "The IR program of a parsed memo:
@@ -1207,11 +1434,13 @@
    :axes [id ...] :domains [domain ...] :shape [n ...] :n-dims n}.
   domains maps each domain symbol to its values; opts has :variant and
   :callee, from the name of a memo defined before to {:axes n :params [..]
-  :defaults #{..} :num-results n}."
-  [{:keys [pctxt stmts retvals]} domains {:keys [variant callee]}]
+  :defaults #{..} :num-results n}; with a budget (M3), :bounded, a normalized
+  budget (memo.bounded/normalize-budget), and :limit, the call's. A bounded
+  program also has :bounded-report, its choices' sizes."
+  [{:keys [pctxt stmts retvals]} domains {:keys [variant callee bounded limit]}]
   (let [state (reduce (fn [st [i s]]
                         (eval-stmt (assoc st :continuation (subvec stmts (inc i))) s))
-                      (assoc (initial-state pctxt domains variant) :callee callee)
+                      (assoc (initial-state pctxt domains variant) :callee callee :bounded bounded :limit limit)
                       (map-indexed vector stmts))
         [state vals] (reduce (fn [[st acc] retval]
                                (let [[st val] (eval-expr st retval)]
@@ -1231,4 +1460,5 @@
      :axes (mapv second forall)
      :domains (mapv #(nth % 2) forall)
      :shape (mapv (fn [[_ _ dom]] (count (get domains dom))) forall)
-     :n-dims (:next-dim state)}))
+     :n-dims (:next-dim state)
+     :bounded-report (:report state)}))

@@ -56,3 +56,26 @@
        x)
      ast)
     @acc))
+
+(defn agents
+  "The agents an AST names: {:agents #{name} :snapshots {alias agent}}, self
+  excluded. A snapshot's alias belongs to the agent that took it."
+  [ast]
+  (let [acc (atom {:agents #{} :snapshots {}})
+        add #(when (and (symbol? %) (not= 'self %)) (swap! acc update :agents conj %))]
+    (walk/postwalk
+     (fn [x]
+       (when (map? x)
+         (case (:node x)
+           (:choose :observes-factor :with-stmt :knows :variant :trace :wants :forgets-about :with)
+           (add (:who x))
+           :show (run! add [(:who x) (:target-who x) (:source-who x)])
+           :snapshot (do (add (:who x)) (swap! acc assoc-in [:snapshots (:alias x)] (:who x)))
+           :kl (run! add [(:p-who x) (:q-who x)])
+           :entropy (run! (comp add first) (:rvs x))
+           :memo (run! (comp add second) (:ids x))
+           nil)
+         (when (= :knows (:node x)) (add (:source-who x))))
+       x)
+     ast)
+    (update @acc :agents #(apply disj % (keys (:snapshots @acc))))))
