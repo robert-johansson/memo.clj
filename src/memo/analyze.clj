@@ -178,6 +178,11 @@
   [frm]
   (into {} (map (fn [[_ c]] [(:idx c) (:domain c)])) (:choices frm)))
 
+(defn- as-count
+  "A number of states as a long where it fits (a bigint otherwise)."
+  [n]
+  (if (<= n Long/MAX_VALUE) (long n) n))
+
 (defn- too-many-states [what n limit opts]
   (err/raise (str what " enumerates " n " states, above the limit of " limit)
              (assoc opts :hint (str "Exact over samples enumerates every way the samples can fall. Use fewer "
@@ -221,7 +226,7 @@
         mc? (:monte-carlo spec)
         states (if mc? (:draws spec) (b/power (b/states k mprime) n))
         limit (b/limit-of spec (:limit state))
-        _ (when (and (not mc?) (> states limit))
+        _ (when (and (not mc?) (> states limit) (not (:report-only state)))
             (too-many-states (str owner "'s " what " from " k " samples") states limit (frame-err-opts state loc)))
         [state omega] (if mc? [state (:mc-dim choosing)] (alloc-dim state))
         [state p] (cond
@@ -239,7 +244,7 @@
         [state w] (if mc?
                     [state nil]
                     (let [[st w] (fresh state "draws")] [(emit st (assoc instr :i :sample-weight :out w)) w]))]
-    [(update state :pending conj {:kind :samples :owner owner :omega omega :weight w :states states
+    [(update state :pending conj {:kind :samples :owner owner :omega omega :weight w :states (as-count states)
                                   :what what :line (:line loc) :k k :categories mprime :sets n})
      q]))
 
@@ -782,7 +787,7 @@
 (defn- eval-predict
   "(Predict e): the expected value of e in the current agent's imagined
   future, the rest of the program replayed by a snapshot of the agent."
-  [state {:keys [expr loc]}]
+  [state {:keys [expr loc surface]}]
   (when (empty? (:path state))
     (err/raise "(Predict ...) and (EU ...) cannot be used at the top level of a memo"
                {:hint (str "They evaluate an agent's goal in its imagined future, and the "
@@ -801,6 +806,7 @@
         [state to-imagine] (retarget-continuation state (predict-prefix state) future loc)]
     (eval-expr state {:node :imagine :do to-imagine :loc loc :static false
                       :then {:node :expect :reduction :expectation :warn false :loc loc :static false
+                             :surface (or surface "Predict")
                              :expr {:node :with :who future :expr expr :loc loc :static false}}})))
 
 (defn- eval-util
@@ -810,7 +816,7 @@
     (when-not g
       (err/raise (str "Unknown goal " goal)
                  (assoc (frame-err-opts state loc) :hint (str "Did you misspell " goal "?"))))
-    (eval-predict state {:expr g :loc loc})))
+    (eval-predict state {:expr g :loc loc :surface "EU"})))
 
 (defn eval-expr [state e]
   (case (:node e)
@@ -862,7 +868,7 @@
       (let [mc? (:monte-carlo spec)
             states (if mc? (:draws spec) (b/binomial cells k))
             limit (b/limit-of spec (:limit state))
-            _ (when (and (not mc?) (> states limit))
+            _ (when (and (not mc?) (> states limit) (not (:report-only state)))
                 (too-many-states (str owner " considering " k " of " cells " options") states limit {:loc loc}))
             [state sigma] (if mc? [state mc-dim] (alloc-dim state))
             [state mask] (fresh state "considered")
@@ -872,7 +878,7 @@
                         [state nil]
                         (let [[st w] (fresh state "draws")]
                           [(emit st {:i :const :out w :value (/ 1.0 (double states))}) w]))]
-        [(update state :pending conj {:kind :options :owner owner :omega sigma :weight w :states states
+        [(update state :pending conj {:kind :options :owner owner :omega sigma :weight w :states (as-count states)
                                       :line (:line loc) :k k :options cells})
          mask]))))
 
@@ -895,7 +901,7 @@
     (let [mc? (some? mc-dim)
           states (if mc? (:draws spec) (reduce * 1N (map :states sources)))
           limit (b/limit-of spec (:limit state))
-          _ (when (and (not mc?) (> states limit))
+          _ (when (and (not mc?) (> states limit) (not (:report-only state)))
               (too-many-states (str owner "'s choice") states limit {:loc loc}))
           [state prod] (reduce (fn [[st acc] w] (emit-op st "drawn" :mul acc w))
                                [state nrm] (keep :weight sources))
@@ -907,8 +913,9 @@
                           (emit-op st "bounded" :mul out c))
                         [state out])]
       [(update state :report conj
-               {:agent owner :line (:line loc) :states states :limit limit :monte-carlo mc?
-                :sources (mapv #(dissoc % :owner :omega :weight) sources)})
+               (cond-> {:agent owner :line (:line loc) :states (as-count states) :limit limit :monte-carlo mc?
+                        :sources (mapv #(dissoc % :owner :omega :weight) sources)}
+                 (and (not mc?) (> states limit)) (assoc :over-limit true)))
        out])))
 
 (defn- eval-choose
@@ -1273,7 +1280,7 @@
                  (assoc (frame-err-opts state loc) :hint "Pick a new name for this goal?")))
     (fr/update-frame state assoc-in [:children who :goals what]
                      {:node :expect :expr how :reduction :expectation :warn false
-                      :loc loc :static false})))
+                      :loc loc :static false :surface "EU's goal"})))
 
 (defn- eval-guess
   "The future self's guess of the value it will observe: a choice weighted by
@@ -1435,12 +1442,14 @@
   domains maps each domain symbol to its values; opts has :variant and
   :callee, from the name of a memo defined before to {:axes n :params [..]
   :defaults #{..} :num-results n}; with a budget (M3), :bounded, a normalized
-  budget (memo.bounded/normalize-budget), and :limit, the call's. A bounded
-  program also has :bounded-report, its choices' sizes."
-  [{:keys [pctxt stmts retvals]} domains {:keys [variant callee bounded limit]}]
+  budget (memo.bounded/normalize-budget), and :limit, the call's (with
+  :report-only, sizes above it are reported, not errors). A bounded program
+  also has :bounded-report, its choices' sizes."
+  [{:keys [pctxt stmts retvals]} domains {:keys [variant callee bounded limit report-only]}]
   (let [state (reduce (fn [st [i s]]
                         (eval-stmt (assoc st :continuation (subvec stmts (inc i))) s))
-                      (assoc (initial-state pctxt domains variant) :callee callee :bounded bounded :limit limit)
+                      (assoc (initial-state pctxt domains variant)
+                             :callee callee :bounded bounded :limit limit :report-only report-only)
                       (map-indexed vector stmts))
         [state vals] (reduce (fn [[st acc] retval]
                                (let [[st val] (eval-expr st retval)]

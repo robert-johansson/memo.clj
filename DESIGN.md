@@ -889,6 +889,17 @@ its reference.*
   the same agent that encloses the query (the "consumer"). A query inside a
   nested choice of that agent (its future self's choice, replayed by EU) is
   marginalized there.
+- **`EU` and `Predict` are two queries,** as memo computes them: the goal is
+  the future self's expectation over what it will still not know, and `EU`
+  the present self's expectation of that over what will happen. Each is
+  estimated from samples of its own, so a goal over an outcome and a
+  variable the agent never observes (memo's competitor: `score >
+  bob.score`) averages over every pair of k outcome samples (per option)
+  and k samples of the unobserved variable (shared), not over k joint
+  samples. That follows from bounding every query the agent evaluates; the
+  acceptance pass found it undocumented, and the Handbook now says so. A
+  joint-futures algorithm (sample k complete futures) would need EU's two
+  expectations fused, and is not built.
 - **Sharing (proposed, built; a claim about minds, flagged by a side agent
   and filed for GenGDT as gengdt-lu5i).** Within one query the samples are
   shared across the values the agent knows, except along the dims its
@@ -976,16 +987,31 @@ sample from **finite** sets: outcomes, options, other agents' types.
   and its hint lists the ways out. "Per agent query" is read as one choice
   of the agent: what one decision enumerates.
 - **The report:** `(memo.bounded/report model budget)` lists each choice
-  that marginalizes samples, with its states, limit, and sources (the
-  query, k, the categories m, the sets n). `memo.bounded/program` prints
-  the bounded IR.
+  that marginalizes samples, in the memo and the memos it calls (`:memo`),
+  with its states, limit, and sources (the query, k, the categories m, one
+  more under rejection, the sets n). A choice above its limit is reported
+  (`:over-limit true`) instead of thrown: the analysis has a report-only
+  mode. Under Monte Carlo, `:states` is the number of draws.
+  `memo.bounded/program` prints the bounded IR.
+- **Which limit:** an agent's own `:limit`, else the call's `:memo/limit`,
+  else 10^6 (the agent's wins, higher or lower).
 - **The multinomial probabilities are computed in log space,** with their
   gradient written out (`array/custom-vjp`): an outcome of probability 0
   keeps its exact first derivative, which log space would make NaN, and
   which pruning it would lose. A large k (m = 2 allows k near 10^6) then
   neither overflows the coefficient nor underflows the powers.
 - **Zero mass.** A belief of no mass (after an impossible observation) gives
-  estimates of 0, as the exact query's, whatever the samples.
+  estimates of 0, as the exact query's, whatever the samples. A choice that
+  is impossible for some draws (options considered whose weights are all 0,
+  a `:to-be` whose estimate is no option, a `:such-that` no option meets)
+  loses their mass, as an impossible choice does in memo (§13.9), and the
+  table sums to less than 1; `mg/dist` refuses it.
+- **A belief must be a probability.** memo computes exactly with negative
+  weights (a negative `:wpp` or `:observes-event`), but a sample needs
+  probabilities: a bounded agent's belief with a negative cell, or a
+  rejection's acceptance probability below 0 or above 1, is a loud error
+  (acceptance pass 1 found tables of 2, 8, 32 under rejection, and above 1
+  under one-and-done, before).
 - **Not built:** pruning the count vectors of probability 0, which would
   shrink GenGDT's case (3 options, 4 outcome levels, 2 of them possible)
   from 4.5 million to thousands, exactly in values and first derivatives.
@@ -1047,7 +1073,10 @@ sample from **finite** sets: outcomes, options, other agents' types.
     Exactly: count vectors over m + 1 categories, the last "rejected" with
     probability 1 − Z, Z the probability of the observations (the product
     of their normalizers, tracked per frame as `:evidence` when a budget is
-    given, and moved with the beliefs by an observed choice).
+    given, and moved with the beliefs by an observed choice). What the agent
+    `:knows` is not an observation (it knows the value from the start), so
+    no sample is rejected for it, unlike `:knows`'s expanded form with an
+    `:observes`.
     - Self-normalized importance sampling coincides with it for hard
       evidence (`:observes`, `:observes-that`). For soft evidence it
       differs (weights, not acceptance), and is **not built**: it needs the
@@ -1294,15 +1323,26 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
     the temperature, at an outcome of probability 0 too.
   - **The budget's checks, the limit, the report, the loud errors** for an
     estimate outside its agent's choice, each message compared.
-  - **Planted bugs** (CLAUDE.md rule 7): 19, each caught (the gradient at a
+  - **Planted bugs** (CLAUDE.md rule 7): 23, each caught (the gradient at a
     zero outcome, the multinomial coefficient, sharing without the options'
     or the enclosing queries' own samples, `:per-option` ignored, rejection
     without evidence, with evidence not moved by an observed choice, with
     soft evidence always kept, or dividing by k, unweighted draws, the
     options mask, a `:given` narrowed, Monte Carlo draws folded into
     constants, subsets not random, one draw reused, no 1/R, the consumer
-    check, `estimated`'s joint sampler weighing on another table, and the
-    agent check).
+    check, `estimated`'s joint sampler weighing on another table, the agent
+    check, and, after the acceptance pass, the negative-belief and
+    negative-acceptance checks, the report's callees and its report-only
+    mode).
+  - **Acceptance pass 1** (2026-10-24, one agent, the Handbook and
+    docstrings alone, ~70 models against its own brute force;
+    `tmp/acceptance-m3/report.md`): everything checked agreed, except two
+    defects, fixed: Monte Carlo enumerated (and kept) the count vectors it
+    never uses, so its memory grew as k² until a raw OutOfMemoryError (now
+    k = 10^5 in 16 ms), and negative weights gave tables above 1 (now loud
+    errors). Its doc gaps are closed in the Handbook: EU's two queries,
+    lost mass, `:knows` under rejection, `:options` at or above the number
+    of options, which limit wins, the size formula, the report.
 - **Acceptance passes** before each milestone closes: independent agents
   working as memo users from the Handbook and the docstrings alone, against
   Python memo's answers.

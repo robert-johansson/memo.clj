@@ -28,7 +28,8 @@
     :monte-carlo true the samples drawn (with :draws R draws, default 1) in
                       place of enumerated; the call then takes a :memo/key
     :limit n          the enumerated states allowed at one choice (default
-                      10^6; the call's :memo/limit sets it for every agent)
+                      10^6; the call's :memo/limit sets it for every agent
+                      without a :limit of its own)
 
   This namespace holds the budget's validation, the combinatorics, and the
   lowering of the bounded IR instructions (:sample-weight, :sample-belief,
@@ -137,7 +138,10 @@
     :else
     (let [named (map (fn [[k v]] [(agent-name mname k) v]) budget)]
       (when-let [a (some (fn [[a n]] (when (clojure.core/> n 1) a)) (frequencies (map first named)))]
-        (err/raise (str "The budget names " a " twice") {:loc {:name mname}}))
+        (err/raise (str "The budget names " a " twice")
+                   {:hint (str "A symbol and a keyword name the same agent ('" a " and :" a "): give it one "
+                               "spec.")
+                    :loc {:name mname}}))
       (into (sorted-map-by #(compare (str %1) (str %2)))
             (map (fn [[a s]] [a (spec mname a s)]))
             named))))
@@ -148,7 +152,8 @@
   (boolean (some :monte-carlo (vals budget))))
 
 (defn limit-of
-  "The limit for an agent's spec, under the call's limit."
+  "The limit for an agent's spec: its own :limit, else the call's, else the
+  default (10^6)."
   [spec call-limit]
   (or (:limit spec) call-limit default-limit))
 
@@ -179,13 +184,27 @@
     [[k]]
     (vec (for [c (range k -1 -1), tail (compositions (clojure.core/- k c) (dec m))] (into [c] tail)))))
 
-(def count-vectors
+(def ^:private host-cache (atom {}))
+
+(defn- host-cached
+  "(build), cached under k on the host, the cache starting over past 16
+  entries (an enumeration is up to the limit's size, 10^6 vectors by
+  default, and a fit may try many budgets)."
+  [k build]
+  (if-let [[_ v] (find @host-cache k)]
+    v
+    (let [v (build)]
+      (swap! host-cache (fn [m] (assoc (if (clojure.core/>= (count m) 16) {} m) k v)))
+      v)))
+
+(defn count-vectors
   "Every way k samples fall into m categories, as count vectors, in a fixed
   order (the first category's count descending)."
-  (memoize (fn [k m] (compositions k m))))
+  [k m]
+  (host-cached [:count-vectors k m] #(compositions k m)))
 
-(def ^:private log-factorials
-  (memoize (fn [k] (vec (reductions clojure.core/+ 0.0 (map #(Math/log (double %)) (range 1 (inc k))))))))
+(defn- log-factorials [k]
+  (host-cached [:log-factorials k] #(vec (reductions clojure.core/+ 0.0 (map (fn [i] (Math/log (double i))) (range 1 (inc k)))))))
 
 (defn- log-coefficients
   "log k! / Π c_j! for each count vector."
@@ -246,14 +265,14 @@
 (defn- constant
   "(build), cached under k for the backend in effect: the host arrays of the
   count vectors and draws, which depend only on the budget and the sizes.
-  The cache starts over past 256 entries (a batch backend is one per batch
-  shape)."
+  The cache starts over past 32 entries (a batch backend is one per batch
+  shape, and an exact budget's arrays reach tens of megabytes)."
   [k build]
   (let [key [array/*backend* k]]
     (if-let [[_ v] (find @constants key)]
       v
       (let [v (build)]
-        (swap! constants (fn [m] (assoc (if (clojure.core/>= (count m) 256) {} m) key v)))
+        (swap! constants (fn [m] (assoc (if (clojure.core/>= (count m) 32) {} m) key v)))
         v))))
 
 ;; -----------------------------------------------------------------------------
@@ -345,6 +364,11 @@
         rest-shape (vec (drop (count front) (array/shape a)))
         a (array/reshape a (into [1 n m] rest-shape))
         mass (array/sum a {:axis 2 :keep-dims? true})
+        _ (when (array/any-true? (array/< a 0.0))
+            (err/raise "A bounded agent's belief has a negative probability: it cannot be sampled"
+                       {:hint (str "Its beliefs came from negative weights (a :wpp, or an :observes-event "
+                                   "weight, below 0). memo computes with them exactly, but samples need "
+                                   "probabilities: keep the weights non-negative.")}))
         has-mass (> mass 0)
         phat (where has-mass (/ a (where has-mass mass 1.0)) (/ 1.0 m))
         cats (if (= algorithm :rejection)
@@ -357,6 +381,10 @@
                    (err/raise "A rejection sampler's acceptance probability is above 1"
                               {:hint (str "With :algorithm :rejection, an agent keeps a sample with the probability "
                                           "of what it observed: an :observes-event weight must not exceed 1.")}))
+                 (when (array/any-true? (array/< zs 0.0))
+                   (err/raise "A rejection sampler's acceptance probability is below 0"
+                              {:hint (str "With :algorithm :rejection, an agent keeps a sample with the probability "
+                                          "of what it observed: an :observes-event weight must not be negative.")}))
                  (array/concatenate [(* zs phat) (array/clip (- 1.0 zs) 0.0 1.0)] 2))
                phat)
         mprime (nth (array/shape cats) 2)
@@ -385,10 +413,14 @@
             (mapv #(if (zero? total) 0.0 (clojure.core// (double %) total)) c)))
         cvs))
 
-(defn- sample-space [{:keys [k algorithm sample-sizes]}]
+(defn- sample-space
+  "The sampled cells m, the categories of one draw m' (m, or m + 1 with
+  rejection's), and, for the exact lowering, the count vectors (a delay:
+  Monte Carlo never enumerates them)."
+  [{:keys [k algorithm sample-sizes]}]
   (let [m (reduce clojure.core/* 1 sample-sizes)
         mprime (if (= algorithm :rejection) (inc m) m)]
-    {:m m :mprime mprime :cvs (count-vectors k mprime)}))
+    {:m m :mprime mprime :cvs (delay (count-vectors k mprime))}))
 
 (defn sample-weight
   "The :sample-weight instruction: the probability of each enumerated draw,
@@ -396,6 +428,7 @@
   own), on the draw's dim ω and the belief's contexts."
   [p z {:keys [k indep-sizes sample-sizes] :as instr}]
   (let [{:keys [cvs mprime]} (sample-space instr)
+        cvs @cvs
         {:keys [n cats rest] :as b} (belief p z instr)
         S (count cvs)
         probs (pmf cats k cvs)                           ; [n rest... S]
@@ -426,7 +459,8 @@
         {:keys [n cats rest]} b]
     (if-not draws
       (let [e (constant [:empirical k m mprime algorithm n]
-                        #(let [emp (empirical cvs m k algorithm)
+                        #(let [cvs @cvs
+                               emp (empirical cvs m k algorithm)
                                ds (digits (count cvs) n)]
                            (host-array (for [d ds, c (range n), x (nth emp (nth d c))] x) [(count ds) n m])))]
         (belief-of-draws e b indep-sizes sample-sizes))
@@ -483,26 +517,40 @@
 ;; -----------------------------------------------------------------------------
 ;; inspection
 
-(defn- compile-for [who model budget opts]
+(defn- compile-for [who model budget opts report-only]
   (let [f (:memo/compile (meta model))]
     (when-not f
       (err/raise (str who " takes a memo (defmemo), not " (pr-str model))
                  {:hint (str "(" who " model {'alice {:samples 8}})")}))
-    (f budget (:limit opts))))
+    (f budget (:limit opts) report-only)))
 
 (defn report
-  "The bounded lowering's sizes for model under budget: one entry per choice
-  that marginalizes samples, {:agent :line :states :limit :sources}, each
-  source {:kind (:samples or :options) :states ...}. opts: :limit (the
-  call's)."
+  "The bounded lowering's sizes for model under budget, and for the memos it
+  calls (which the budget reaches too): one entry per choice that averages
+  over samples, {:memo :agent :line :states :limit :monte-carlo :sources},
+  each source {:kind (:samples or :options) :states ...}, :categories the
+  values one sample can take (one more under :rejection, for a rejected
+  sample) and :sets the sets of samples (one per option, where each has its
+  own). A choice above its limit is reported, marked :over-limit true, where
+  a call would throw. Under Monte Carlo, :states is the number of draws.
+  opts: :limit (the call's)."
   ([model budget] (report model budget {}))
-  ([model budget opts] (:bounded-report (:compiled (compile-for "report" model budget opts)))))
+  ([model budget opts]
+   (loop [todo [model] seen #{} out []]
+     (if-let [m (peek todo)]
+       (if (seen m)
+         (recur (pop todo) seen out)
+         (let [entries (map #(assoc % :memo (:memo/name (meta m)))
+                            (:bounded-report (:compiled (compile-for "report" m budget opts true))))]
+           (recur (into (pop todo) (sort-by (comp str :memo/name meta) ((:memo/callees (meta m)))))
+                  (conj seen m) (into out entries))))
+       out))))
 
 (defn program
   "model's IR program under budget, as text (memo.core/program's, bounded)."
   ([model budget] (program model budget {}))
   ([model budget opts]
-   (let [{:keys [instrs results axes]} (:compiled (compile-for "program" model budget opts))]
+   (let [{:keys [instrs results axes]} (:compiled (compile-for "program" model budget opts false))]
      (str/join "\n" (concat [(str "; axes " (pr-str axes))]
                             (map-indexed (fn [i instr] (format "%4d  %s" i (pr-str instr))) instrs)
                             [(str "; results " (pr-str results))])))))

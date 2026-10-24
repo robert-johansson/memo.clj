@@ -468,7 +468,8 @@
                             [{'alice {:samples 2 :limit -1}} "The :limit of alice's budget is -1, not a positive whole number"]
                             [{'alice 8} "The budget of alice is 8, not a map"]
                             [{"alice" {:samples 2}} "A budget's agent is \"alice\", not an agent's name"]
-                            [[:alice] "The budget is [:alice], not a map"]]]
+                            [[:alice] "The budget is [:alice], not a map"]
+                            [{'alice {:samples 2} :alice {:samples 3}} "The budget names alice twice"]]]
     (is (= msg (message #(pick 1.0 {:memo/budget budget-map}))) (pr-str budget-map)))
   (testing "a keyword names an agent too"
     (is (= (host (pick 1.0 (budget {:samples 2}))) (host (pick 1.0 {:memo/budget {:alice {:samples 2}}})))))
@@ -517,12 +518,12 @@
 
 (deftest the-size-limit
   (testing "above the limit, a loud error naming the size"
-    (is (= "alice's E from 40 samples enumerates 152300281 states, above the limit of 1000000"
+    (is (= "alice's EU from 40 samples enumerates 152300281 states, above the limit of 1000000"
            (message #(plan 1.0 (budget {:samples 40}))))))
   (testing "the agent's :limit, and the call's :memo/limit"
-    (is (= "alice's E from 5 samples enumerates 3136 states, above the limit of 3000"
+    (is (= "alice's EU from 5 samples enumerates 3136 states, above the limit of 3000"
            (message #(plan 1.0 (budget {:samples 5 :limit 3000})))))
-    (is (= "alice's E from 5 samples enumerates 3136 states, above the limit of 10"
+    (is (= "alice's EU from 5 samples enumerates 3136 states, above the limit of 10"
            (message #(plan 1.0 (assoc (budget {:samples 5}) :memo/limit 10)))))
     (is (some? (plan 1.0 (assoc (budget {:samples 5}) :memo/limit 1e4))))
     (is (some? (plan 1.0 (budget {:samples 5 :limit 3136})))))
@@ -531,13 +532,53 @@
            (message #(three (budget {:options 1 :limit 2}))))))
   (testing "the report"
     (let [no-lines (fn [r] (mapv #(-> % (dissoc :line) (update :sources (partial mapv (fn [s] (dissoc s :line))))) r))]
-      (is (= [{:agent 'alice :states 400 :limit 1000000 :monte-carlo false
-               :sources [{:kind :samples :states 400 :what "E" :k 3 :categories 4 :sets 2}]}]
+      (is (= [{:memo 'plan :agent 'alice :states 400 :limit 1000000 :monte-carlo false
+               :sources [{:kind :samples :states 400 :what "EU" :k 3 :categories 4 :sets 2}]}]
              (no-lines (b/report plan {'alice {:samples 3}}))))
-      (is (= [{:agent 'alice :states 3 :limit 1000000 :monte-carlo false
+      (is (= [{:memo 'three :agent 'alice :states 3 :limit 1000000 :monte-carlo false
                :sources [{:kind :options :states 3 :k 2 :options 3}]}]
              (no-lines (b/report three {'alice {:options 2}}))))
-      (is (every? integer? (map :line (b/report plan {'alice {:samples 3}})))))))
+      (is (every? integer? (map :line (b/report plan {'alice {:samples 3}}))))
+      (is (instance? Long (:states (first (b/report plan {'alice {:samples 3}})))) "a count, not a bigint"))
+    (testing "of the memos called too"
+      (is (= ['pick] (map :memo (b/report calls-pick {'alice {:samples 2}})))))
+    (testing "above the limit, reported rather than thrown"
+      (let [[r] (b/report plan {'alice {:samples 40}})]
+        (is (:over-limit r))
+        (is (= 152300281 (:states r)))))
+    (testing "rejection's categories count a rejected sample; EU's goal is a query of its own"
+      (is (= [4] (map :categories (mapcat :sources (b/report seen {'alice {:samples 2 :algorithm :rejection}})))))
+      (is (= #{"EU" "EU's goal"} (set (map :what (mapcat :sources (b/report plan2 {'alice {:samples 1}})))))))))
+
+(defmemo negative-weights [[a A]] [w]
+  (alice :thinks (bob :chooses [y Y] :wpp (+ 1 y)))
+  (alice :observes-event :wpp (* w (+ 1 bob.y)))
+  (alice :chooses [a A] :wpp (exp (E (utility a bob.y))))
+  (return (Pr (= alice.a a))))
+
+(defmemo mixed-weights [[a A]] []
+  (alice :thinks (bob :chooses [y Y] :wpp (+ 1 y)))
+  (alice :observes-event :wpp (- (* 0.4 bob.y) 0.2))
+  (alice :chooses [a A] :wpp (exp (E (utility a bob.y))))
+  (return (Pr (= alice.a a))))
+
+(deftest a-bounded-belief-is-a-probability
+  (testing "negative weights cannot be sampled"
+    (is (= "A bounded agent's belief has a negative probability: it cannot be sampled"
+           (message #(mixed-weights (budget {:samples 2}))))))
+  (testing "nor kept with a negative probability"
+    (is (= "A rejection sampler's acceptance probability is below 0"
+           (message #(negative-weights -0.1 (budget {:samples 1 :algorithm :rejection}))))))
+  (testing "all negative, the posterior normalizes to a probability"
+    (is (close-all? [1.0] [(reduce + (host (negative-weights -0.1 (budget {:samples 1}))))]))))
+
+(deftest monte-carlo-scales-with-k
+  ;; acceptance pass 1: the count vectors were enumerated (and kept) under
+  ;; Monte Carlo too, so k = 3000 held 2 GB and k = 10^4 ran out of memory
+  (let [t (System/nanoTime)
+        r (host (pick 1.3 {:memo/budget {'alice {:samples 100000 :monte-carlo true}} :memo/key (rng/key 1)}))]
+    (is (close-all? [1.0] [(reduce + r)]))
+    (is (< (/ (- (System/nanoTime) t) 1e9) 30.0) "seconds, at k = 100000")))
 
 (deftest a-budget-reaches-memos-called-and-cached-ones
   (is (close-all? (host (pick 1.0 (budget {:samples 2}))) (host (calls-pick 1.0 (budget {:samples 2})))))

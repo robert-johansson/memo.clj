@@ -235,9 +235,10 @@
                         :defaults (:memo/defaults m) :num-results (:memo/num-results m)}))))
         params (:params parsed)
         ;; the program, exact (budget nil) or for a normalized budget (M3)
-        compile-for (fn [budget limit]
+        compile-for (fn [budget limit report-only]
                       (let [compiled (analyze/analyze parsed domain-values
-                                                      (assoc opts :callee callee :bounded budget :limit limit))
+                                                      (assoc opts :callee callee :bounded budget :limit limit
+                                                             :report-only report-only))
                             problems (ir/check compiled)]
                         (when (seq problems)
                           (err/raise (str "memo.clj built an ill-formed program for " name)
@@ -249,19 +250,19 @@
                                                        :fns fns
                                                        :inlines inlines
                                                        :param-order (mapv :name params)})}))
-        {:keys [compiled run]} (compile-for nil nil)
+        {:keys [compiled run]} (compile-for nil nil false)
         agents (ast/agents parsed)
         programs (atom {})
-        bounded-program (fn [budget limit]
-                          (let [k [budget limit]]
+        bounded-program (fn [budget limit report-only]
+                          (let [k [budget limit report-only]]
                             (or (get @programs k)
-                                (let [p (compile-for budget limit)]
+                                (let [p (compile-for budget limit report-only)]
                                   (swap! programs assoc k p)
                                   p))))
         call (cond-> (fn [args kwargs {:keys [budget limit] :as call-opts}]
                        (let [env (bind-params name params defaults args kwargs)]
                          (if budget
-                           ((:run (bounded-program budget limit)) env call-opts)
+                           ((:run (bounded-program budget limit false)) env call-opts)
                            (run env))))
                (:cache opts) cached)
         ;; the model itself, for checking a budget's agents against the memos
@@ -304,9 +305,11 @@
            :memo/compiled compiled
            :memo/ns ns
            :memo/agents agents
-           :memo/compile (fn [budget limit]
+           :memo/compile (fn [budget limit report-only]
                            (bounded-program (bounded/normalize-budget name budget)
-                                            (some->> limit (bounded/limit-value ":memo/limit"))))})]
+                                            (some->> limit (bounded/limit-value ":memo/limit"))
+                                            (boolean report-only)))
+           :memo/callees #(callees @self)})]
       (deliver self m)
       m)))
 

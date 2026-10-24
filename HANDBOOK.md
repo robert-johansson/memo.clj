@@ -1775,9 +1775,16 @@ An agent is a symbol or a keyword. A spec takes:
 | `:monte-carlo true` | the samples are drawn, not enumerated (with `:draws R`, default 1); the call then needs `:memo/key` |
 | `:limit n` | the enumerated states allowed at one of its choices (default 10^6) |
 
-The call's `:memo/limit` sets the limit for every agent. A budget naming
-an agent the memo (and the memos it calls) does not have, an unknown key,
-or a value of the wrong kind is an error.
+The call's `:memo/limit` sets the limit for every agent that has no
+`:limit` of its own; an agent's `:limit` wins, higher or lower. A budget
+naming an agent the memo (and the memos it calls) does not have, an
+unknown key, or a value of the wrong kind is an error. A `:memo/key`
+without Monte Carlo is not used.
+
+**A budget reaches the memos called,** and an agent is bounded wherever
+its name appears: in the memo called, and in every memo it calls, so a
+recursive planner is bounded at every level. Two agents of the same name
+in different memos cannot be bounded apart.
 
 ## What is sampled
 
@@ -1791,6 +1798,14 @@ or a value of the wrong kind is an error.
   of a large model samples that choice alone.
 - **Samples are fresh for each query,** and the agent's choice averages
   over them.
+- **`EU` and `Predict` are two queries.** The goal is the agent's future
+  self's expectation, over what the future self will still not know, and
+  `EU` is the agent's expectation of that over what will happen. Each is
+  estimated from samples of its own: k samples of what will happen, and,
+  for a goal over something the agent never observes, k samples of that
+  too. The goal's estimate is then averaged over every pair, not over k
+  joint samples. `bounded/report` lists the two (their `:what` is `"EU"`
+  and `"EU's goal"`).
 - **Options share samples** when the agent's belief about what it samples
   does not depend on the option. Above, alice imagines bob's score once
   and judges both bets against it (Vul et al.'s "one and done"). When
@@ -1829,8 +1844,12 @@ or a value of the wrong kind is an error.
 With `:one-and-done`, the agent samples its beliefs after what it
 observed. With `:rejection`, it samples its prior and keeps the samples
 consistent with its observations: an `:observes-event` weight is the
-probability of keeping one, and must not exceed 1. When none is kept, its
-beliefs have no mass, as after an impossible observation in memo.
+probability of keeping one, between 0 and 1 (outside, an error). When none
+is kept, its beliefs have no mass, as after an impossible observation in
+memo. What the agent `:knows` is not an observation: it knows the value
+from the start, so no sample is rejected for it. Sampling needs
+probabilities, so a belief made of negative weights (a negative `:wpp`, or
+`:observes-event` weight) is an error under a budget.
 
 ```clojure
 (defmemo hopeful [[b Bet]] [beta]
@@ -1852,7 +1871,8 @@ beliefs have no mass, as after an impossible observation in memo.
 drawn uniformly without replacement, and the agent chooses among those.
 A `:given`, `:draws`, `:assigned` or `:guesses`, and a `:to-be` or
 `:such-that`, are not deliberate choices, and keep all their options.
-`:options` combines with `:samples`.
+`:options` combines with `:samples`. With k at least the number of
+options, the agent considers them all: the exact choice.
 
 ```clojure
 (defenum Snack APPLE BAR CAKE)
@@ -1869,10 +1889,19 @@ A `:given`, `:draws`, `:assigned` or `:guesses`, and a `:to-be` or
 ## Where a bounded estimate can go
 
 The samples are averaged at the agent's own choice, so an estimate can
-drive that choice (`:wpp`, `:to-maximize`, `:to-be`), and nothing else:
-returned, read by another agent, or weighting an observation, it is an
-error. To model a reported estimate, make the report a choice of the
-agent's, as `(alice :chooses [r R] :to-be ...)`.
+drive that choice (`:wpp`, `:to-maximize`, `:to-minimize`, `:to-be`,
+`:such-that`), and nothing else: returned, read by another agent, or
+weighting an observation, it is an error. To model a reported estimate,
+make the report a choice of the agent's, as `(alice :chooses [r R] :to-be
+...)`.
+
+A choice that is impossible for some draws loses their mass, as an
+impossible choice does in memo, and the table then sums to less than 1:
+options considered whose weights are all 0, a `:to-be` whose estimate is
+none of the options (a sample mean not in the domain), a `:such-that`
+that no option meets for some samples, and, under `:rejection`, weights
+that a belief with no mass makes all 0 (a `:wpp` of `(Pr ...)` when every
+sample was rejected). `mg/dist` refuses such a table.
 
 ```clojure
 ;; error: alice's bounded estimate is used outside alice's own choice
@@ -1886,20 +1915,24 @@ agent's, as `(alice :chooses [r R] :to-be ...)`.
 ## Sizes and the limit
 
 Exact over samples enumerates the samples' count vectors: C(k + m - 1,
-m - 1) for k samples of m values, and its power for options with samples
-of their own. `bounded/report` gives the sizes of each choice that averages
-over samples:
+m - 1) for k samples of m values (m + 1 under `:rejection`: a sample can
+be rejected), its power for options with samples of their own, and the
+product of a choice's queries (two for `EU` over something never
+observed). `bounded/report` gives the sizes of each choice that averages
+over samples, in the memo called and in the memos it calls (`:memo`); a
+choice above its limit is reported with `:over-limit true` rather than
+thrown, so it sizes a budget before the limit is raised:
 
 ```clojure
 (def sizes (first (bounded/report forager {'fox {:samples 2}})))
 
 (dissoc sizes :line :sources)
-;=> {:agent fox :states 100 :limit 1000000 :monte-carlo false}
+;=> {:memo forager :agent fox :states 100 :limit 1000000 :monte-carlo false}
 
 ;; the fox's EU: 10 count vectors for 2 samples of 4 yields, for each of
 ;; the 2 patches
 (dissoc (first (:sources sizes)) :line)
-;=> {:kind :samples :what "E" :k 2 :categories 4 :sets 2 :states 100}
+;=> {:kind :samples :what "EU" :k 2 :categories 4 :sets 2 :states 100}
 ```
 
 Above the limit, the call is an error naming the size. The ways out: fewer
@@ -1907,8 +1940,13 @@ samples, a smaller sampled variable (sample what the goal depends on, at
 its natural size), a higher `:limit`, or Monte Carlo.
 
 ```clojure
-;; error: fox's E from 30 samples enumerates 29767936 states, above the limit of 1000000
+;; error: fox's EU from 30 samples enumerates 29767936 states, above the limit of 1000000
 (forager 1.0 {:memo/budget {'fox {:samples 30}}})
+```
+
+```clojure
+(:over-limit (first (bounded/report forager {'fox {:samples 30}})))
+;=> true
 ```
 
 memo.clj never switches to Monte Carlo by itself: a fit's density would
@@ -1917,7 +1955,8 @@ turn from exact into noisy partway through.
 ## Monte Carlo
 
 `:monte-carlo true` draws the samples (R times, with `:draws R`) instead of
-enumerating them, from the call's `:memo/key`. The table is then an
+enumerating them, from the call's `:memo/key`; its cost grows with k times
+R, and `bounded/report` gives R as its `:states`. The table is then an
 unbiased estimate of the exact-over-samples one, the same for the same
 key:
 
