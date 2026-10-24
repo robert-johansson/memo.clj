@@ -541,7 +541,7 @@
 ;; inspection
 
 (defn- compile-for [who model budget opts report-only]
-  (let [f (:memo/compile (meta model))]
+  (let [f (:memo.impl/compile (meta model))]
     (when-not f
       (err/raise (str who " takes a memo (defmemo), not " (pr-str model))
                  {:hint (str "(" who " model {'alice {:samples 8}})")}))
@@ -560,14 +560,14 @@
   is. opts: :limit (the call's)."
   ([model budget] (report model budget {}))
   ([model budget opts]
-   (when-let [check (:memo/check-budget (meta model))] (check budget))
+   (when-let [check (:memo.impl/check-budget (meta model))] (check budget))
    (loop [todo [model] seen #{} out []]
      (if-let [m (peek todo)]
        (if (seen m)
          (recur (pop todo) seen out)
          (let [entries (map #(assoc % :memo (:memo/name (meta m)))
                             (:bounded-report (:compiled (compile-for "report" m budget opts true))))]
-           (recur (into (pop todo) (sort-by (comp str :memo/name meta) ((:memo/callees (meta m)))))
+           (recur (into (pop todo) (sort-by (comp str :memo/name meta) ((:memo.impl/callees (meta m)))))
                   (conj seen m) (into out entries))))
        out))))
 

@@ -309,7 +309,7 @@
 (defn- call-memo [{:keys [resolve-memo domain-values] :as ctx} env
                   {:keys [name which args kwargs guards dims domains] :as instr}]
   (let [f (resolve-memo name)
-        {:memo/keys [num-results domain-names shape call] callee-domains :memo/domains} (meta f)
+        {:memo/keys [num-results domain-names shape] call :memo.impl/call callee-domains :memo/domains} (meta f)
         _ (check-which num-results which {:name (:name ctx)})
         _ (check-domains domain-names domains (mapv domains/values callee-domains)
                          (mapv domain-values domains) {:name (:name ctx)})
@@ -526,9 +526,9 @@
                                                                   (map vector pos statics))
                                                             (keep (fn [[_ x s]] (when-not s x)) kws))))]
     (cond
-      (and (:memo/call (meta f)) (every? true? statics) (every? #(nth % 2) kws))
+      (and (:memo.impl/call (meta f)) (every? true? statics) (every? #(nth % 2) kws))
       (if (every? #(array/truthy? (get env %)) guards)
-        ((:memo/call (meta f)) pos kw-map (callee-opts ctx instr))
+        ((:memo.impl/call (meta f)) pos kw-map (callee-opts ctx instr))
         (array/zeros dyn-shape))
 
       vectorized?
@@ -586,7 +586,7 @@
   Python memo would have it), a boolean or a gen.array array; anything, for
   a form only passed to host functions and memo calls (args?)."
   [f params args?]
-  (let [form (str "#{" (pr-str (:memo/form (meta f))) "}")
+  (let [form (str "#{" (pr-str (:memo.impl/form (meta f))) "}")
         traced? (some tape/tracked? params)
         v (try (apply f params)
                (catch Exception e

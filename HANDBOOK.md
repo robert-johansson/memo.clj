@@ -39,7 +39,8 @@ License, Copyright (c) 2024-2025 Kartik Chandra and Tony Chen.*
 6. **[Bounded minds](#bounded-minds)** (experimental): an agent that
    reasons from a few samples, with a budget given at the call
    (`memo.bounded`).
-7. **[Differences from Python memo](#differences-from-python-memo)**.
+7. **[Stability](#stability)**: what 1.0 freezes, and what may change.
+8. **[Differences from Python memo](#differences-from-python-memo)**.
 
 ## Setting Up
 
@@ -72,9 +73,13 @@ Every example below runs in this namespace:
             [memo.errors :as err]))
 ```
 
-`memo.core` has `defmemo`, `print-table` and `program`. `memo.domains`
-has `defenum` and `defdomain`. A model's results are gen.array arrays, and
-`gen.array/->clj` reads them as Clojure numbers and vectors.
+`memo.core` has `defmemo`, `print-table`, `program` and `memo?`.
+`memo.domains` has `defenum`, `defdomain`, the predefined `Bool` and
+functions on domains. `memo.errors` recognizes memo errors (see
+[Errors](#errors)), and `memo.gen` puts minds in gen.clj models (see
+[Minds in gen.clj models](#minds-in-genclj-models)). A model's results are
+gen.array arrays, and `gen.array/->clj` reads them as Clojure numbers and
+vectors. What 1.0 freezes is listed under [Stability](#stability).
 
 ---
 
@@ -198,6 +203,34 @@ array too, so the host function may be `^:memo/vectorized`:
 ;; each x has 4 cells, weighted 1, 2 and 3
 (array/->clj (column))
 ;=> 1.3333333333333333
+```
+
+Functions on domains, outside a model:
+
+```clojure
+(domains/values Coin)                ; the members' values
+;=> [0 1]
+(domains/labels Coin)                ; display labels, as strings
+;=> ["HEADS" "TAILS"]
+(domains/labels [0.5 1.5])
+;=> ["0.5" "1.5"]
+(domains/members Coin)               ; an enum's members' names
+;=> [HEADS TAILS]
+(domains/field-keys Cell)            ; a product's fields
+;=> [:x :y]
+(domains/field Cell :y 6)            ; (Cell :y 6)
+;=> 2
+(domains/pack Cell {:x 1 :y 2})      ; (Cell {:x 1 :y 2})
+;=> 6
+(count (domains/values Cell))        ; a product's members are 0 .. n-1
+;=> 12
+[(domains/domain? [0 1 2]) (domains/enum? Coin) (domains/product? Cell)]
+;=> [true true true]
+
+;; a product with computed fields, as defdomain builds one
+(def Grid (domains/product-domain 'Grid [[:row 2] [:col 3]]))
+(count (domains/values Grid))
+;=> 6
 ```
 
 **Array parameters.** A parameter is a scalar unless it is marked
@@ -1436,8 +1469,12 @@ array with the declared axes:
 ;=> 1.3201566678298065
 ```
 
-Parameters may be passed by name, in a trailing map. Defaults fill in what
-is not passed:
+Parameters may be passed by name, in a trailing map, keyed by keywords or
+symbols without a namespace (`{:a 0.5}` or `{'a 0.5}`). Keys under
+`:memo/` are the call's options ([Bounded minds](#bounded-minds)); any
+other key is an error. Inside a model, a memo call passes names inline,
+`(f [x] 0.5 :c 2.0)`; outside, they always go in the map. Defaults fill in
+what is not passed:
 
 ```clojure
 (= (array/->clj (model 0.5 -0.3))
@@ -1446,7 +1483,8 @@ is not passed:
 ;=> true
 ```
 
-To print the results as a table, use `print-table`:
+To print the results as a table, use `print-table` (with the memo or its
+var); the layout is for reading, not parsing:
 
 ```clojure
 (memo/print-table jumps (jumps))
@@ -1469,10 +1507,20 @@ A model's metadata describes it:
 ```clojure
 (select-keys (meta executed) [:memo/params :memo/axes :memo/shape :memo/num-results])
 ;=> {:memo/params [a b], :memo/axes [x y], :memo/shape [3 3], :memo/num-results 2}
+(memo/memo? executed)
+;=> true
 ```
 
+The keys under `:memo/` are `:memo/name`, `:memo/doc` (the docstring),
+`:memo/params`, `:memo/axes`, `:memo/domain-names` (the axes' domains'
+names), `:memo/domains` (the domains), `:memo/shape` and
+`:memo/num-results`. Keys under `:memo.impl/` are memo.clj's own, and may
+change. The var holds the docstring as its `:doc` and the parameters as
+its `:arglists`, so `(doc executed)` shows them. `memo?` tells a memo from
+other functions.
+
 `(memo/program m)` is the model's compiled program, as text (Python's
-`debug_print_compiled=True`).
+`debug_print_compiled=True`), for reading: its format may change.
 
 Python memo's `return_pandas`, `return_xarray` and `save_comic` have no
 counterpart: read results with `array/->clj`.
@@ -1482,9 +1530,10 @@ counterpart: read results with `array/->clj`.
 Options are metadata on the model's name (Python's decorator options).
 
 **Caching.** `^:cache` (or `^{:cache true}`) remembers results by their
-parameters, Python's `@memo(cache=True)`. Calls with values being
-differentiated are not cached, and every cache is dropped when any memo is
-defined again, since a callee may have changed.
+parameters, Python's `@memo(cache=True)`, for calls whose arguments are
+all numbers or booleans: calls with values being differentiated, or with
+an array parameter, are not cached. Every cache is dropped when any memo
+is defined again, since a callee may have changed.
 
 ```clojure
 (defmemo ^:cache cached [] [a]
@@ -1559,9 +1608,14 @@ static.)
 
 ## Errors
 
-A memo error is an `ex-info`. Its message is Python memo's, and its data
-has a hint (`:memo/hint`), the location (`:memo/loc`) and the frame it was
-found in (`:memo/frame-ctxt`). A model that fails to compile throws when
+A memo error is an `ex-info`, and `err/memo-error?` recognizes one. Its
+message is Python memo's where Python memo has that error; errors only
+memo.clj has (the bridge, bounded minds, the loud errors where Python memo
+gives a silent number) have their own. Its data has `:memo/error` (true),
+a hint (`:memo/hint`), the location (`:memo/loc`, `{:name memo :line
+n}`) and the frame it was found in (`:memo/frame-ctxt`). Messages and
+`format-error`'s text are for reading: they may change in any release, so
+a program should branch on `memo-error?`, not on the message. A model that fails to compile throws when
 its `defmemo` is evaluated, wrapped by the Clojure compiler;
 `err/root-memo-error` finds the memo error inside:
 
@@ -1682,9 +1736,9 @@ JAX's is. The usual case is a speaker written `(exp (* alpha (log p)))`,
 where p is 0 somewhere; `(** p alpha)` has the same values and a finite
 gradient.
 
-**Given axes.** `:given` names axes that are given as values, not
-sampled. The constructor then takes their values first, as a vector, as
-a memo call does:
+**Given axes.** `:given` names axes (by symbols or keywords) that are
+given as values, not sampled. The constructor then takes their values
+first, as a vector in `:given`'s order, as a memo call does:
 
 ```clojure
 (def Gap [1 2 3])
@@ -1700,13 +1754,16 @@ a memo call does:
 ```
 
 A memo with several returns names the distribution's with `:return`:
-`(mg/dist m {:return 0})`.
+`(mg/dist m {:return 0})`. Any other option is an error. A distribution
+(or a deterministic generative function) holds the memo it was made from:
+after a memo is defined again at a REPL, make it again.
 
 **Deterministic generative functions.** `mg/deterministic` returns the
 memo's table (or one return of it, with `:return`) as a deterministic
 generative function, for splicing a mind at an address where a trace
 should show it. Its score is 0. Outside a model, calling the memo itself
-is the same.
+is the same. Unlike a distribution's, its values are not checked for lost
+mass: an impossible observation gives 0, silently, as in memo.
 
 ```clojure
 (def frog-mind (mg/deterministic hop))
@@ -2062,6 +2119,40 @@ limit; Monte Carlo keeps nothing.
 ```
 
 ---
+
+# Stability
+
+memo.clj 1.0 freezes what is below: after it, a release may add to it,
+and only a new major version removes or changes it.
+
+- **Vars.** `memo.core`: `defmemo`, `memo?`, `print-table`, `program`.
+  `memo.domains`: `defenum`, `defdomain`, `Bool`, `domain?`, `enum?`,
+  `product?`, `values`, `labels`, `members`, `field-keys`, `field`,
+  `fields`, `pack`, `product-domain`. A domain's record fields are not
+  frozen: read them through these. `memo.errors`: `memo-error?`, `root-memo-error`,
+  `format-error`, `*warnings?*`. `memo.gen`: `dist`, `deterministic`. A
+  public var marked `^:no-doc` is internal.
+- **The language:** the statements and expressions of this Handbook,
+  Python memo's at the pinned release. New Python memo releases are
+  followed deliberately: new constructs in minor releases, fixes in
+  patch releases, each in the release notes.
+- **Calls:** positional parameters, then a trailing map of names
+  (keywords or symbols without a namespace) and options (keys under
+  `:memo/`, reserved); the result's shape (axes in order, each at full
+  size, several returns on a leading axis, a 0-d value without axes, read
+  portably with `array/->clj` or `array/item`).
+- **Host functions:** `^:memo/vectorized`, `^:array` parameters, the
+  model options `^:cache` and `^{:variant ...}`.
+- **Metadata and error data:** the keys under `:memo/` listed in
+  [Executing a memo](#executing-a-memo) and [Errors](#errors).
+
+Not frozen: error messages, `format-error`'s, `print-table`'s and
+`program`'s text, how often a host function is called (tabulation,
+spot-checks), keys under `:memo.impl/`, and **bounded minds**
+(`memo.bounded`, the call options `:memo/budget`, `:memo/limit` and
+`:memo/key`, `memo.gen/estimated` and `memo.gen/log-estimate-variance`),
+which are experimental. `test/memo/api_test.clj` checks the frozen vars
+and keys.
 
 # Differences from Python memo
 

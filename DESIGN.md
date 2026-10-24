@@ -53,6 +53,25 @@ In order:
      or date), and pins it by gen.clj's GitHub URL (memoclj-kxj1). Until
      then memo.clj runs against gen.clj's HEAD now and then, and settles
      which gen.clj surface it needs frozen (memoclj-x05s).
+   - *The API review (2026-10-24, memoclj-qgr0):* an independent read of
+     the four namespaces and the Handbook. Applied: internals private or
+     `^:no-doc` (`make-memo`, `definitions`, the domain record
+     constructors, `member-value`; `raise`, `memo-error`, `warn`,
+     `warn-at`, `not-a-domain-hint`, `builtins` stay public for memo.clj's
+     namespaces, marked internal); a memo's internal metadata and
+     `:memo/user` under `:memo.impl/`, so every key under `:memo/` is API;
+     `memo?`; `program` checks its argument; defmemo puts `:doc` and
+     `:arglists` on the var; named arguments only by keywords or symbols
+     without a namespace; `dist` and `deterministic` refuse unknown
+     options and take `:given` axes as keywords too; `defenum` values are
+     integers; `estimated` and `log-estimate-variance` say they are
+     experimental. The Handbook's "Stability" lists what 1.0 freezes, and
+     `test/memo/api_test.clj` checks it. *The owner decided (2026-10-24):*
+     accessors `members` and `field-keys` instead of freezing the domain
+     records' fields; named arguments outside a model only in the trailing
+     map for 1.0 (keyword arguments could be added later); `dist` and
+     `deterministic` hold the memo value, documented (a var could be
+     accepted later).
 4. **M3 — bounded minds.** An agent's reasoning can be evaluated by a
    declared algorithm with a budget, instead of by exact inference over its
    beliefs. There are two lowerings, tried in this order:

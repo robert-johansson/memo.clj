@@ -66,7 +66,8 @@
                   :loc {:name mname}})))
   v)
 
-(defonce ^{:doc "Bumped whenever a memo is (re)defined: a cached memo drops its table
+(defonce ^{:private true
+           :doc "Bumped whenever a memo is (re)defined: a cached memo drops its table
   then, since a memo it calls may have changed (memo-clj's lesson)."}
   definitions (atom 0))
 
@@ -95,7 +96,16 @@
   [mname params defaults args kwargs]
   (when (> (count args) (count params))
     (err/raise (str "Too many arguments to memo " mname
-                    " (it takes " (count params) ")")))
+                    " (it takes " (count params) ")")
+               (when (some keyword? args)
+                 {:hint (str "Outside a memo, named arguments go in a trailing map: (" mname
+                             " ... {:p 0.5}), not (" mname " ... :p 0.5).")})))
+  (doseq [k (keys kwargs)]
+    (when-not (and (or (keyword? k) (symbol? k)) (nil? (namespace k)))
+      (err/raise (str "memo " mname " takes named arguments by keywords or symbols without a "
+                      "namespace, not " (pr-str k))
+                 {:hint (str "(" mname " ... {:p 0.5}) or {'p 0.5}; keys under :memo/ are the call's "
+                             "options.")})))
   (let [kwargs (into {} (map (fn [[k v]] [(symbol (name k)) v])) kwargs)]
     (doseq [k (keys kwargs)]
       (when-not (some #(= k (:name %)) params)
@@ -122,7 +132,7 @@
   (fn [sym]
     (let [v (ns-resolve (the-ns ns) sym)
           f (some-> v deref)]
-      (if (:memo/call (meta f))
+      (if (:memo.impl/call (meta f))
         f
         (err/raise (str "Unknown memo " sym)
                    {:hint (str "A memo call (" sym " [axes ...] args ...) needs " sym
@@ -131,12 +141,12 @@
 (defn- callees
   "The memos m calls (as memos or as host functions), resolved now."
   [m]
-  (let [{:memo/keys [compiled ns]} (meta m)]
+  (let [{:memo.impl/keys [compiled ns]} (meta m)]
     (into #{}
           (keep (fn [{:keys [i name]}]
                   (when (#{:call-memo :ffi} i)
                     (let [f (some-> (ns-resolve (the-ns ns) name) deref)]
-                      (when (:memo/call (meta f)) f)))))
+                      (when (:memo.impl/call (meta f)) f)))))
           (:instrs compiled))))
 
 (defn- reachable-agents
@@ -148,7 +158,7 @@
       (if (seen f)
         (recur (pop todo) seen acc)
         (recur (into (pop todo) (callees f)) (conj seen f)
-               (merge-with into acc (:memo/agents (meta f)))))
+               (merge-with into acc (:memo.impl/agents (meta f)))))
       acc)))
 
 (defn- check-agents
@@ -183,7 +193,7 @@
                     (if (seen f)
                       (recur (pop todo) seen acc)
                       (recur (into (pop todo) (callees f)) (conj seen f)
-                             (into acc ((:memo/bounded-parts (meta f)) budget))))
+                             (into acc ((:memo.impl/bounded-parts (meta f)) budget))))
                     acc))
         mname (:memo/name (meta m))]
     (doseq [[a {:keys [samples options]}] budget]
@@ -229,8 +239,9 @@
          (when budget
            {:budget budget :limit limit :key (:memo/key mine) :check-agents true})))]))
 
-(defn make-memo
-  "Analyze and lower a parsed memo; the callable model. Called by defmemo.
+(defn- make-memo
+  "Analyze and lower a parsed memo; the callable model. Called by defmemo's
+  expansion, through its var (it is private).
   fns maps each host function's name to its var (nil for the memo itself,
   resolved when called); inlines are the #{...} forms as functions of the
   parameters."
@@ -262,7 +273,7 @@
                    (let [m (some-> (ns-resolve (the-ns ns) callee) deref meta)]
                      (when (:memo/axes m)
                        {:axes (count (:memo/axes m)) :params (:memo/params m)
-                        :defaults (:memo/defaults m) :num-results (:memo/num-results m)}))))
+                        :defaults (:memo.impl/defaults m) :num-results (:memo/num-results m)}))))
         params (:params parsed)
         ;; the program, exact (budget nil) or for a normalized budget (M3)
         compile-for (fn [budget limit report-only]
@@ -326,24 +337,25 @@
           {:memo/name name
            :memo/doc (:doc parsed)
            :memo/params (mapv :name params)
-           :memo/defaults (set (keys defaults))
            :memo/axes (:axes compiled)
            :memo/domain-names (:domains compiled)
            :memo/domains (mapv domains (:domains compiled))
            :memo/shape (:shape compiled)
            :memo/num-results (count (:results compiled))
-           :memo/call call
-           :memo/compiled compiled
-           :memo/ns ns
-           :memo/agents agents
-           :memo/compile (fn [budget limit report-only]
+           ;; internal (:memo.impl/): not part of the API
+           :memo.impl/defaults (set (keys defaults))
+           :memo.impl/call call
+           :memo.impl/compiled compiled
+           :memo.impl/ns ns
+           :memo.impl/agents agents
+           :memo.impl/compile (fn [budget limit report-only]
                            (bounded-program (bounded/normalize-budget name budget)
                                             (some->> limit (bounded/limit-value ":memo/limit"))
                                             (boolean report-only)))
-           :memo/callees #(callees @self)
+           :memo.impl/callees #(callees @self)
            ;; [agent part] for each part of a normalized budget bounding something here
-           :memo/bounded-parts #(:bounded-parts (:compiled (bounded-program % nil true)))
-           :memo/check-budget (fn [budget] (some-> (bounded/normalize-budget name budget) check))})]
+           :memo.impl/bounded-parts #(:bounded-parts (:compiled (bounded-program % nil true)))
+           :memo.impl/check-budget (fn [budget] (some-> (bounded/normalize-budget name budget) check))})]
       (deliver self m)
       m)))
 
@@ -354,7 +366,7 @@
     (let [v (or (try (ns-resolve ns head) (catch Exception _ nil))
                 (domains/builtins head))]
       (when (and (var? v) (domains/enum? @v))
-        (try (domains/member-value @v member)
+        (try (@v member)
              (catch clojure.lang.ExceptionInfo e
                (err/raise (ex-message e) {:hint (str "Its members are "
                                                      (str/join ", " (:members @v)) ".")})))))))
@@ -391,12 +403,23 @@
     statements...
     (return expr) ...)
 
-  Options as metadata on the name: :variant (:child, :no-thinks, :no-knows
-  or :no-wants, the theory of the top level); :cache (memoize calls by their
-  arguments, as Python memo's cache=True).
+  Options as metadata on the name: :variant (:adult, the default, :child,
+  :no-thinks, :no-knows or :no-wants, the theory of the top level); :cache
+  (memoize calls whose arguments are all host numbers or booleans, as
+  Python memo's cache=True). Other metadata, such as ^:private, stays on
+  the var.
 
   A parameter marked ^:array takes an array or a vector, passed whole to
-  host functions and memo calls (Python memo's `p: ...`)."
+  host functions and memo calls (Python memo's `p: ...`).
+
+  The var holds the memo, a function: (name args... named), with the
+  parameters positionally in order (those with defaults may be left out)
+  and an optional trailing map of parameters by name and the call's
+  options. It returns the table, a gen.array array over the axes (several
+  returns stacked on a first axis); without axes a 0-d value (a number on
+  the JVM backend), which array/item reads on every backend. The docstring is the var's :doc and the
+  memo's :memo/doc. A model memo.clj cannot compile throws a memo error
+  when the defmemo is evaluated."
   [mname & body]
   (let [opts (select-keys (meta mname) [:variant :cache])
         _ (when-let [v (:variant opts)]
@@ -480,8 +503,11 @@
                                    "outside it, so it cannot use another parameter. (Python memo: "
                                    "a NameError.)")
                         :loc {:name mname}}))]
-    `(def ~mname
-       (make-memo {:name '~mname
+    `(def ~(vary-meta mname merge
+                      (cond-> {:arglists (list 'quote (let [ps (mapv (comp symbol name) param-syms)]
+                                                        (list ps (conj ps 'named))))}
+                        (:doc parsed) (assoc :doc (:doc parsed))))
+       ((var make-memo) {:name '~mname
                    :ns '~(ns-name *ns*)
                    :parsed '~parsed
                    :opts '~opts
@@ -495,13 +521,24 @@
                    :inlines ~(mapv (fn [form] `(with-meta (fn [~@param-syms]
                                                             ~(inline-members mname form resolve-member
                                                                              inline-hidden))
-                                                    {:memo/form '~form}))
+                                                    {:memo.impl/form '~form}))
                                    inline-forms)}))))
 
+(defn memo?
+  "Whether x is a memo: the model a defmemo defines (not its var)."
+  [x]
+  (boolean (:memo.impl/call (meta x))))
+
 (defn program
-  "A memo's compiled IR program, as text (Python memo's debug_print_compiled)."
+  "A memo's compiled IR program, as text (Python memo's
+  debug_print_compiled). m is a memo or its var. The text is for reading:
+  its format may change in any release."
   [m]
-  (ir/format-program (:memo/compiled (meta m))))
+  (let [m (if (var? m) @m m)]
+    (when-not (memo? m)
+      (err/raise (str "program takes a memo (defmemo), not " (pr-str m))
+                 {:hint "(program m), with m a defmemo's model."}))
+    (ir/format-program (:memo.impl/compiled (meta m)))))
 
 (defn print-table
   "Print a memo's result as a table, one row per cell of its axes (Python

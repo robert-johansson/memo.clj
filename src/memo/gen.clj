@@ -36,7 +36,7 @@
   "model's metadata, which must be a memo's."
   [who model]
   (let [m (meta model)]
-    (when-not (:memo/call m)
+    (when-not (:memo.impl/call m)
       (err/raise (str who " takes a memo (defmemo), not " (pr-str model))
                  {:hint (str "(" who " model) wraps a model defined with defmemo.")}))
     m))
@@ -119,7 +119,7 @@
                                "be drawn from it. " dist-hint)
                     :loc {:name mname}})))))
 
-(defdist memo-table
+(defdist ^:private memo-table
   "The distribution of a memo's table (dist's): probs over its n cells, the
   last axis; labels the cells' values, [n] for one sampled axis and [n k] for
   k; info, host data: the memo's name, k, and the support."
@@ -158,6 +158,17 @@
   [values x]
   (first (keep-indexed (fn [i v] (when (clojure.core/== v x) i)) values)))
 
+(defn- check-options
+  "opts, a builder's options map: only the keys allowed, a loud error
+  otherwise (a misspelt option would be ignored)."
+  [who model opts allowed]
+  (when-not (or (nil? opts) (map? opts))
+    (err/raise (str who " takes its options as a map, not " (pr-str opts))))
+  (when-let [k (first (remove allowed (keys opts)))]
+    (err/raise (str who ": unknown option " (pr-str k))
+               {:hint (str "Its options are " (apply str (interpose ", " (sort allowed))) ".")
+                :loc {:name (:memo/name (meta model))}})))
+
 (defn- trailing-options
   "The call options in args' trailing map, or nil."
   [args]
@@ -170,10 +181,12 @@
   options (a key) to merge into their trailing map."
   [who model {:keys [given] :as opts}]
   (let [m (memo-meta who model)
+        _ (check-options who model opts #{:given :return})
         mname (:memo/name m)
         axes (:memo/axes m)
         nres (:memo/num-results m)
-        given (vec given)
+        ;; an axis named by a symbol or a keyword
+        given (mapv #(if (keyword? %) (symbol (name %)) %) given)
         _ (when (empty? axes)
             (err/raise (str "Memo " mname " has no axes: it is not a distribution")
                        {:hint (str who " samples a memo's axes; a memo without axes returns a number.")
@@ -251,14 +264,15 @@
   - The table is checked at every call: no NaN, no negative cell, each
     distribution in it summing to 1 within 1e-6 + n·eps.
   - A NaN gradient reaching a parameter is an error naming it.
-  - A bounded mind's budget, in the call's trailing map, is passed on: the
-    table is exact over its samples. A Monte Carlo budget is an error: its
+  - (Experimental, M3.) A bounded mind's budget, in the call's trailing
+    map, is passed on: the table is exact over its samples. A Monte Carlo budget is an error: its
     table is an estimate (see estimated).
 
   opts:
-  - :given, a vector of the memo's axes given as values, not sampled. The
-    constructor then takes their values first, as a vector, as a memo call
-    does: ((dist L1 {:given '[u]}) [u] alpha).
+  - :given, a vector of the memo's axes (symbols or keywords) given as
+    values, not sampled. The constructor then takes their values first, as
+    a vector in :given's order, as a memo call does:
+    ((dist L1 {:given '[u]}) [u] alpha).
   - :return, which return is the distribution, for a memo with several."
   ([model] (dist model {}))
   ([model opts]
@@ -274,7 +288,9 @@
        (d args nil)))))
 
 (defn estimated
-  "model, a memo whose return is a probability over its axes, as a gen.clj
+  "Experimental (M3): outside what 1.0 freezes.
+
+  model, a memo whose return is a probability over its axes, as a gen.clj
   generative function whose density is estimated (gen.custom/estimated;
   DESIGN.md §7): for a bounded mind under a Monte Carlo budget, given in the
   call's trailing map, as {:memo/budget {'alice {:samples 8 :monte-carlo
@@ -319,7 +335,9 @@
        :retval (fn [_ choices] (cm/get-choice choices :value))}))))
 
 (defn log-estimate-variance
-  "How noisy an estimated density's log-likelihood is for one participant:
+  "Experimental (M3): outside what 1.0 freezes.
+
+  How noisy an estimated density's log-likelihood is for one participant:
   the sum of log ξ over its trials, each [args value] (args as gf takes them,
   value its observed :value), drawn :draws times (default 100) with keys from
   :key. Returns {:mean :variance :sd :draws}. Pseudo-marginal MH mixes well
@@ -349,10 +367,13 @@
   return value is its table (one return of it with :return, for a memo
   with several): for splicing a mind at an address. Its parameters pass
   through the NaN guard, as dist's do. Called outside a model, it is the
-  memo."
+  memo. Unlike dist's, its values are not checked for lost mass (an
+  impossible observation gives 0, silently, as in memo; memoclj-wbhh).
+  opts: :return."
   ([model] (deterministic model {}))
-  ([model {:keys [return]}]
+  ([model {:keys [return] :as opts}]
    (let [m (memo-meta "deterministic" model)
+         _ (check-options "deterministic" model opts #{:return})
          mname (:memo/name m)
          nres (:memo/num-results m)
          _ (when (and (some? return) (not (and (integer? return) (clojure.core/<= 0 return (dec nres)))))

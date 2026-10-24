@@ -403,7 +403,7 @@
     (let [v (or (some-> (try (ns-resolve ns head) (catch Exception _ nil)) deref)
                 (some-> (domains/builtins head) deref))]
       (when (domains/enum? v)
-        (domains/member-value v member)))))
+        (v member)))))
 
 (defn emit-defmemo
   "One (defmemo ...) form as Python memo source. resolve-member resolves
@@ -465,7 +465,7 @@
         (str "class " n "(IntEnum):\n"
              (str/join "\n" (concat (map (fn [m val] (str "    " (sanitize m) " = " val))
                                          (:members v) (:values v))
-                                    (map (fn [[a m]] (str "    " (sanitize a) " = " (domains/member-value v m)))
+                                    (map (fn [[a m]] (str "    " (sanitize a) " = " (v m)))
                                          (:aliases v))))))
       (domains/product? v)
       (str n " = domain(" (str/join ", " (map (fn [k] (str (sanitize (name k)) "=" (get (:sizes v) k)))

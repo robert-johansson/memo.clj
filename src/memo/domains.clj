@@ -18,7 +18,7 @@
   (:require [gen.array :as array]
             [memo.errors :as err]))
 
-(declare member-value)
+(declare ^:private member-value)
 
 (defrecord EnumDomain [name members values aliases]
   clojure.lang.IFn
@@ -30,9 +30,9 @@
   [d]
   (instance? EnumDomain d))
 
-(defn member-value
+(defn- member-value
   "The value of an enum's member, named by a keyword or a symbol (an alias
-  too)."
+  too): what calling the enum does, (Utt :SOME)."
   [e member]
   (let [m (symbol (name member))
         i (.indexOf ^java.util.List (:members e) (get (:aliases e) m m))]
@@ -48,6 +48,9 @@
   (invoke [this m] (pack this m))
   (invoke [this k z] (field this k z))
   (applyTo [this args] (clojure.lang.AFn/applyToHelper this args)))
+
+(doseq [v [#'->EnumDomain #'map->EnumDomain #'->ProductDomain #'map->ProductDomain]]
+  (alter-meta! v assoc :private true))
 
 (defn product?
   "Whether d is a product domain, made by defdomain."
@@ -104,8 +107,9 @@
   [d]
   (or (enum? d) (product? d) (and (sequential? d) (every? number? d))))
 
-(defn not-a-domain-hint
-  "What to write instead of d, which is not a domain."
+(defn ^:no-doc not-a-domain-hint
+  "Internal (memo.core's errors): what to write instead of d, which is not a
+  domain."
   [d]
   (str "A domain is a vector of numbers, an enum (defenum) or a product (defdomain)."
        (cond
@@ -122,8 +126,25 @@
     (and (sequential? d) (every? number? d)) (vec d)
     :else (err/raise (str "Not a domain: " (pr-str d)) {:hint (not-a-domain-hint d)})))
 
+(defn members
+  "An enum's members' names, as symbols, in order (aliases left out)."
+  [e]
+  (when-not (enum? e)
+    (err/raise (str "Not an enum: " (pr-str e)) {:hint "members takes an enum, made by defenum."}))
+  (:members e))
+
+(defn field-keys
+  "A product domain's fields, as keywords, in order (the first the most
+  significant)."
+  [d]
+  (when-not (product? d)
+    (err/raise (str "Not a product domain: " (pr-str d))
+               {:hint "field-keys takes a product domain, made by defdomain."}))
+  (:keys d))
+
 (defn labels
-  "Display labels of a domain's members: enum names, or the values."
+  "Display labels of a domain's members, as strings: an enum's member
+  names, or the values (a product's packed members)."
   [d]
   (if (enum? d) (mapv str (:members d)) (mapv str (values d))))
 
@@ -135,6 +156,13 @@
   Python's IntEnum, a member with the value of an earlier one is its alias:
   (defenum D [P 1] [Q 1] [R 2]) has the members P and R, and D.Q is P."
   [name & members]
+  (doseq [m members :when (vector? m)]
+    (when-not (and (= 2 (count m)) (symbol? (first m)) (integer? (second m)))
+      (err/raise (str "defenum " name ": a member with a value is [NAME integer], not " (pr-str m))
+                 {:hint "As Python's IntEnum: (defenum R [GREEN 5] [RED 9]), integer literals."})))
+  (doseq [m members :when (not (vector? m))]
+    (when-not (symbol? m)
+      (err/raise (str "defenum " name ": a member is a name or [NAME integer], not " (pr-str m)))))
   (let [pairs (reduce (fn [acc m]
                         ;; a bare member is the previous value plus one (Python's
                         ;; auto()), so 0, 1, 2 ... when none has a value
@@ -148,7 +176,7 @@
                             [] pairs)
           by-value (into {} (map (fn [[m v]] [v m])) canonical)
           aliases (into {} (keep (fn [[m v]] (when (not= m (by-value v)) [m (by-value v)]))) pairs)]
-      `(def ~name (->EnumDomain '~name '~(mapv first canonical) ~(mapv second canonical) '~aliases)))))
+      `(def ~name ((var ->EnumDomain) '~name '~(mapv first canonical) ~(mapv second canonical) '~aliases)))))
 
 (defmacro defdomain
   "(defdomain S :x 3 :y 4) defines S, a product domain of 12 members whose
@@ -166,8 +194,8 @@
   "The predefined enum, NO (0) and YES (1), Python memo's Bool. Every defmemo
   can name it without defining it; a namespace's own Bool takes its place.")
 
-(def builtins
-  "Domains every defmemo can name without defining them, as Python memo's
+(def ^:no-doc builtins
+  "Internal (memo.core's defmemo): domains every defmemo can name without defining them, as Python memo's
   models can (its generated code imports memo.lib's Bool). A namespace's own
   var of the same name comes first."
   {'Bool #'Bool})
