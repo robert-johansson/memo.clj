@@ -38,8 +38,16 @@ In order:
    - a deterministic generative function, for expectations and utilities;
 
    with gen.clj's laws as tests. Minds can then be traced, conditioned on and
-   fitted inside gen.clj models.
-3. **M3 — bounded minds.** An agent's reasoning can be evaluated by a
+   fitted inside gen.clj models. *Closed 2026-10-24.*
+3. **1.0 — the release** (added by the owner, 2026-10-24). The exact core
+   and the bridge, frozen:
+   - the API of `memo.core`, `memo.domains`, `memo.errors` and `memo.gen`
+     stable, with breaking changes only in a new major version;
+   - the Handbook complete for both;
+   - §13's open questions decided (4, 6, 8, 9);
+   - a tag, timed with gen.clj's 1.0 if it has one by then. GenGDT's Phase A
+     targets the 1.0 APIs, and moves its pins there.
+4. **M3 — bounded minds.** An agent's reasoning can be evaluated by a
    declared algorithm with a budget, instead of by exact inference over its
    beliefs. There are two lowerings, tried in this order:
    - **exact over the agent's own samples.** Where the agent samples from
@@ -53,7 +61,7 @@ In order:
      of the bounded agent's choice probability.
 
    The exact core is the limit of both.
-4. **M4 — the rest, as needed.** The Python transpiler as user tooling (it is
+5. **M4 — the rest, as needed.** The Python transpiler as user tooling (it is
    test tooling from M1), cost reflection, certification, model synthesis,
    and the static graph that gen.clj's static modeling language provides.
 
@@ -465,7 +473,10 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
     evenly spaced elements (all of them, for most memo domains), and a
     mismatch is a loud error. The check runs on eager backends; on MLX it
     would force evaluation, so vectorized functions are best validated
-    once on the JVM backend.
+    once on the JVM backend. Under gen.array's batch tracer (`gen.batched`)
+    it checks up to 8 evenly spaced particles, each as its own run would be
+    (2026-10-24, memoclj-m2jw). Before, it read a batched value on the
+    host, which sent `gen.batched` one particle at a time.
   - **A value being differentiated that reaches an unmarked function is a
     loud error.** Python memo gives a silent zero gradient for a host call
     whose arguments are all parameters (§2.4).
@@ -474,10 +485,10 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
     the call hold, as a memo call is. Python memo gives its call a zero
     gradient, and a recursive one never terminates.
   - **Keyword arguments** reach the function as a trailing map.
-  - gen.array's batch tracer (vmap) would run a vectorized function per
-    element safely, but it does not compose with gradients yet: a
-    differentiated parameter in a batched run fails ("arrays from different
-    backends (:batch and :tape)").
+  - gen.array's batch tracer (vmap) runs a vectorized function on every
+    particle at once. At gen.clj 3022944 it does not compose with
+    gradients: a differentiated parameter in a batched run fails ("arrays
+    from different backends (:batch and :tape)"). §6.4 has gen.clj's plans.
 - **Parameters:**
   - *Path-condition* parameters (recursion depth, `(if (= t 0) …)`) must be
     host values at call time.
@@ -531,9 +542,21 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
   sets (-Xmx8g; the JVM's default is a quarter of the machine's memory);
   it fails at 6 GB, a gap to the 2.9 GB not yet explained. MLX takes 19 s on its CPU in float64 and 6 s on
   Metal; Python memo about 28 s.
-- **Speed (to measure, not promise):** benchmarks against Python memo on JAX
-  and against memo-clj, on small recursive models (RSA depth 5, Sally-Anne)
-  and dense ones (Penelope). `array/compile` for repeated calls on MLX.
+- **Constants** (2026-10-24, memoclj-c0xj). What does not depend on a call
+  is computed at a memo's first call on each backend, and kept: literals,
+  domains, ones, and what memo's operators compute from them alone.
+  - They are kept by backend, since an array belongs to one, and the JVM's
+    and MLX's meet in one process.
+  - Never a parameter, an inline form, a memo call or a host function. A
+    host function's values can change with nothing in the memo changed (an
+    atom it reads, a helper it calls redefined), and a stale table would be
+    a silent wrong number.
+  - Constants made under a tracer (the batch tracer, a gradient, MLX's
+    compile) serve later calls outside it (`memo.lower-test`).
+  - §6.4 has the measurements.
+- **Speed against Python memo (to measure, not promise):** benchmarks
+  against Python memo on JAX and against memo-clj, on small recursive models
+  (RSA depth 5, Sally-Anne) and dense ones (Penelope).
 
 ## 6. The GFI bridge (M2)
 
@@ -560,7 +583,9 @@ speed research (§6.4, question 3).
   notes/90).
 - **Batched runs work.** A memo called under gen.array's batch backend with
   a batch of parameter values gives the batch of tables, tabulated host
-  functions included.
+  functions included. Vectorized ones too since 2026-10-24: their
+  spot-check had sent `gen.batched` one particle at a time (memoclj-m2jw,
+  §5).
 - **What the bridge must add:**
   - **The stand-in's gradient is NaN whenever any cell of the table is 0,**
     whichever cell is observed. `d/categorical` takes the log of every cell,
@@ -669,7 +694,8 @@ speed research (§6.4, question 3).
 - **The zero-cell gradient and the NaN guard,** each checked against a
   planted bug (CLAUDE.md rule 7).
 - **Batched against one particle at a time:** `simulate` and `generate`
-  under `gen.batched`.
+  under `gen.batched`, with a vectorized function of a batched parameter
+  among them.
 - **On every backend.**
 
 ### 6.4 The five questions (answers proposed 2026-10-22)
@@ -690,6 +716,39 @@ speed research (§6.4, question 3).
    - `gen.custom/deterministic`, which keeps its trace when an update
      leaves its arguments unchanged;
    - HMC's cache of compiled steps.
+
+   *Measured 2026-10-23, decided by the owner 2026-10-24* (memoclj-c0xj;
+   `bench/memo/bench/agent.clj`, run by `clojure -M:bench -m
+   memo.bench.agent`). The model is GenGDT's `fit-beta-v`: its mind `choose`
+   is called once per trial, 150 trials.
+   - **Where a call's time went.** A call took 0.077 ms on the JVM, and
+     0.109 ms with its gradient. The same table written by hand in gen.array
+     takes 0.0087 and 0.030 ms. A third of a call went to tabulating the
+     host function `available`, most of it flattening its arguments'
+     elements. A ninth went to `eu`'s spot-check.
+   - **What is built.** Constants are computed once per backend (§5), and
+     host functions are tabulated faster. A call now takes 0.051 ms, and
+     0.081 ms with its gradient.
+   - **Host functions are not folded.** Folding them too would give 0.039
+     ms, but one could read an atom or call a redefined helper (§5). It
+     would need a purity mark, if a model ever needs it.
+   - **No help from `^:cache`:** each trial's arguments differ, and β and v
+     are arrays.
+   - **No help from `gen.custom/deterministic`'s unchanged update:** HMC
+     moves β and v at every step.
+   - **`array/compile` on MLX** helps a memo whose host functions are
+     vectorized: 150 trials go from 35 to 3.5 ms. A memo that tabulates
+     reads host numbers, which a compiled function cannot.
+   - **The JVM is about 10× faster than MLX Metal for this model.** An HMC
+     step takes 248 ms on the JVM against 2679 ms on Metal: the arrays are
+     tiny, and the model reads values on the host.
+   - **The lever is batching the trials.** One hand-written call on the 150
+     trials' inputs takes 0.08 ms with its gradient. 150 calls of the memo
+     take 12.4 ms, against 16.4 ms before the constants.
+     - It needs batched parameters for a memo, by the batch tracer or by a
+       leading axis in the lowering.
+     - It needs a batched fitting model in GenGDT.
+     - GenGDT's research (gengdt-nvoo) decides whether its fits need it.
 4. **Batched gradients.** gen.array's batch tracer and its tape still do
    not combine. Measured: "arrays from different backends (:batch and
    :jvm)". gen.clj's M5 did not change that. M2 does not need them:
@@ -700,6 +759,13 @@ speed research (§6.4, question 3).
 
    Batched gradients, for many chains at once, would be gen.clj's work, if
    wanted.
+
+   *2026-10-23:* gen.clj's wave 2 (genclj-7dti, not yet at memo.clj's pin)
+   takes gradients inside a batched run, one per particle. The gradient of
+   a function with a batched run inside stays an error. That case is
+   genclj-hwk1, in gen.clj's backlog at low priority. Batched parameters
+   made by the batch tracer would need it: the gradient is taken outside
+   the batched run, by HMC on the fitting model's trace.
 5. **Normalization tolerance.** |Σ − 1| ≤ 1e-6 + n·ε, where n is the number
    of cells in the row and ε is the dtype's machine epsilon.
    - The 1e-6 was `d/categorical`'s tolerance when this was decided. n·ε
@@ -715,20 +781,27 @@ speed research (§6.4, question 3).
 
 ### 6.5 The first client
 
-GenGDT's observer infers the synthetic agent's goal value and temperature.
-That is third-person inference, with the agent's policy, `choose`, as an
-`mg/dist`. It runs by HMC, or on a grid with gen.clj's enumerative
-inference, once `eu` is vectorized (§6.1).
+GenGDT's `fit-beta-v` infers the synthetic agent's goal value and
+temperature. That is the scientist's inference (kind 2 of GenGDT's DESIGN
+§2.3), with the agent's policy, `choose`, as an `mg/dist`. In memo's own
+sense an observer is an agent frame that conditions, which is kind 3. It
+runs by HMC, or on a grid with gen.clj's enumerative inference, once `eu`
+is vectorized (§6.1).
 
-*Done 2026-10-22* (GenGDT 1e99526, `gengdt.memo-agent/observer`):
-- **Wiring.** GenGDT pins memo.clj b7ef474. The stand-in is replaced by
-  `mg/dist`. `eu` and the affect report's mean are in gen.array's
-  operators, so v differentiates as β does.
+*Done 2026-10-22* (GenGDT 1e99526, where the var was named `observer`;
+renamed `gengdt.memo-agent/fit-beta-v` in GenGDT 0173e7e, the owner's
+decision of 2026-10-23):
+- **Wiring.** GenGDT pinned memo.clj b7ef474 (4045276 since GenGDT
+  9d4c39a). The stand-in is replaced by `mg/dist`. `eu` and the affect
+  report's mean are in gen.array's operators, so v differentiates as β
+  does.
 - **Identifiability.** The agent's choices alone identify only β·v,
-  because EU is v times an expected satisfaction. The observer therefore
+  because EU is v times an expected satisfaction. `fit-beta-v` therefore
   uses every observation of a life: choices, outcomes and affect reports.
   The reports' mean is v times a difference of satisfactions, and that
-  separates the two.
+  separates the two, but only in the toy, whose reports are in value
+  units. A real rating's scale factor trades off against v, as β does
+  (GenGDT's DESIGN §15.1).
 - **Results at 150 cycles.**
   - β's and v's gradients agree with finite differences.
   - The grid posterior equals the hand posterior to 1e-9.
@@ -767,8 +840,15 @@ inference, once `eu` is vectorized (§6.1).
   lowering of the same program.
 - **The front end is unchanged** (principle 4). The same programs are legal
   and illegal under both lowerings.
+- **Finite in M3** (decided 2026-10-24, §13.5). Bounded agents sample from
+  finite domains, as memo's agents reason over them. Continuous variables
+  are discretized.
+  - gen.clj distributions inside an agent's model would be a later
+    extension (principle 1), once a client needs one.
+  - They would always lower by Monte Carlo, since their samples cannot be
+    enumerated.
 
-### 7.2 Exact over the agent's own samples first (proposed; from a side note, 2026-10-20)
+### 7.2 Exact over the agent's own samples first (decided 2026-10-24; from a side note, 2026-10-20)
 
 **Why.** Monte Carlo estimates are unbiased, but their noise accumulates.
 - A participant's log-likelihood estimate sums T per-trial log-estimates, so
@@ -792,24 +872,44 @@ sample from **finite** sets: outcomes, options, other agents' types.
   lowers to an exact tensor program over its sufficient statistics: no noise,
   differentiable, batchable, and usable through M2's bridge.
 
-**The rule.**
-- The bounded lowering computes the agent's sampling exactly when the
-  enumerated space (sufficient statistics where the analysis can find them,
-  raw samples otherwise) is below a size limit. It reports the size it chose.
-- It falls back to Monte Carlo with encapsulated randomness only above the
-  limit, or for samplers it cannot enumerate (continuous proposals, adaptive
-  budgets).
-- When it falls back, it says so. Variance control (several inner draws per
-  trial, correlated pseudo-marginal moves, SMC over trials) is then part of
-  the fitting recipe, with the estimator's log-variance reported per
-  participant.
-- Both lowerings must agree. The Monte Carlo lowering's average converges to
-  the exact-over-samples table (a law, §9).
+**The rule** (the owner, 2026-10-24, §13.3).
+- **Exact by default.** The bounded lowering computes the agent's sampling
+  exactly when the enumerated space is below a size limit. The space is
+  over sufficient statistics where the analysis can find them, and raw
+  samples otherwise. It reports the size it chose.
+- **Monte Carlo only when declared.** It never switches by itself. A space
+  above the limit, or a sampler it cannot enumerate (an adaptive budget),
+  is a loud error naming the size. The way out is to declare Monte Carlo
+  for that agent in its budget (`:monte-carlo`, §7.3).
+  - GenGDT fits budgets. An automatic switch would turn an exact density
+    into a noisy estimate partway through a fit, and HMC on that is
+    silently wrong (rule 4).
+- **The limit:** 10^6 enumerated states per agent query, overridable at
+  the call. Examples:
+  - k = 8 samples over 4 outcomes: 165 states;
+  - 2 options with binary outcomes: 81;
+  - 3 options over 4 outcomes: about 4.5 million, so it needs an override
+    or Monte Carlo.
 
-### 7.3 Proposals (to discuss before M3)
+  The limit is a computational convenience, never a psychological claim
+  (GenGDT DESIGN §2).
+- **With Monte Carlo declared,** variance control is part of the fitting
+  recipe: several inner draws per trial, correlated pseudo-marginal moves,
+  SMC over trials. The estimator's log-variance is reported per
+  participant.
+- **Both lowerings must agree.** The Monte Carlo lowering's average
+  converges to the exact-over-samples table (a law, §9). Declaring Monte
+  Carlo below the limit gives the comparison.
+
+### 7.3 The budget (decided 2026-10-24) and the first algorithms (proposed)
 
 - **The budget is a call-time argument, keyed by agent**, so the model text
-  does not change, e.g. `{:budget {alice {:samples 8}}}`.
+  does not change, e.g. `{:budget {alice {:samples 8 :algorithm
+  :one-and-done}}}` (the owner, 2026-10-24, §13.2).
+  - The budget is a host value: it fixes the tables' shapes (the number of
+    samples), so it is not differentiated.
+  - A budget that varies is a call with other arguments: `budget = f(goal
+    value)`, or a fitted depth.
   - Moors' operating conditions belong to the agent and the moment.
   - The budget can itself be a function of the outer model's state, or a
     random variable. Urgency narrowing computation is then expressible in
@@ -996,13 +1096,16 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
 
 1. **The bridge's API** (§6): `memo/dist` and `memo/fn` as proposed, or
    something else? This is what GenGDT models will be written against.
-   *2026-10-22:* §6 now proposes `memo.gen` (`dist` and `deterministic`),
-   with answers on names, several returns, speed, batched gradients and the
-   normalization tolerance; it awaits the owner's decision.
+   *Decided 2026-10-22:* `memo.gen` (`dist` and `deterministic`), with the
+   answers of §6.4; approved by the owner.
 2. **The budget's place** (§7.3): call-time and keyed by agent, as proposed?
-   Or also declarable in the model text?
+   Or also declarable in the model text? *Decided 2026-10-24:* call-time
+   only, keyed by agent.
 3. **Choosing the bounded lowering** (§7.2): automatic below a size limit and
    reported, as proposed, or always declared by the modeler? And what limit?
+   *Decided 2026-10-24:* exact over samples by default; Monte Carlo only
+   when declared, so a space above the limit is a loud error otherwise. The
+   limit is 10^6 states per agent query, overridable at the call.
 4. **Upstream:** does the exact core track new memo releases, with the pin
    moved deliberately? Or freeze at 1.3.2 until M3? *(2026-10-21: the owner
    moved the pin to 1.3.3 for upstream's snapshot fix, bean memoclj-0s5l;
@@ -1010,7 +1113,8 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
 5. **Continuous variables in minds:** memo is finite. Is discretizing enough,
    or should bounded minds (M3) admit gen.clj distributions inside an agent's
    model? That would go beyond memo's semantics, so it would be an extension
-   by principle 1.
+   by principle 1. *Decided 2026-10-24:* finite in M3 (discretize); the
+   extension later, once a client needs it (§7.1).
 6. **The name:** check that "memo.clj" does not collide with an existing
    project ("gen.clj" collided with probcomp's Gen.clj).
 7. **Git and tracking:** a repository and a beans prefix (`memoclj-`?) from
