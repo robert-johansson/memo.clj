@@ -309,7 +309,8 @@
                            (bounded-program (bounded/normalize-budget name budget)
                                             (some->> limit (bounded/limit-value ":memo/limit"))
                                             (boolean report-only)))
-           :memo/callees #(callees @self)})]
+           :memo/callees #(callees @self)
+           :memo/check-budget (fn [budget] (some-> (bounded/normalize-budget name budget) check))})]
       (deliver self m)
       m)))
 

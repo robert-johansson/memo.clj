@@ -42,9 +42,9 @@
     {:i :inline :out s :idx k}                 the k-th #{…} form's value
 
   With a budget (M3; memo.bounded):
-    {:i :sample-belief :out s :arg s :evidence s? :omega d :sample [d…]
-     :sample-sizes [n…] :indep [d…] :indep-sizes [n…] :shared [d…] :k k
-     :algorithm a :draws R?}
+    {:i :sample-belief :out s :arg s :evidence s? :weights [s…]? :omega d
+     :sample [d…] :sample-sizes [n…] :indep [d…] :indep-sizes [n…]
+     :shared [d…] :k k :algorithm a :draws R? :who agent :loc loc}
         a bounded agent's empirical belief over the sampled dims (arg is its
         belief summed to them), for each draw of k samples on dim omega:
         every set of count vectors (one per cell of the indep dims), or R
@@ -64,7 +64,9 @@
   [instr]
   (case (:i instr)
     (:const :param :domain :ones :inline :subsets) []
-    (:sample-belief :sample-weight) (cond-> [(:arg instr)] (:evidence instr) (conj (:evidence instr)))
+    (:sample-belief :sample-weight) (cond-> [(:arg instr)]
+                                      (:evidence instr) (conj (:evidence instr))
+                                      (:weights instr) (into (:weights instr)))
     :ffi (concat (:args instr) (map second (:kwargs instr)) (:guards instr))
     (:op :where) (:args instr)
     (:sum :max :nan-to-num :posterior-align :swap-dims :alias) [(:arg instr)]

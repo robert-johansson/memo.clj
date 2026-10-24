@@ -218,12 +218,13 @@
         mixing (set (:mixing state))
         X (vec (sort (into (set/intersection (:ll-dims frm) known mixing)
                            (when (:per-option spec) (set/intersection known (set (:dims choosing)))))))
-        rejection? (= :rejection (:algorithm spec))
+        ;; with nothing observed, rejection keeps every sample: one-and-done's
+        rejection? (and (= :rejection (:algorithm spec)) (some? (:evidence frm)))
         k (:samples spec)
         m (reduce * 1 (map size U))
         n (reduce * 1 (map size X))
         mprime (if rejection? (inc m) m)
-        mc? (:monte-carlo spec)
+        mc? (some? (:mc-dim choosing))
         states (if mc? (:draws spec) (b/power (b/states k mprime) n))
         limit (b/limit-of spec (:limit state))
         _ (when (and (not mc?) (> states limit) (not (:report-only state)))
@@ -237,8 +238,10 @@
         instr (cond-> {:arg p :omega omega :sample U :sample-sizes (mapv size U) :indep X
                        :indep-sizes (mapv size X)
                        :shared (vec (sort (set/difference (set/intersection mixing known) (set X))))
-                       :k k :algorithm (:algorithm spec) :draws (when mc? (:draws spec))}
-                z (assoc :evidence z))
+                       :k k :algorithm (if rejection? :rejection :one-and-done)
+                       :draws (when mc? (:draws spec)) :who owner :loc loc}
+                z (assoc :evidence z)
+                (and rejection? (seq (:event-weights frm))) (assoc :weights (vec (:event-weights frm))))
         [state q] (fresh state "sampled")
         state (emit state (assoc instr :i :sample-belief :out q))
         [state w] (if mc?
@@ -865,7 +868,7 @@
         cells (reduce * 1 sizes)]
     (if-not (and k (= :chooses surface-alias) (considered-specs surface-spec) (< k cells))
       [state nil]
-      (let [mc? (:monte-carlo spec)
+      (let [mc? (some? mc-dim)
             states (if mc? (:draws spec) (b/binomial cells k))
             limit (b/limit-of spec (:limit state))
             _ (when (and (not mc?) (> states limit) (not (:report-only state)))
@@ -913,8 +916,9 @@
                           (emit-op st "bounded" :mul out c))
                         [state out])]
       [(update state :report conj
-               (cond-> {:agent owner :line (:line loc) :states (as-count states) :limit limit :monte-carlo mc?
+               (cond-> {:agent owner :line (:line loc) :states (as-count states) :monte-carlo mc?
                         :sources (mapv #(dissoc % :owner :omega :weight) sources)}
+                 (not mc?) (assoc :limit limit)
                  (and (not mc?) (> states limit)) (assoc :over-limit true)))
        out])))
 
@@ -954,7 +958,14 @@
         ;; with a budget, the choice opens a scope for the samples drawn while
         ;; its weights are computed (sample-ll)
         outer (select-keys state [:pending :mixing :choosing])
-        [state mc-dim] (if (and (:bounded state) (:monte-carlo spec)) (alloc-dim state) [state nil])
+        ;; Monte Carlo draws at a choice not inside another choice's weights:
+        ;; a nested one (a future self's, replayed by EU; another agent's in
+        ;; an imagined world) is exact over its samples, since the outer
+        ;; reasoning samples from, or weighs by, its probabilities, and an
+        ;; estimate there would bias it
+        [state mc-dim] (if (and (:bounded state) (:monte-carlo spec) (nil? (:choosing state)))
+                         (alloc-dim state)
+                         [state nil])
         state (if (:bounded state)
                 (assoc state :pending [] :mixing dims
                        :choosing {:owner owner :dims dims :mc-dim mc-dim})
@@ -1207,7 +1218,10 @@
         state (emit state {:i :nan-to-num :out nll :arg q})
         dims (deps->dims (fr/get-frame state) (:deps v))]
     (-> state
-        (fr/update-frame #(-> % (assoc :ll nll) (update :ll-dims into dims)))
+        (fr/update-frame #(cond-> (-> % (assoc :ll nll) (update :ll-dims into dims))
+                            ;; a rejection sampler's acceptance probabilities, checked
+                            ;; to be in [0, 1] where it samples (memo.bounded)
+                            (and (:bounded state) (= how :probability)) (update :event-weights (fnil conj []) w)))
         (fr/leave))))
 
 (defn- eval-knows
@@ -1284,20 +1298,27 @@
 
 (defn- eval-guess
   "The future self's guess of the value it will observe: a choice weighted by
-  its current belief in each value (core.py's SGuess)."
+  its current belief in each value (core.py's SGuess). With a budget it is
+  exact: the guessed observation is part of the imagined future, which the
+  agent's query over that future samples (sampling the guess first too would
+  sample it twice, and, by Monte Carlo, bias the outer query)."
   [state {:keys [who id target-who target-id loc]}]
-  (let [ch (get-in (fr/get-frame state) [:children who :choices [target-who target-id]])]
+  (let [ch (get-in (fr/get-frame state) [:children who :choices [target-who target-id]])
+        bounded (:bounded state)]
     (when-not ch
       (err/raise "Observing unknown choice"
                  (assoc (frame-err-opts state loc)
                         :hint (str who " does not model " target-who "'s choice of " target-id "."))))
-    (eval-stmt state
+    (-> state
+        (assoc :bounded nil)
+        (eval-stmt
                {:node :choose :who who :choices [[id (:domain ch)]] :reduction :normalize :loc loc
                 :wpp {:node :expect :reduction :expectation :warn false :loc loc :static false
                       :expr {:node :op :op :eq :loc loc :static false
                              :args [{:node :choice :id id :loc loc :static false}
                                     {:node :with :who target-who :loc loc :static false
-                                     :expr {:node :choice :id target-id :loc loc :static false}}]}}})))
+                                     :expr {:node :choice :id target-id :loc loc :static false}}]}}})
+        (assoc :bounded bounded))))
 
 (defn- forget-copies
   "frame after who forgot the choices of by-idx (dim -> id): the copies of

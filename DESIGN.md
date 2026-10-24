@@ -994,7 +994,11 @@ sample from **finite** sets: outcomes, options, other agents' types.
   mode. Under Monte Carlo, `:states` is the number of draws.
   `memo.bounded/program` prints the bounded IR.
 - **Which limit:** an agent's own `:limit`, else the call's `:memo/limit`,
-  else 10^6 (the agent's wins, higher or lower).
+  else 10^6 (the agent's wins, higher or lower). It does not apply under
+  Monte Carlo.
+- **Caches.** The count vectors and an exact budget's constant arrays are
+  kept for later calls, bounded by size (about 4·10^6 numbers on the host,
+  2·10^7 in arrays per backend).
 - **The multinomial probabilities are computed in log space,** with their
   gradient written out (`array/custom-vjp`): an outcome of probability 0
   keeps its exact first derivative, which log space would make NaN, and
@@ -1073,7 +1077,10 @@ sample from **finite** sets: outcomes, options, other agents' types.
     Exactly: count vectors over m + 1 categories, the last "rejected" with
     probability 1 − Z, Z the probability of the observations (the product
     of their normalizers, tracked per frame as `:evidence` when a budget is
-    given, and moved with the beliefs by an observed choice). What the agent
+    given, and moved with the beliefs by an observed choice). Where the
+    frame observed nothing, nothing is rejected, and the m categories of
+    one-and-done are used. Each `:observes-event` weight is checked to be in
+    [0, 1] (the frame keeps them, `:event-weights`), not only Z. What the agent
     `:knows` is not an observation (it knows the value from the start), so
     no sample is rejected for it, unlike `:knows`'s expanded form with an
     `:observes`.
@@ -1097,10 +1104,11 @@ sample from **finite** sets: outcomes, options, other agents' types.
     evidence with its beliefs, and observations after it do not reach it; a
     future self replays later observations as memo does (a guess, then an
     observation of it), so with `:rejection` it keeps the samples consistent
-    with what it will observe, and its guess is itself sampled (its
-    expectation is a query of the future self's: with `:one-and-done` the
-    guess's distribution is the exact one, the expectation of a sample
-    frequency);
+    with what it will observe. The guess is exact: the imagined observation
+    is part of the imagined future, which the agent's query over that future
+    samples. (A sampled guess, as first built, sampled it twice; with
+    `:one-and-done` that left the table unchanged, but it cost states, and by
+    Monte Carlo it biased the outer query: acceptance pass 2);
   - what cost means (op counts vs samples), and how it relates to memo's
     `cost @`.
 - **Dependencies:** gen.clj's encapsulated randomness (genclj-1ogo) and its
@@ -1152,7 +1160,11 @@ sample from **finite** sets: outcomes, options, other agents' types.
 - **Monte Carlo** (`:monte-carlo true`, `:draws R`) uses the same IR: the
   draws' dim holds R random draws, shared by all the sources one choice
   marginalizes (each drawn independently, from its own key), averaged with
-  weight 1/R. Draws come from the call's `:memo/key` folded with the
+  weight 1/R. Only a choice not inside another choice's weights is drawn:
+  a nested one (the future self's choice EU replays, another agent's in an
+  imagined world) stays exact over its samples, since the outer reasoning
+  samples from (or weighs by) its probabilities, and an estimate there
+  enters nonlinearly, a bias (acceptance pass 2). Draws come from the call's `:memo/key` folded with the
   instruction's position, so a key reproduces its table; they are never
   folded into constants (memo.lower's `constant`). The samples carry no
   gradient through the belief they are drawn from: a belief being
@@ -1323,7 +1335,7 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
     the temperature, at an outcome of probability 0 too.
   - **The budget's checks, the limit, the report, the loud errors** for an
     estimate outside its agent's choice, each message compared.
-  - **Planted bugs** (CLAUDE.md rule 7): 23, each caught (the gradient at a
+  - **Planted bugs** (CLAUDE.md rule 7): 27, each caught (the gradient at a
     zero outcome, the multinomial coefficient, sharing without the options'
     or the enclosing queries' own samples, `:per-option` ignored, rejection
     without evidence, with evidence not moved by an observed choice, with
@@ -1333,7 +1345,8 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
     check, `estimated`'s joint sampler weighing on another table, the agent
     check, and, after the acceptance pass, the negative-belief and
     negative-acceptance checks, the report's callees and its report-only
-    mode).
+    mode; after pass 2, a sampled guess, nested choices drawn, the event
+    weights unchecked, and the report's budget check).
   - **Acceptance pass 1** (2026-10-24, one agent, the Handbook and
     docstrings alone, ~70 models against its own brute force;
     `tmp/acceptance-m3/report.md`): everything checked agreed, except two
@@ -1343,6 +1356,17 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
     errors). Its doc gaps are closed in the Handbook: EU's two queries,
     lost mass, `:knows` under rejection, `:options` at or above the number
     of options, which limit wins, the size formula, the report.
+  - **Acceptance pass 2** (2026-10-24, one agent, the same rules;
+    `tmp/acceptance-m3-pass2/`): pass 1's fixes held (Monte Carlo at k =
+    10^5, negative weights, the report). It found Monte Carlo biased (z =
+    −6 to −9) where the imagined future holds an observation, the guess
+    being a nested bounded choice whose estimate the outer query sampled
+    from: the guess is now exact and nested choices are exact under Monte
+    Carlo. Also fixed: a weight above 1 accepted while the total stayed
+    below 1, a report of an unknown agent, the lowering's errors without
+    the agent or line, a limit beyond a long refused, rejection's category
+    counted with nothing observed, caches bounded by size; the rest were
+    doc gaps, closed.
 - **Acceptance passes** before each milestone closes: independent agents
   working as memo users from the Handbook and the docstrings alone, against
   Python memo's answers.

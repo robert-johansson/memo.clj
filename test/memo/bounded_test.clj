@@ -546,8 +546,13 @@
       (let [[r] (b/report plan {'alice {:samples 40}})]
         (is (:over-limit r))
         (is (= 152300281 (:states r)))))
-    (testing "rejection's categories count a rejected sample; EU's goal is a query of its own"
+    (testing "a budget naming no agent is an error, as for a call"
+      (is (= "The budget names wolf, who is not an agent of memo plan" (message #(b/report plan {'wolf {:samples 2}})))))
+    (testing "Monte Carlo has no limit"
+      (is (not (contains? (first (b/report pick {'alice {:samples 2 :monte-carlo true}})) :limit))))
+    (testing "rejection's categories count a rejected sample, where something was observed; EU's goal is a query of its own"
       (is (= [4] (map :categories (mapcat :sources (b/report seen {'alice {:samples 2 :algorithm :rejection}})))))
+      (is (= [3] (map :categories (mapcat :sources (b/report pick {'alice {:samples 2 :algorithm :rejection}})))))
       (is (= #{"EU" "EU's goal"} (set (map :what (mapcat :sources (b/report plan2 {'alice {:samples 1}})))))))))
 
 (defmemo negative-weights [[a A]] [w]
@@ -562,13 +567,24 @@
   (alice :chooses [a A] :wpp (exp (E (utility a bob.y))))
   (return (Pr (= alice.a a))))
 
+;; a weight above 1 on a rare value: the total acceptance is below 1
+(defn heavy-weight [y] ([3.0 0.1 0.1] y))
+
+(defmemo heavy-event [[a A]] []
+  (alice :thinks (bob :chooses [y Y] :wpp (+ 1 y)))
+  (alice :observes-event :wpp (heavy-weight bob.y))
+  (alice :chooses [a A] :wpp (exp (E (utility a bob.y))))
+  (return (Pr (= alice.a a))))
+
 (deftest a-bounded-belief-is-a-probability
   (testing "negative weights cannot be sampled"
-    (is (= "A bounded agent's belief has a negative probability: it cannot be sampled"
+    (is (= "alice's belief has a negative probability: it cannot be sampled"
            (message #(mixed-weights (budget {:samples 2}))))))
-  (testing "nor kept with a negative probability"
-    (is (= "A rejection sampler's acceptance probability is below 0"
-           (message #(negative-weights -0.1 (budget {:samples 1 :algorithm :rejection}))))))
+  (testing "nor kept with a negative probability, or one above 1 (even when the total is at most 1)"
+    (is (= "alice's rejection sampler keeps a sample with a probability outside [0, 1]"
+           (message #(negative-weights -0.1 (budget {:samples 1 :algorithm :rejection})))))
+    (is (= "alice's rejection sampler keeps a sample with a probability outside [0, 1]"
+           (message #(heavy-event (budget {:samples 2 :algorithm :rejection}))))))
   (testing "all negative, the posterior normalizes to a probability"
     (is (close-all? [1.0] [(reduce + (host (negative-weights -0.1 (budget {:samples 1}))))]))))
 
@@ -642,6 +658,47 @@
             e (first (host exact))]
         (is (< (Math/abs (- m e)) (* 5 se)) (str m " ± " se " against " e))
         (is (pos? se) "the draws differ")))))
+
+;; Predict with an observation in the imagined future: memo replays it as a
+;; guess of the future self's, which a budget leaves exact (it is part of the
+;; imagined future, which the Predict samples); by Monte Carlo, a sampled
+;; guess biased the Predict (acceptance pass 2)
+(def W [0 1 2])
+(defn w-given-x [x w] (get-in [[0.6 0.3 0.1] [0.2 0.3 0.5]] [x w]))
+
+(defmemo predict-observed [[a A]] [beta]
+  (alice :chooses [x A] :wpp (exp (* beta (Predict z))))
+  (alice :thinks (world :knows x) (world :chooses [w W] :wpp (w-given-x x w)))
+  (env :chooses [w W] :wpp 1)
+  (alice :observes world.w :is env.w)
+  (alice :chooses [z W] :wpp (+ 1 (* 4 (= z world.w))))
+  (return (Pr (= alice.x a))))
+
+;; a choice nested in another's weights (the future self's p, replayed by EU)
+;; is exact over its samples under Monte Carlo
+(defmemo two-step [[a A]] [beta]
+  (alice :thinks (bob :chooses [y Y] :wpp (+ 1 y)))
+  (alice :wants g (utility p bob.y))
+  (alice :chooses [o A] :wpp (exp (* beta (EU g))))
+  (alice :chooses [p A] :wpp (exp (* beta (+ 1 o) (E (utility p bob.y)))))
+  (return (Pr (= alice.o a))))
+
+(deftest monte-carlo-with-nested-choices
+  (testing "the guess of a future observation is not a query of the agent's"
+    (is (= #{"Predict"} (set (map :what (mapcat :sources (b/report predict-observed {'alice {:samples 2}})))))))
+  (testing "a nested choice is exact under Monte Carlo, the outer ones drawn"
+    ;; in the order marginalized: the future self's p (inside o's EU), o, then p
+    (is (= [false true true]
+           (map :monte-carlo (b/report two-step {'alice {:samples 2 :monte-carlo true}}))))
+    (is (= 2 (count (filter :monte-carlo (b/report two-step {'alice {:samples 2 :monte-carlo true}}))))))
+  (testing "unbiased"
+    (doseq [[label f exact n] [["Predict observing" #(predict-observed 1.5 (assoc (budget {:samples 2 :monte-carlo true}) :memo/key %))
+                                (predict-observed 1.5 (budget {:samples 2})) 6000]
+                               ["a nested choice" #(two-step 1.2 (assoc (budget {:samples 1 :monte-carlo true}) :memo/key %))
+                                (two-step 1.2 (budget {:samples 1})) 3000]]]
+      (let [[m se] (mc-mean f n)
+            e (first (host exact))]
+        (is (< (Math/abs (- m e)) (* 5 se)) (str label ": " m " ± " se " against " e))))))
 
 (deftest monte-carlo-keys
   (let [opts (budget {:samples 2 :monte-carlo true :draws 2})]

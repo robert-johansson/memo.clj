@@ -626,9 +626,10 @@
              :alias (arg (:arg instr))
              :call-memo (call-memo ctx env instr)
              :ffi (host-call ctx env instr)
-             :sample-belief (bounded/sample-belief (arg (:arg instr)) (some-> (:evidence instr) arg) instr
-                                                   (instr-key ctx instr))
-             :sample-weight (bounded/sample-weight (arg (:arg instr)) (some-> (:evidence instr) arg) instr)
+             :sample-belief (bounded/sample-belief (arg (:arg instr)) (some-> (:evidence instr) arg)
+                                                   (mapv arg (:weights instr)) instr (instr-key ctx instr))
+             :sample-weight (bounded/sample-weight (arg (:arg instr)) (some-> (:evidence instr) arg)
+                                                   (mapv arg (:weights instr)) instr)
              :subsets (bounded/subsets instr (instr-key ctx instr))
              :inline (inline-value (nth (:inlines ctx) (:idx instr)) (map env (:param-order ctx))
                                    (contains? (:inline-args ctx) (:out instr)))))))

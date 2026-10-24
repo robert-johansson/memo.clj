@@ -1805,7 +1805,17 @@ in different memos cannot be bounded apart.
   for a goal over something the agent never observes, k samples of that
   too. The goal's estimate is then averaged over every pair, not over k
   joint samples. `bounded/report` lists the two (their `:what` is `"EU"`
-  and `"EU's goal"`).
+  and `"EU's goal"`). Where the future self's belief about the unobserved
+  variable depends on what happened, it has a set of samples for each
+  value of what happened. A `Predict`'s expression must be known to the
+  future self, as in memo, so the second query is `EU`'s (or an `E` inside
+  a `Predict`).
+- **What the agent will observe** in its imagined future (an `:observes`
+  after the choice, which memo replays as a guess of the future self's) is
+  part of what happens, and sampled with it: not a query of its own.
+- **An agent with no samples kept** (under `:rejection`) estimates 0, as memo's
+  queries give 0 for beliefs of no mass: a future self that keeps none
+  estimates its goal at 0, even the part it knows.
 - **Options share samples** when the agent's belief about what it samples
   does not depend on the option. Above, alice imagines bob's score once
   and judges both bets against it (Vul et al.'s "one and done"). When
@@ -1847,9 +1857,12 @@ consistent with its observations: an `:observes-event` weight is the
 probability of keeping one, between 0 and 1 (outside, an error). When none
 is kept, its beliefs have no mass, as after an impossible observation in
 memo. What the agent `:knows` is not an observation: it knows the value
-from the start, so no sample is rejected for it. Sampling needs
-probabilities, so a belief made of negative weights (a negative `:wpp`, or
-`:observes-event` weight) is an error under a budget.
+from the start, so no sample is rejected for it. Its observations reject
+every query's samples, also those of a query about another variable.
+Sampling needs probabilities, so a belief with a negative cell (from
+weights of both signs, in a `:wpp` or an `:observes-event`) is an error
+under a budget; weights all negative normalize to a probability, as in
+memo.
 
 ```clojure
 (defmemo hopeful [[b Bet]] [beta]
@@ -1871,7 +1884,8 @@ probabilities, so a belief made of negative weights (a negative `:wpp`, or
 drawn uniformly without replacement, and the agent chooses among those.
 A `:given`, `:draws`, `:assigned` or `:guesses`, and a `:to-be` or
 `:such-that`, are not deliberate choices, and keep all their options.
-`:options` combines with `:samples`. With k at least the number of
+`:options` combines with `:samples`. A choice of several variables at once
+has joint options (a 3 × 3 choice has 9). With k at least the number of
 options, the agent considers them all: the exact choice.
 
 ```clojure
@@ -1956,7 +1970,11 @@ turn from exact into noisy partway through.
 
 `:monte-carlo true` draws the samples (R times, with `:draws R`) instead of
 enumerating them, from the call's `:memo/key`; its cost grows with k times
-R, and `bounded/report` gives R as its `:states`. The table is then an
+R, the limit does not apply, and `bounded/report` gives R as its
+`:states`. A choice inside another choice's weights (the future self's
+choice that `EU` replays, or another agent's in an imagined world) stays
+exact over its samples: the outer reasoning samples from its
+probabilities, and an estimate there would bias it. The table is then an
 unbiased estimate of the exact-over-samples one, the same for the same
 key:
 
@@ -2007,7 +2025,12 @@ Exact over samples is differentiable, in the agent's beliefs and in what it
 values, so a bounded mind is fitted as an exact one is (the budget itself
 is an integer, and is not differentiated). Under Monte Carlo the samples
 carry no gradient through the beliefs they are drawn from, and
-differentiating there is an error.
+differentiating there is an error; with respect to what the agent values
+(a temperature, a utility), the gradient is that of the key's table.
+
+An exact budget keeps its constant arrays (the count vectors, their
+probabilities) for later calls, up to a few hundred megabytes near the
+limit; Monte Carlo keeps nothing.
 
 ```clojure
 ((array/grad (fn [beta] (array/take (bettor beta {:memo/budget {'alice {:samples 2}}}) 1 0))) 2.0)

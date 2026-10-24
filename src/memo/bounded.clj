@@ -61,18 +61,18 @@
        ":monte-carlo, :draws and :limit."))
 
 (defn- whole?
-  "x is a positive whole number (a long, or a double such as 1e7)."
+  "x is a positive whole number (an integer, or a double such as 1e7)."
   [x]
-  (and (number? x) (clojure.core/> x 0) (clojure.core/== x (Math/floor (double x)))
-       (clojure.core/< (double x) 9.2e18)))
+  (and (number? x) (clojure.core/> x 0) (clojure.core/== x (Math/floor (double x)))))
 
 (defn limit-value
-  "A limit given as a number, as a long; a loud error otherwise."
+  "A limit given as a number, as a long (one beyond a long is Long/MAX_VALUE:
+  no limit); a loud error otherwise."
   [what x]
   (when-not (whole? x)
     (err/raise (str what " is " (pr-str x) ", not a positive whole number")
                {:hint "The limit is the number of enumerated states allowed at one choice, e.g. 1e7."}))
-  (long x))
+  (if (clojure.core/>= (double x) 9.2e18) Long/MAX_VALUE (long x)))
 
 (defn- agent-name [mname k]
   (let [s (cond (and (symbol? k) (nil? (namespace k))) k
@@ -184,18 +184,31 @@
     [[k]]
     (vec (for [c (range k -1 -1), tail (compositions (clojure.core/- k c) (dec m))] (into [c] tail)))))
 
+;; The caches start over when what they hold passes a size: an enumeration
+;; is up to the limit's size (10^6 count vectors, by default), its arrays
+;; tens of megabytes, and a fit may try many budgets.
+
+(defn- cache-in
+  "(build), cached under k in the atom cache, {:entries {k [v size]} :size n},
+  which starts over when its size would pass max-size (size-of v measures
+  an entry)."
+  [cache k build size-of max-size]
+  (if-let [[v] (get-in @cache [:entries k])]
+    v
+    (let [v (build)
+          s (size-of v)]
+      (swap! cache (fn [{:keys [size] :as c}]
+                     (let [c (if (clojure.core/> (clojure.core/+ (or size 0) s) max-size) {} c)]
+                       (-> c (assoc-in [:entries k] [v s]) (update :size (fnil clojure.core/+ 0) s)))))
+      v)))
+
 (def ^:private host-cache (atom {}))
 
 (defn- host-cached
-  "(build), cached under k on the host, the cache starting over past 16
-  entries (an enumeration is up to the limit's size, 10^6 vectors by
-  default, and a fit may try many budgets)."
+  "(build), cached under k on the host (at most about 4·10^6 numbers)."
   [k build]
-  (if-let [[_ v] (find @host-cache k)]
-    v
-    (let [v (build)]
-      (swap! host-cache (fn [m] (assoc (if (clojure.core/>= (count m) 16) {} m) k v)))
-      v)))
+  (cache-in host-cache k build #(if (and (vector? %) (vector? (first %))) (clojure.core/* (count %) (count (first %))) (count %))
+            4000000))
 
 (defn count-vectors
   "Every way k samples fall into m categories, as count vectors, in a fixed
@@ -262,18 +275,19 @@
 
 (def ^:private constants (atom {}))
 
+(defn- array-size [v]
+  (cond (array/array? v) (array/size v)
+        (map? v) (reduce clojure.core/+ 0 (map array-size (vals v)))
+        (sequential? v) (reduce clojure.core/+ 0 (map array-size v))
+        :else 0))
+
 (defn- constant
-  "(build), cached under k for the backend in effect: the host arrays of the
-  count vectors and draws, which depend only on the budget and the sizes.
-  The cache starts over past 32 entries (a batch backend is one per batch
-  shape, and an exact budget's arrays reach tens of megabytes)."
+  "(build), cached under k for the backend in effect (an array belongs to
+  one; a batch backend is one per batch shape): the host arrays of the count
+  vectors and draws, which depend only on the budget and the sizes. At most
+  about 2·10^7 numbers are kept."
   [k build]
-  (let [key [array/*backend* k]]
-    (if-let [[_ v] (find @constants key)]
-      v
-      (let [v (build)]
-        (swap! constants (fn [m] (assoc (if (clojure.core/>= (count m) 32) {} m) key v)))
-        v))))
+  (cache-in constants [array/*backend* k] build array-size 20000000))
 
 ;; -----------------------------------------------------------------------------
 ;; the multinomial probabilities, with gradients at zero categories
@@ -351,8 +365,15 @@
   categories of one draw: the normalized belief (:one-and-done), or that
   times the evidence z and a last category, rejection, of 1 - z
   (:rejection)."
-  [p z {:keys [sample sample-sizes indep indep-sizes omega algorithm] :as instr}]
+  [p z ws {:keys [sample sample-sizes indep indep-sizes omega algorithm who loc] :as instr}]
   (let [p (if (number? p) (array/array (double p)) p)
+        fail (fn [message hint] (err/raise (str who "'s " message) {:hint hint :loc loc}))
+        _ (doseq [w ws
+                  :let [w (if (array/array? w) w (array/array (double (if (boolean? w) (if w 1 0) w))))]]
+            (when (array/any-true? (array/logical-or (array/< w 0.0) (> w (clojure.core/+ 1.0 1e-6))))
+              (fail "rejection sampler keeps a sample with a probability outside [0, 1]"
+                    (str "With :algorithm :rejection, an :observes-event weight is the probability of "
+                         "keeping a sample: each must be between 0 and 1."))))
         _ (check-mixing p instr "a bounded agent's belief")
         _ (when z (check-mixing z instr "a bounded agent's evidence"))
         r (max (inc (reduce max omega (concat sample indep))) (array/ndim p) (if z (array/ndim z) 0))
@@ -365,10 +386,10 @@
         a (array/reshape a (into [1 n m] rest-shape))
         mass (array/sum a {:axis 2 :keep-dims? true})
         _ (when (array/any-true? (array/< a 0.0))
-            (err/raise "A bounded agent's belief has a negative probability: it cannot be sampled"
-                       {:hint (str "Its beliefs came from negative weights (a :wpp, or an :observes-event "
-                                   "weight, below 0). memo computes with them exactly, but samples need "
-                                   "probabilities: keep the weights non-negative.")}))
+            (fail "belief has a negative probability: it cannot be sampled"
+                  (str "Its beliefs came from weights of both signs (a :wpp, or an :observes-event "
+                       "weight). memo computes with them exactly, but samples need probabilities: "
+                       "keep the weights non-negative.")))
         has-mass (> mass 0)
         phat (where has-mass (/ a (where has-mass mass 1.0)) (/ 1.0 m))
         cats (if (= algorithm :rejection)
@@ -378,13 +399,13 @@
                                                 (into [1 n 1] rest-shape)))
                           (array/ones (into [1 n 1] rest-shape)))]
                  (when (array/any-true? (> zs (clojure.core/+ 1.0 1e-6)))
-                   (err/raise "A rejection sampler's acceptance probability is above 1"
-                              {:hint (str "With :algorithm :rejection, an agent keeps a sample with the probability "
-                                          "of what it observed: an :observes-event weight must not exceed 1.")}))
+                   (fail "rejection sampler's acceptance probability is above 1"
+                         (str "With :algorithm :rejection, an agent keeps a sample with the probability "
+                              "of what it observed: an :observes-event weight must not exceed 1.")))
                  (when (array/any-true? (array/< zs 0.0))
-                   (err/raise "A rejection sampler's acceptance probability is below 0"
-                              {:hint (str "With :algorithm :rejection, an agent keeps a sample with the probability "
-                                          "of what it observed: an :observes-event weight must not be negative.")}))
+                   (fail "rejection sampler's acceptance probability is below 0"
+                         (str "With :algorithm :rejection, an agent keeps a sample with the probability "
+                              "of what it observed: an :observes-event weight must not be negative.")))
                  (array/concatenate [(* zs phat) (array/clip (- 1.0 zs) 0.0 1.0)] 2))
                phat)
         mprime (nth (array/shape cats) 2)
@@ -425,11 +446,12 @@
 (defn sample-weight
   "The :sample-weight instruction: the probability of each enumerated draw,
   every set of count vectors (one per cell of the dims with samples of their
-  own), on the draw's dim ω and the belief's contexts."
-  [p z {:keys [k indep-sizes sample-sizes] :as instr}]
+  own), on the draw's dim ω and the belief's contexts. ws are the
+  :observes-event weights a rejection sampler keeps samples by."
+  [p z ws {:keys [k indep-sizes sample-sizes] :as instr}]
   (let [{:keys [cvs mprime]} (sample-space instr)
         cvs @cvs
-        {:keys [n cats rest] :as b} (belief p z instr)
+        {:keys [n cats rest] :as b} (belief p z ws instr)
         S (count cvs)
         probs (pmf cats k cvs)                           ; [n rest... S]
         idx (constant [:digits S n]
@@ -453,9 +475,9 @@
   "The :sample-belief instruction: the agent's empirical belief over the
   sampled dims for each draw on dim ω, enumerated (every set of count vectors)
   or, with :draws, drawn with key."
-  [p z {:keys [k indep-sizes sample-sizes algorithm draws] :as instr} key]
+  [p z ws {:keys [k indep-sizes sample-sizes algorithm draws who loc] :as instr} key]
   (let [{:keys [m mprime cvs]} (sample-space instr)
-        b (assoc (belief p z instr) :algorithm algorithm)
+        b (assoc (belief p z ws instr) :algorithm algorithm)
         {:keys [n cats rest]} b]
     (if-not draws
       (let [e (constant [:empirical k m mprime algorithm n]
@@ -467,9 +489,10 @@
       (do
         (when (some tape/tracked? [p z])
           (err/raise "Monte Carlo samples cannot be differentiated through the agent's belief"
-                     {:hint (str "The agent's belief depends on a parameter being differentiated, and the samples "
+                     {:hint (str who "'s belief depends on a parameter being differentiated, and the samples "
                                  "drawn from it carry no gradient. Use the exact lowering (no :monte-carlo), or "
-                                 "fit without gradients (pseudo-marginal MH).")}))
+                                 "fit without gradients (pseudo-marginal MH).")
+                      :loc loc}))
         (when-not key
           (err/raise "A Monte Carlo budget needs a key: call with :memo/key"
                      {:hint "(f args... {:memo/budget {...} :memo/key (gen.random/key 0)})"}))
@@ -532,10 +555,12 @@
   values one sample can take (one more under :rejection, for a rejected
   sample) and :sets the sets of samples (one per option, where each has its
   own). A choice above its limit is reported, marked :over-limit true, where
-  a call would throw. Under Monte Carlo, :states is the number of draws.
-  opts: :limit (the call's)."
+  a call would throw. Under Monte Carlo, :states is the number of draws, and
+  there is no :limit (it does not apply). The budget is checked as a call's
+  is. opts: :limit (the call's)."
   ([model budget] (report model budget {}))
   ([model budget opts]
+   (when-let [check (:memo/check-budget (meta model))] (check budget))
    (loop [todo [model] seen #{} out []]
      (if-let [m (peek todo)]
        (if (seen m)
