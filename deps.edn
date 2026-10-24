@@ -21,6 +21,10 @@
   ;; the differential fuzzer (needs memo-mcp's Python memo): clojure -X:test:fuzz :n 2000 :seed 1
   :fuzz {:exec-fn memo.fuzz/cli}
 
+  ;; the speed research's benchmarks (bean memoclj-c0xj): clojure -M:bench -m memo.bench.agent
+  :bench {:extra-paths ["bench"]
+          :jvm-opts ["--enable-native-access=ALL-UNNAMED" "-Xmx8g"]}
+
   ;; gen.clj's MLX backend (Metal by default): clojure -X:test:mlx
   ;; gen.clj looks for its native library relative to the working directory,
   ;; so another project names it

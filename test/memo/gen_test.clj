@@ -9,6 +9,7 @@
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [gen.array :as array]
+            [gen.array.batch :as batch]
             [gen.batched :as gb]
             [gen.choicemap :as cm]
             [gen.dist :as d]
@@ -293,7 +294,22 @@
 ;; In gen.clj models: batched runs and the GFI laws
 ;; ---------------------------------------------------------------------------
 
+;; Vectorized functions of a parameter. weight-if's if takes its first branch
+;; for every array; on host numbers, with beta > 0, its second.
+(defn ^:memo/vectorized weight [beta u] (array/exp (array/* beta u)))
+(defn ^:memo/vectorized weight-if [beta u]
+  (if (array/< beta 0.0) (array/* beta u) (array/exp (array/* beta u))))
+
+(defmemo weighted [[a Opt]] [beta]
+  (agent :chooses [o Opt] :wpp (weight beta (utility o)))
+  (return (Pr (= agent.o a))))
+
+(defmemo weighted-if [[a Opt]] [beta]
+  (agent :chooses [o Opt] :wpp (weight-if beta (utility o)))
+  (return (Pr (= agent.o a))))
+
 (def choice (mg/dist choose))
+(def weighted-choice (mg/dist weighted))
 (def pick (mg/dist pickx))
 (def listener (mg/dist L1 {:given '[u]}))
 
@@ -304,6 +320,13 @@
           a (trace :a (choice beta q))
           x (trace :x (pick beta))]
       [a x])))
+
+(def weighted-model
+  "beta unknown, a choice by a mind computing with a vectorized function of
+  it."
+  (gen []
+    (let [beta (trace :beta (d/uniform 0.5 2.0))]
+      (trace :a (weighted-choice beta)))))
 
 (def rsa-model
   "An utterance, then the listener's referent given it."
@@ -320,7 +343,23 @@
           {:keys [particles weights]} (gb/generate mind-model [0.4] cs 50 (rng/key 2))
           w (host (:weight (gfi/generate mind-model [0.4] cs (rng/key 3))))]
       (is (gb/batched? particles))
-      (is (every? #(close? w %) (host weights))))))
+      (is (every? #(close? w %) (host weights)))))
+  (testing "a vectorized function of a batched parameter, spot-checked per particle (memoclj-m2jw)"
+    (let [ps (gb/simulate weighted-model [] 100 (rng/key 4))]
+      (is (gb/batched? ps))
+      (is (nil? (gb/fallback-reason ps))))))
+
+(deftest vectorized-functions-under-the-batch-tracer
+  (let [betas [0.6 1.0 1.7]
+        under (fn [m] (batch/batched [3] (m (batch/wrap (array/array betas) [3]))))]
+    (testing "each particle's table is its own call's"
+      (is (close? (mapv #(host (weighted %)) betas) (host (batch/unwrap (under weighted) [3])))))
+    ;; the spot-check runs on eager backends: on MLX it would force the lazy
+    ;; arrays (DESIGN.md §5)
+    (when (array/concrete? (array/array 0.0))
+      (testing "a vectorized function taking one branch for a whole array is still found"
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"gives other values on whole arrays"
+                              (under weighted-if)))))))
 
 (laws/deflaws memo-dist
   [[:mind-model mind-model [0.4] [[0.7] [0.0]]]

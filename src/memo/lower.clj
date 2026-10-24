@@ -27,6 +27,7 @@
   - The gradient of abs at 0 is 1, JAX's, where gen.array's is 0."
   (:refer-clojure :exclude [+ - * / < > <= >= == abs])
   (:require [gen.array :as array :refer [+ - * / < > <= >= == exp log abs where]]
+            [gen.array.batch :as batch]
             [gen.array.tape :as tape]
             [memo.domains :as domains]
             [memo.errors :as err]
@@ -325,7 +326,8 @@
   (if (empty? shape)
     [(array/item x)]
     (let [x (if (array/host? x) (array/array x) x)]
-      (vec (flatten (array/->clj (array/broadcast-to (pad x (count shape)) shape)))))))
+      (array/->clj (array/reshape (array/broadcast-to (pad x (count shape)) shape)
+                                  [(reduce clojure.core/* shape)])))))
 
 (defn- failure
   "What an exception from user code says: for a ClassCastException, which
@@ -417,6 +419,13 @@
         (array/->clj (array/take (array/reshape x [(array/size x)])
                                  (array/array (mapv flat idxs) {:dtype :int32})))))))
 
+(defn- spaced
+  "Up to k indices of n, evenly spaced from the first to the last."
+  [n k]
+  (let [k (min n k)]
+    (vec (distinct (map #(long (Math/floor (clojure.core/* % (/ (dec n) (double (max 1 (dec k)))))))
+                        (range k))))))
+
 (defn- spot-check
   "A vectorized function's result r against f on host numbers, at up to 32
   evenly spaced elements of its dynamic arguments (all of them, for most
@@ -433,9 +442,7 @@
         dyn (keep (fn [[v s]] (when-not s v)) slots)
         shape (broadcast-shape (map array/shape dyn))
         n (reduce clojure.core/* 1 shape)
-        k (min n 32)
-        idxs (vec (distinct (map #(long (Math/floor (clojure.core/* % (/ (dec n) (double (max 1 (dec k)))))))
-                                 (range k))))
+        idxs (spaced n 32)
         cols (mapv #(samples % shape idxs) dyn)
         got (samples r shape idxs)
         num (fn [v] (double (if (boolean? v) (if v 1 0) v)))]
@@ -456,6 +463,27 @@
                                  "where, not if or case: an if on an array takes one branch for every "
                                  "element. Or remove the mark, so that memo.clj calls it on each value "
                                  "(and cannot differentiate it).")}))))))
+
+(defn- batched
+  "x without its gradient tracking, when it is a value of a run under
+  gen.array's batch tracer that differs across particles; else nil."
+  [x]
+  (let [x (if (tape/tracked? x) (array/stop-gradient x) x)]
+    (when (batch/batched? x) x)))
+
+(defn- batch-axes
+  "The batch axes of a batched value b."
+  [b]
+  (let [s (array/shape (batch/value b))]
+    (subvec s 0 (clojure.core/- (count s) (count (array/shape b))))))
+
+(defn- particle
+  "x's value in particle p of a batch of batch axes bs (x where it is shared
+  by every particle), read primal."
+  [x bs p]
+  (if-let [b (batched x)]
+    (array/take (array/reshape (batch/value b) (into [(reduce clojure.core/* 1 bs)] (array/shape b))) p 0)
+    x))
 
 (defn- host-call
   "The :ffi instruction. A function marked :memo/vectorized (written with
@@ -510,7 +538,16 @@
           (not-scalar name))
         ;; on an eager backend; a lazy one (MLX) would evaluate here
         (when (array/concrete? r)
-          (spot-check name f pos statics kws r))
+          (if-let [b (some batched (cons r vals))]
+            ;; under gen.array's batch tracer (gen.batched), evenly spaced
+            ;; particles, each checked as its own run would be (memoclj-m2jw)
+            (let [bs (batch-axes b)
+                  at (fn [x p] (particle x bs p))]
+              (array/with-backend (batch/inner-backend b)
+                (doseq [p (spaced (reduce clojure.core/* 1 bs) 8)]
+                  (spot-check name f (mapv #(at % p) pos) statics
+                              (mapv (fn [[k x s]] [k (at x p) s]) kws) (at r p)))))
+            (spot-check name f pos statics kws r)))
         r)
 
       (some tape/tracked? vals)
@@ -617,6 +654,22 @@
     (reduce (fn [v [k {s :out}]] (cond-> v (not (or (kept s) (last-use s))) (update k conj s)))
             at-last-use (map-indexed vector instrs))))
 
+(defn- constant
+  "The outputs of instrs whose values do not depend on the call: literals,
+  domains, ones, and what memo's operators compute from them alone. Never a
+  parameter, an inline form, a memo call or a host function: their values
+  may change with nothing in the memo changed (a redefined helper, an atom
+  it reads), so they are computed at every call."
+  [instrs]
+  (reduce (fn [const {:keys [i out] :as instr}]
+            (if (case i
+                  (:const :domain :ones) true
+                  (:param :inline :call-memo :ffi) false
+                  (every? const (ir/inputs instr)))
+              (conj const out)
+              const))
+          #{} instrs))
+
 (defn program
   "The function computing a compiled memo's result: from a map of parameter
   values to its table, or, for several returns, their tables stacked on a
@@ -624,22 +677,39 @@
   time (so a memo may call itself); :name, the memo's; :domain-values, from
   its domains' names to their values; :fns, :inlines, :param-order. Memo
   calls run first (calls-first), and no value is kept past its last use
-  (drops)."
+  (drops). What does not depend on the call (constant) is computed once per
+  backend, at its first call there."
   [compiled ctx]
   (let [{:keys [results]} compiled
-        instrs (calls-first (:instrs compiled))
+        all (calls-first (:instrs compiled))
+        const (constant all)
+        const-instrs (filterv #(const (:out %)) all)
+        instrs (filterv #(not (const (:out %))) all)
+        ;; the constants read by the rest, or results
+        kept-consts (into (set (filter const results))
+                          (comp (mapcat ir/inputs) (filter const)) instrs)
         dead (drops instrs results)
         ;; #{...} forms read only as arguments of host functions and memo
         ;; calls, which may take any value (a vector, say)
         readers (reduce (fn [m instr] (reduce #(update %1 %2 (fnil conj #{}) (:i instr)) m (ir/inputs instr)))
-                        {} instrs)
+                        {} all)
         ctx (assoc ctx :inline-args
-                   (set (for [{:keys [i out]} instrs
+                   (set (for [{:keys [i out]} all
                               :when (and (= :inline i) (not (some #{out} results))
                                          (every? #{:ffi :call-memo} (readers out)))]
-                          out)))]
+                          out)))
+        ;; by backend, since an array belongs to one (the JVM's and MLX's
+        ;; meet in one process); a batch backend is one per batch shape, so
+        ;; the cache starts over past four
+        cache (atom {})
+        constants (fn []
+                    (let [b array/*backend*]
+                      (or (get @cache b)
+                          (let [env (select-keys (reduce #(step ctx %1 %2) {} const-instrs) kept-consts)]
+                            (swap! cache (fn [m] (assoc (if (clojure.core/>= (count m) 4) {} m) b env)))
+                            env))))]
     (fn [params]
       (let [env (reduce (fn [env [instr dead]] (apply dissoc (step ctx env instr) dead))
-                        params (map vector instrs dead))
+                        (merge (constants) params) (map vector instrs dead))
             tables (mapv #(table (get env %) compiled) results)]
         (if (= 1 (count tables)) (first tables) (array/stack tables))))))
