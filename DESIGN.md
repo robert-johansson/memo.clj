@@ -65,7 +65,8 @@ In order:
 
    *Built 2026-10-24, before 1.0 (the owner's decision that day), and
    experimental: the `:memo/budget` call option, `memo.bounded` and
-   `memo.gen/estimated` are outside what 1.0 freezes (§7).*
+   `memo.gen/estimated` are outside what 1.0 freezes (§7). Closed the same
+   day, after three acceptance passes; every backend passes.*
 5. **M4 — the rest, as needed.** The Python transpiler as user tooling (it is
    test tooling from M1), cost reflection, certification, model synthesis,
    and the static graph that gen.clj's static modeling language provides.
