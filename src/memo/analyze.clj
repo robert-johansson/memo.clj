@@ -200,8 +200,8 @@
             (err/raise (str owner "'s bounded estimate is used outside " owner "'s own choice")
                        (assoc (frame-err-opts state loc)
                               :hint (str owner " has a budget, so this " what " is estimated from samples, and "
-                                         "in M3 such an estimate can only drive " owner "'s own choice (:wpp or "
-                                         ":to-maximize). Here it is returned, read by another agent, or weights "
+                                         "in M3 such an estimate can only drive " owner "'s own choice (:wpp, "
+                                         ":to-maximize or :to-be). Here it is returned, read by another agent, or weights "
                                          "an observation. To model a reported estimate, make the report a "
                                          "choice of " owner "'s, e.g. (" owner " :chooses [r R] :to-be ...)."))))
         unknown (unknown-dims state)

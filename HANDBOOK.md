@@ -1929,6 +1929,11 @@ key:
 ;=> true
 ```
 
+The estimate is unbiased for the agent's choice probabilities, and for
+anything linear in them, as a memo returning `(Pr (= alice.b b))`. What a
+table computes from them nonlinearly is not: an observer conditioning on
+the choice afterwards divides one estimate by another.
+
 `mg/dist` refuses such a budget: a distribution needs exact probabilities.
 `mg/estimated` gives instead a gen.clj generative function whose density is
 estimated (`gen.custom/estimated`): its one choice, at `:value`, is drawn

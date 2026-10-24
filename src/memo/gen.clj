@@ -290,6 +290,11 @@
   - Pseudo-marginal MH and PMMH (gen.clj's MH on a model that splices it)
     then target the bounded model's exact posterior.
   - Without a Monte Carlo budget the table is exact, and so is the density.
+  - The estimate is unbiased when the memo's table is linear in the
+    bounded agent's choice probabilities (it returns them, or marginals of
+    them). An observer conditioning on the choice afterwards makes the
+    table a ratio of estimates, which is not: then pseudo-marginal MCMC on
+    it is not exact.
 
   opts: :given and :return, as dist's."
   ([model] (estimated model {}))

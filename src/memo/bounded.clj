@@ -239,6 +239,24 @@
   (array/array (double-array values) {:dtype :int32}))
 
 ;; -----------------------------------------------------------------------------
+;; constants, built once per backend (an array belongs to one)
+
+(def ^:private constants (atom {}))
+
+(defn- constant
+  "(build), cached under k for the backend in effect: the host arrays of the
+  count vectors and draws, which depend only on the budget and the sizes.
+  The cache starts over past 256 entries (a batch backend is one per batch
+  shape)."
+  [k build]
+  (let [key [array/*backend* k]]
+    (if-let [[_ v] (find @constants key)]
+      v
+      (let [v (build)]
+        (swap! constants (fn [m] (assoc (if (clojure.core/>= (count m) 256) {} m) key v)))
+        v))))
+
+;; -----------------------------------------------------------------------------
 ;; the multinomial probabilities, with gradients at zero categories
 
 (defn- pmf
@@ -248,17 +266,20 @@
   category of probability 0 keeps the right one: dP_s/dp_j there is coef_s
   Π_{i≠j} p_i^C_si when C_sj = 1, and 0 when C_sj > 1 (through log space it
   would be NaN)."
-  [p cvs logc]
+  [p k cvs]
   (let [ps (array/shape p)
         m (peek ps)
         n (reduce clojure.core/* 1 (pop ps))
         S (count cvs)
-        flat (vec (apply concat cvs))
-        ct (host-array (for [j (range m), s (range S)] (nth flat (clojure.core/+ (clojure.core/* s m) j))) [m S])
-        c (host-array flat [S m])
-        pos-t (host-array (for [j (range m), s (range S)] (if (pos? (nth flat (clojure.core/+ (clojure.core/* s m) j))) 1.0 0.0)) [m S])
-        ones-c (host-array (map #(if (clojure.core/== 1 %) 1.0 0.0) flat) [S m])
-        lc (host-array logc [1 S])
+        {:keys [ct c pos-t ones-c lc]}
+        (constant [:pmf k m]
+                  #(let [flat (vec (apply concat cvs))
+                         at (fn [s j] (nth flat (clojure.core/+ (clojure.core/* s m) j)))]
+                     {:ct (host-array (for [j (range m), s (range S)] (at s j)) [m S])
+                      :c (host-array flat [S m])
+                      :pos-t (host-array (for [j (range m), s (range S)] (if (pos? (at s j)) 1.0 0.0)) [m S])
+                      :ones-c (host-array (map (fn [x] (if (clojure.core/== 1 x) 1.0 0.0)) flat) [S m])
+                      :lc (host-array (log-coefficients k cvs) [1 S])}))
         parts (fn [p2]
                 (let [lp (array/log (where (> p2 0) p2 1.0))
                       l (+ (array/matmul lp ct) lc)
@@ -291,13 +312,14 @@
 
 (defn- check-mixing
   "x (a value of the dims layout) does not vary along the dims the analysis
-  found it does not: those its reasoning mixes but which have no samples of
-  their own. A belief varying there would need independent samples."
-  [x {:keys [mixing indep]} what]
+  found it does not, :shared: dims the agent knows and its reasoning mixes,
+  but which have no samples of their own. A belief varying there would need
+  independent samples."
+  [x {:keys [shared]} what]
   (let [r (array/ndim x)
         s (array/shape x)]
-    (doseq [d mixing
-            :when (and (not (some #{d} indep)) (clojure.core/< d r))]
+    (doseq [d shared
+            :when (clojure.core/< d r)]
       (when (not= 1 (nth s (clojure.core/+ r (axis d))))
         (err/raise (str "memo.clj's analysis missed that " what " varies along dim " d)
                    {:user false :hint "Its samples would be shared where they must be independent."})))))
@@ -373,13 +395,14 @@
   every set of count vectors (one per cell of the dims with samples of their
   own), on the draw's dim ω and the belief's contexts."
   [p z {:keys [k indep-sizes sample-sizes] :as instr}]
-  (let [{:keys [cvs]} (sample-space instr)
+  (let [{:keys [cvs mprime]} (sample-space instr)
         {:keys [n cats rest] :as b} (belief p z instr)
         S (count cvs)
-        probs (pmf cats cvs (log-coefficients k cvs))   ; [n rest... S]
-        ds (digits S n)
+        probs (pmf cats k cvs)                           ; [n rest... S]
+        idx (constant [:digits S n]
+                      #(let [ds (digits S n)] (mapv (fn [c] (index-array (map (fn [d] (nth d c)) ds))) (range n))))
         per-cell (for [c (range n)]
-                   (array/take (array/take probs c 0) (index-array (map #(nth % c) ds)) -1))
+                   (array/take (array/take probs c 0) (idx c) -1))
         w (reduce * per-cell)                            ; [rest... S^n]
         w (array/transpose w (into [(count rest)] (range (count rest))))]
     (back (array/reshape w (into [(first (array/shape w)) 1 1] rest))
@@ -402,9 +425,10 @@
         b (assoc (belief p z instr) :algorithm algorithm)
         {:keys [n cats rest]} b]
     (if-not draws
-      (let [emp (empirical cvs m k algorithm)
-            ds (digits (count cvs) n)
-            e (host-array (for [d ds, c (range n), x (nth emp (nth d c))] x) [(count ds) n m])]
+      (let [e (constant [:empirical k m mprime algorithm n]
+                        #(let [emp (empirical cvs m k algorithm)
+                               ds (digits (count cvs) n)]
+                           (host-array (for [d ds, c (range n), x (nth emp (nth d c))] x) [(count ds) n m])))]
         (belief-of-draws e b indep-sizes sample-sizes))
       (do
         (when (some tape/tracked? [p z])
@@ -430,11 +454,18 @@
               q (if (= algorithm :rejection) e (* e (array/reshape (:mass b) (into [1 n 1] rest))))]
           (back q b indep-sizes sample-sizes))))))
 
+(declare subsets*)
+
 (defn subsets
   "The :subsets instruction: for each draw on dim σ, which options are
   considered (true) among the cells of the chosen dims, every k-subset
   enumerated or, with :draws, drawn uniformly with key."
-  [{:keys [omega dims sizes k draws]} key]
+  [{:keys [omega dims sizes k draws] :as instr} key]
+  (if-not draws
+    (constant [:subsets omega dims sizes k] #(subsets* instr nil))
+    (subsets* instr key)))
+
+(defn- subsets* [{:keys [omega dims sizes k draws]} key]
   (let [n (reduce clojure.core/* 1 sizes)
         rows (if-not draws
                (combinations n k)

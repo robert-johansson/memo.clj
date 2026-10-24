@@ -1026,6 +1026,13 @@ sample from **finite** sets: outcomes, options, other agents' types.
     cached; a `^:cache` memo caches by budget too (never under Monte Carlo).
   - **The exact program is compiled without a budget,** so its IR is the
     same as before M3, instruction for instruction.
+  - **A range of budgets** (gengdt-3xne: a budget summed out, or trials whose
+    budgets differ) needs no construct of its own. Every budget gives a
+    table of the memo's own shape, so the tables for k in a range are a
+    stack of calls, `(array/stack (mapv #(f x {:memo/budget {'a {:samples
+    %}}}) ks))`, each budget compiled once. A budget computed from a fitted
+    value is read on the host, which `array/compile` and gen.batched's
+    batching cannot do (GenGDT's to weigh, gengdt-3xne).
 - **First algorithms (proposed 2026-10-20; built 2026-10-24):**
   - **Sample the agent's belief and average** (`:one-and-done`): samples
     from its current belief, after what it observed (forward sampling where
@@ -1130,6 +1137,14 @@ sample from **finite** sets: outcomes, options, other agents' types.
   splices it should pass the same budget object at each run: gen.clj sees a
   splice's argument unchanged only when it is identical, and only then keeps
   ω on an identity update.
+- **What is unbiased.** A Monte Carlo table is an unbiased estimate of the
+  agent's choice probabilities, and of anything linear in them (a memo
+  returning `(Pr (= alice.a a))`, marginals over other variables). What the
+  table computes from them nonlinearly is not: an observer that conditions
+  after the choice (its posterior is a ratio of estimates), or another
+  agent's softmax over them. `mg/estimated`'s density is valid for
+  pseudo-marginal MCMC only in the first case; nothing checks it (a
+  conservative check would refuse every model with a later observation).
 - **The log-estimate variance** per participant:
   `memo.gen/log-estimate-variance` over a participant's trials.
 

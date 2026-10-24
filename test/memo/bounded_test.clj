@@ -150,6 +150,40 @@
                  [(* (prob (pw 0) w0) (prob (pw 1) w1) (prob (ps2 0) s0) (prob (ps2 1) s1))
                   (softmax [(* beta (mean (map inner s0))) (* beta (mean (map inner s1)))])])))))
 
+;; a choice over two dims: each of its four cells has samples of its own
+(defn outcome-two [o p s2] (get-in [[[0.5 0.5 0.0 0.0] [0.0 0.0 1.0 0.0]] [[0.3 0.0 0.0 0.7] [0.1 0.4 0.4 0.1]]] [o p s2]))
+
+(defmemo plan-two [[a A] [c A]] [beta]
+  (alice :wants g s2)
+  (alice :chooses [o A] [p A] :wpp (exp (* beta (EU g))))
+  (alice :given [s2 S] :wpp (outcome-two o p s2))
+  (return (Pr (= alice.o a) (= alice.p c))))
+
+(defn- plan-two-brute [k beta]
+  (let [cells [[0 0] [0 1] [1 0] [1 1]]
+        dist (fn [[o p]] (into {} (for [s S] [s (outcome-two o p s)])))
+        flat (average (for [s00 (seqs k S), s01 (seqs k S), s10 (seqs k S), s11 (seqs k S)]
+                        (let [ss [s00 s01 s10 s11]]
+                          [(reduce * 1.0 (map #(prob (dist %1) %2) cells ss))
+                           (softmax (map #(* beta (mean %)) ss))])))]
+    [[(flat 0) (flat 1)] [(flat 2) (flat 3)]]))
+
+;; options considered over a choice's joint cells
+(defn weight-two [o p] (get-in [[1.0 2.0] [3.0 4.0]] [o p]))
+
+(defmemo two-options [[a A] [c A]] []
+  (alice :chooses [o A] [p A] :wpp (weight-two o p))
+  (return (Pr (= alice.o a) (= alice.p c))))
+
+(defn- two-options-brute [k]
+  (let [cells [[0 0] [0 1] [1 0] [1 1]]
+        subsets (filter #(= k (count %)) (map (fn [m] (filterv #(bit-test m %) (range 4))) (range 16)))
+        flat (average (for [s subsets]
+                        [(/ 1.0 (count subsets))
+                         (let [z (reduce + (map #(apply weight-two (cells %)) s))]
+                           (mapv (fn [i] (if (some #{i} s) (/ (apply weight-two (cells i)) z) 0.0)) (range 4)))]))]
+    [[(flat 0) (flat 1)] [(flat 2) (flat 3)]]))
+
 ;; alice observes that bob's y is not 0, then chooses
 (defmemo seen [[a A]] [beta]
   (alice :thinks (bob :chooses [y Y] :wpp (+ 1 y)))
@@ -328,6 +362,9 @@
   (testing "a query inside a query: the inner samples afresh for each value the outer averages over"
     (doseq [k [1 2]]
       (is (close-all? (plan2-brute k 0.9) (host (plan2 0.9 (budget {:samples k})))) (str "k " k))))
+  (testing "a choice over two dims: each cell its own samples"
+    (doseq [k [1 2]]
+      (is (close-all? (plan-two-brute k 0.8) (host (plan-two 0.8 (budget {:samples k})))) (str "k " k))))
   (testing "argmax, with ties"
     (doseq [k [1 2 3]]
       (is (close-all? (plan-max-brute k) (host (plan-max (budget {:samples k})))) (str "k " k))))
@@ -351,6 +388,9 @@
           (str "wpp, k " k))
       (is (close-all? (three-brute k argmax-uniform) (host (three-max (budget {:options k}))))
           (str "argmax, k " k)))
+    (testing "over a choice's joint cells"
+      (doseq [k [1 2 3]]
+        (is (close-all? (two-options-brute k) (host (two-options (budget {:options k})))) (str "k " k))))
     (testing "with samples"
       (doseq [k [1 2]]
         (is (close-all? (three-sampled-brute k 1.2) (host (three-sampled 1.2 (budget {:samples k :options 2}))))
