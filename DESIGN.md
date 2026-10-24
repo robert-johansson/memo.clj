@@ -1536,9 +1536,17 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
    that for parity, warn, or make it an error outside a parity mode? This
    is where principle 1 (same semantics) meets principle 6 (no silent wrong
    numbers). *Decided 2026-10-24 (memoclj-xz4k):* parity. Tables stay
-   memo's (an all-zero distribution, silently), and the bridge refuses
-   them: `memo.gen/dist` checks that a table sums to 1 at every call, so
-   a fit cannot use one silently. The Handbook says so.
+   memo's (an all-zero distribution, silently). `memo.gen/dist` checks
+   that a table sums to 1 at every call, so a memo used as a distribution
+   cannot pass lost mass into a fit. *Corrected the same day (a side
+   agent's note):* that guard covers distributions only.
+   `memo.gen/deterministic` returns values (an `E`, an `EU`), which have
+   no sum to check, so lost mass there still reaches a fit as a silent
+   number (0, or an `E` over mass below 1); and neither guard sees an
+   agent's own beliefs losing their mass inside the model (its estimate
+   0, feeding its choice), which is memo's semantics. A check for
+   `deterministic` (the observer's mass at the return, per cell) is
+   memoclj-wbhh's, for when a client fits through expected values.
 10. **NaN gradients where the values are right** (§2.4). *Decided
     2026-10-20:* the values keep matching JAX, and the M2 bridge makes a
     NaN gradient a loud error, so fitting never fails silently. Repairing
