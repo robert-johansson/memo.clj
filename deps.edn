@@ -5,7 +5,7 @@
         ;; on both projects and its own gen.clj pin wins, so a GenGDT that
         ;; takes this commit must pin the same gen.clj. :dev uses the working copy.
         gen.clj/gen.clj {:git/url "file:///Users/robert/code/gen.clj"
-                         :git/sha "2dd2e65e01361f5d72dfc2c25504304c29a209c7"}}
+                         :git/sha "2ab533bafd63264c6dd8e073f1a2fc953fdf70df"}}
 
  :aliases
  {;; clojure -X:test          every test
@@ -15,7 +15,12 @@
   :test {:extra-paths ["test"]
          :jvm-opts ["--enable-native-access=ALL-UNNAMED" "-Xmx8g"]
          :extra-deps {org.clojure/test.check {:mvn/version "1.1.3"}
-                      io.github.cognitect-labs/test-runner {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                      io.github.cognitect-labs/test-runner {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                      ;; gen.clj's laws, a module of its repository at the same commit as
+                      ;; the gen.clj pinned above (which wins over the one it brings)
+                      gen.clj/laws {:git/url "file:///Users/robert/code/gen.clj"
+                                    :git/sha "2ab533bafd63264c6dd8e073f1a2fc953fdf70df"
+                                    :deps/root "ext/laws"}}
          :exec-fn cognitect.test-runner.api/test}
   :fast {:exec-args {:excludes [:slow]}}
   ;; the differential fuzzer (needs memo-mcp's Python memo): clojure -X:test:fuzz :n 2000 :seed 1
@@ -33,4 +38,5 @@
                    "--enable-native-access=ALL-UNNAMED"]}
 
   ;; gen.clj's working copy instead of the pin: clojure -X:dev:test
-  :dev {:override-deps {gen.clj/gen.clj {:local/root "/Users/robert/code/gen.clj"}}}}}
+  :dev {:override-deps {gen.clj/gen.clj {:local/root "/Users/robert/code/gen.clj"}
+                         gen.clj/laws {:local/root "/Users/robert/code/gen.clj/ext/laws"}}}}}

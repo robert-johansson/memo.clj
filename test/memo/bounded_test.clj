@@ -6,27 +6,20 @@
   exact-over-samples table (unbiased in exp space); gradients against finite
   differences; the budget's checks and the size limit as loud errors; gen.clj's
   laws for encapsulated randomness over memo.gen/estimated."
-  (:require [clojure.java.basis :as basis]
-            [clojure.java.io :as io]
-            [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is testing]]
             [gen.array :as array]
             [gen.choicemap :as cm]
             [gen.dist :as d]
             [gen.dist.core :as dc]
             [gen.dynamic :refer [gen]]
             [gen.gfi :as gfi]
+            [gen.laws :as laws]
             [gen.random :as rng]
             [memo.bounded :as b]
             [memo.core :refer [defmemo]]
             [memo.errors :as err]
             [memo.gen :as mg]
             [memo.test-support :as ts :refer [host]]))
-
-;; gen.laws from the gen.clj in use's test/ (as memo.gen-test loads it)
-(let [root (get-in (basis/current-basis) [:libs 'gen.clj/gen.clj :deps/root])]
-  (.addURL ^clojure.lang.DynamicClassLoader (clojure.lang.RT/baseLoader)
-           (.toURL (.toURI (io/file root "test"))))
-  (require '[gen.laws :as laws]))
 
 (alter-var-root #'err/*warnings?* (constantly false))
 
@@ -844,10 +837,9 @@
             (splice :choice estimated-pick beta mc-budget)
             beta)))
 
-;; an estimator has no proposal density (gen.clj's own estimated-laws)
-(def estimated-laws (dissoc laws/encapsulated :score-is-assessed-on-the-same-key))
-
+;; an estimated density's laws (its sampler draws omega otherwise than its
+;; estimate), with gen.clj's conventions: an identity update reports no-change
 (laws/deflaws bounded-estimated
   [["estimated pick" estimated-pick [1.3 mc-budget] []]
    ["pm-model" pm-model [] []]]
-  40 estimated-laws)
+  40 (merge laws/estimated laws/conventions))

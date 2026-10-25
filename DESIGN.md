@@ -84,9 +84,13 @@ In order:
      `particle`, `broadcast-shapes`, `dtype-kind`), and its tests use
      `array/vmap` (genclj-t3ur). `test/memo/api_test.clj` checks every
      gen.clj namespace and var memo.clj's source names against the
-     snapshot of the gen.clj in use. Still moving on gen.clj's side before
-     its 1.0: `gen.laws`, which memo.clj's tests load (genclj-u6je, to
-     ext/laws). memo.clj does not read the handler's state (genclj-q6sc).
+     snapshot of the gen.clj in use. `gen.laws`, which memo.clj's tests
+     run, is now a module of gen.clj's repository, `ext/laws`
+     (genclj-u6je), which memo.clj's `:test` alias takes at the pinned
+     commit (memoclj-a7b3). memo.clj does not read the handler's state
+     (genclj-q6sc). gen.clj's 1.0 release candidate is 2ab533b; its tag
+     will differ only in the book's prose and the CHANGELOG, so a pass
+     there counts for the tag.
      The path to the tag (gen-clj-65): pin gen.clj's release candidate
      and run the suite on every backend (memoclj-tzty), pin gen.clj's 1.0
      tag (memoclj-kxj1), then tag memo.clj's 1.0 (memoclj-y9vo).
@@ -620,9 +624,9 @@ Handbook's "Minds in gen.clj models"), as specified below. The whole suite
 passes on the JVM, Metal and MLX's CPU in float64 on the Mac, and on MLX's
 CPU in float64 and CUDA on fenrir; since gen.clj 73f22a0, MLX's CPU in
 float32 too, on both. Each of eleven planted bugs is caught. gen.clj's GFI laws run over two models that trace memo
-distributions: the test puts the `test/` of the gen.clj in use (the pin's
-checkout, or the working copy under `:dev`) on the classpath, so the laws
-are that gen.clj's own. The first client is done (§6.5). Still to do: the
+distributions, from gen.clj's laws module `ext/laws` at the pinned commit
+(since 2026-10-25; before, the tests put the `test/` of the gen.clj in use
+on the classpath). The first client is done (§6.5). Still to do: the
 speed research (§6.4, question 3).
 
 ### 6.1 What already works, and what is missing (measured 2026-10-22, gen.clj 34e9a44)
@@ -736,10 +740,12 @@ speed research (§6.4, question 3).
     - log-prob against the log of the table;
     - draws in the domain.
 - **gen.clj's GFI laws over models that trace memo distributions.**
-  `gen.laws` is under gen.clj's `test/`, not `src/`, so another project
-  cannot depend on it. memo.clj's test adds the `test/` of the gen.clj in
-  use to the classpath at load time (its `:deps/root` in the basis), so it
-  needs nothing from gen.clj.
+  `gen.laws` is gen.clj's module `ext/laws`, a git dependency on gen.clj's
+  repository with `:deps/root "ext/laws"`, at the commit of the gen.clj
+  pinned (`:dev` takes the working copy's). memo.clj's own gen.clj pin wins
+  over the one the module brings. Besides `laws/all`, the tests check
+  `laws/conventions` (an identity update reports no-change), which gen.clj's
+  own generative functions keep and so memo.clj's do.
 - **Gradients** against finite differences, and against the gradient GenGDT
   checked by hand.
 - **The zero-cell gradient and the NaN guard,** each checked against a
@@ -1387,8 +1393,8 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
     key reproduces its table, another does not; E[ξ] of `mg/estimated` is
     the exact-over-samples cell; its joint sampler satisfies the thesis's
     Eq. 4.4, E[[value = v] / ξ] = 1.
-  - **gen.clj's laws:** `laws/encapsulated` (less the same-key score law,
-    as for gen.clj's own estimated densities) over `mg/estimated` and a
+  - **gen.clj's laws:** `laws/estimated` (`laws/encapsulated` less the
+    same-key score law) and `laws/conventions`, over `mg/estimated` and a
     model splicing it.
   - **Gradients** against finite differences, in the belief sampled and in
     the temperature, at an outcome of probability 0 too.

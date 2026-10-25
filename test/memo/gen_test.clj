@@ -5,9 +5,7 @@
   the domain), gradients against finite differences, the zero-cell gradient
   and the NaN guard, the table's checks, batched runs, and gen.clj's GFI
   laws over models that trace memo distributions."
-  (:require [clojure.java.basis :as basis]
-            [clojure.java.io :as io]
-            [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is testing]]
             [gen.array :as array]
             [gen.batched :as gb]
             [gen.choicemap :as cm]
@@ -16,6 +14,7 @@
             [gen.dynamic :refer [gen]]
             [gen.gfi :as gfi]
             [gen.gradients :as grad]
+            [gen.laws :as laws]
             [gen.random :as rng]
             [gen.selection :as sel]
             [memo.core :refer [defmemo]]
@@ -23,16 +22,6 @@
             [memo.errors :as err]
             [memo.gen :as mg]
             [memo.test-support :as ts :refer [close? host]]))
-
-;; gen.laws is under gen.clj's test/, which a dependency does not get: the
-;; test/ of the gen.clj in use (the pin's checkout, or the working copy under
-;; :dev) goes on the classpath, so the laws are that gen.clj's own. In the
-;; same form as the require: each top-level form is evaluated under a new
-;; class loader.
-(let [root (get-in (basis/current-basis) [:libs 'gen.clj/gen.clj :deps/root])]
-  (.addURL ^clojure.lang.DynamicClassLoader (clojure.lang.RT/baseLoader)
-           (.toURL (.toURI (io/file root "test"))))
-  (require '[gen.laws :as laws]))
 
 (alter-var-root #'err/*warnings?* (constantly false))
 
@@ -364,7 +353,8 @@
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"gives other values on whole arrays"
                               (under weighted-if)))))))
 
+;; with gen.clj's conventions: an identity update reports no-change
 (laws/deflaws memo-dist
   [[:mind-model mind-model [0.4] [[0.7] [0.0]]]
    [:rsa-model rsa-model [1.5] [[2.5]]]]
-  25)
+  25 (merge laws/all laws/conventions))
