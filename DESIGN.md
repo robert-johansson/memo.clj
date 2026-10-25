@@ -75,6 +75,21 @@ In order:
      map for 1.0 (keyword arguments could be added later); `dist` and
      `deterministic` hold the memo value, documented (a var could be
      accepted later).
+   - *gen.clj's surface (2026-10-25, memoclj-x05s):* gen.clj's 1.0 plan
+     marks each namespace stable, experimental or internal, and lists the
+     stable surface in its `test/fixtures/api-snapshot.edn`. memo.clj's
+     source now uses only that surface. It moved off `gen.array.tape`,
+     `.batch`, `.shape` and `.dtype` onto gen.array's public replacements
+     (`tracked?`, `batched?`, `batch-shape`, `particle-backend`,
+     `particle`, `broadcast-shapes`, `dtype-kind`), and its tests use
+     `array/vmap` (genclj-t3ur). `test/memo/api_test.clj` checks every
+     gen.clj namespace and var memo.clj's source names against the
+     snapshot of the gen.clj in use. Still moving on gen.clj's side before
+     its 1.0: `gen.laws`, which memo.clj's tests load (genclj-u6je, to
+     ext/laws). memo.clj does not read the handler's state (genclj-q6sc).
+     The path to the tag (gen-clj-65): pin gen.clj's release candidate
+     and run the suite on every backend (memoclj-tzty), pin gen.clj's 1.0
+     tag (memoclj-kxj1), then tag memo.clj's 1.0 (memoclj-y9vo).
 4. **M3 — bounded minds.** An agent's reasoning can be evaluated by a
    declared algorithm with a budget, instead of by exact inference over its
    beliefs. There are two lowerings, tried in this order:

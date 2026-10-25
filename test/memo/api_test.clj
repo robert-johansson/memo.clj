@@ -4,8 +4,13 @@
   marked ^:no-doc (internal); a memo's metadata keys under :memo/; a memo
   error's ex-data keys under :memo/. A change to any of them fails here, so
   that it is made on purpose: additions in a minor release, removals and
-  renames only in a new major version."
-  (:require [clojure.test :refer [deftest is testing]]
+  renames only in a new major version. memo.clj's source uses only gen.clj's
+  stable surface, so that gen.clj's own freeze covers what memo.clj needs."
+  (:require [clojure.edn :as edn]
+            [clojure.java.basis :as basis]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [memo.core :refer [defmemo]]
             [memo.domains :refer [defenum]]
             [memo.errors :as err]
@@ -48,6 +53,35 @@
   (testing "the var carries the docstring and the arguments"
     (is (= "A coin." (:doc (meta #'flip))))
     (is (= '([p] [p named]) (:arglists (meta #'flip))))))
+
+(defn- gen-clj-names
+  "The gen.clj namespaces and vars the source file f names, as [ns var]
+  pairs, var nil for a namespace it requires: read as forms (no strings or
+  comments), with f's namespace's aliases, and its refers."
+  [f]
+  (with-open [r (java.io.PushbackReader. (io/reader f))]
+    (let [the-ns (the-ns (second (read r)))
+          gen? #(str/starts-with? (str %) "gen.")
+          forms (binding [*ns* the-ns *read-eval* false]
+                  (doall (take-while #(not= ::eof %) (repeatedly #(read {:eof ::eof} r)))))
+          ns-of (fn [s] (when-let [q (namespace s)]
+                          (if-let [a (get (ns-aliases the-ns) (symbol q))] (ns-name a) (symbol q))))]
+      (concat
+       (for [a (vals (ns-aliases the-ns)) :when (gen? (ns-name a))] [(ns-name a) nil])
+       (for [v (vals (ns-refers the-ns)) :let [n (ns-name (:ns (meta v)))] :when (gen? n)]
+         [n (:name (meta v))])
+       (for [s (tree-seq coll? seq forms) :when (and (symbol? s) (gen? (ns-of s)))]
+         [(ns-of s) (symbol (name s))])))))
+
+(deftest memo.clj-uses-only-gen.clj's-stable-surface
+  ;; gen.clj's snapshot of its stable surface, from the gen.clj in use (the
+  ;; pin's checkout, or the working copy under :dev)
+  (let [root (get-in (basis/current-basis) [:libs 'gen.clj/gen.clj :deps/root])
+        snapshot (edn/read-string (slurp (io/file root "test/fixtures/api-snapshot.edn")))]
+    (doseq [f (file-seq (io/file "src")) :when (str/ends-with? (.getName f) ".clj")
+            [n v] (distinct (gen-clj-names f))]
+      (is (if v (contains? (get snapshot n) v) (contains? snapshot n))
+          (str f ": " n (when v (str "/" v)) " is not in gen.clj's stable surface")))))
 
 (deftest a-memo-error's-data-under-memo-is-the-stable-set
   (let [e (try (flip 0.5 {"p" 0.5}) nil (catch Exception e (err/root-memo-error e)))]

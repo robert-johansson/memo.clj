@@ -21,8 +21,6 @@
   density it estimates (gen.custom/estimated), for pseudo-marginal MCMC."
   (:refer-clojure :exclude [+ - * / < > <= >= == abs])
   (:require [gen.array :as array :refer [+ - * < > ==]]
-            [gen.array.dtype :as dt]
-            [gen.array.shape :as sh]
             [gen.choicemap :as cm]
             [gen.custom :as custom]
             [gen.dist.core :as dc :refer [defdist]]
@@ -50,7 +48,7 @@
   checks the gradient arriving for it: NaN there is a loud error. Values
   that carry no gradient (host values, integers) pass as they are."
   [mname pname x]
-  (if (and (array/array? x) (not (array/host? x)) (= :float (dt/kind (array/dtype x))))
+  (if (and (array/array? x) (not (array/host? x)) (= :float (array/dtype-kind (array/dtype x))))
     ((array/custom-vjp
       identity
       (fn [_ _ g]
@@ -127,7 +125,7 @@
   k; info, host data: the memo's name, k, and the support."
   [probs labels ^:host info]
   (sample [key shape]
-    (let [idx (rng/categorical key (array/log probs) (sh/broadcast shape (pop (array/shape probs)))
+    (let [idx (rng/categorical key (array/log probs) (array/broadcast-shapes shape (pop (array/shape probs)))
                                {:backend (dc/backend-of probs)})]
       (array/take labels idx 0)))
   (log-prob [v]

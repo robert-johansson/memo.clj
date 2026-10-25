@@ -14,7 +14,6 @@
   compile) must serve later calls outside it."
   (:require [clojure.test :refer [deftest is testing]]
             [gen.array :as array]
-            [gen.array.batch :as batch]
             [memo.core :refer [defmemo]]
             [memo.domains :refer [defenum]]
             [memo.lower :as lower]
@@ -108,8 +107,7 @@
 (deftest constants-made-under-a-tracer-serve-later-calls
   (testing "the batch tracer"
     (is (close? (mapv #(softmax % [0 1 2]) [0.5 1.5])
-                (host (batch/unwrap (batch/batched [2] (batched-first (batch/wrap (array/array [0.5 1.5]) [2])))
-                                    [2]))))
+                (host ((array/vmap batched-first) (array/array [0.5 1.5])))))
     (is (close? (softmax 1.0 [0 1 2]) (host (batched-first (array/array 1.0))))))
   (testing "a gradient: d E[s] / d beta is s's variance"
     (let [p (softmax 1.0 [0 1 2])

@@ -27,8 +27,6 @@
   - The gradient of abs at 0 is 1, JAX's, where gen.array's is 0."
   (:refer-clojure :exclude [+ - * / < > <= >= == abs])
   (:require [gen.array :as array :refer [+ - * / < > <= >= == exp log abs where]]
-            [gen.array.batch :as batch]
-            [gen.array.tape :as tape]
             [gen.random :as rng]
             [memo.bounded :as bounded]
             [memo.domains :as domains]
@@ -422,7 +420,7 @@
   differentiated (gen.clj refuses a host read that would lose a gradient;
   a spot check has none to lose)."
   [x shape idxs]
-  (let [x (if (tape/tracked? x) (array/stop-gradient x) x)
+  (let [x (if (array/tracked? x) (array/stop-gradient x) x)
         s (array/shape x)]
     (if (empty? s)
       (vec (repeat (count idxs) (array/->clj x)))
@@ -458,7 +456,7 @@
   given (an array parameter as its array), primal values for those being
   differentiated."
   [name f pos statics kws r]
-  (let [as-given (fn [v] (if (tape/tracked? v) (array/stop-gradient v) v))
+  (let [as-given (fn [v] (if (array/tracked? v) (array/stop-gradient v) v))
         slots (concat (map vector pos statics) (map (fn [[_ v s]] [v s]) kws))
         dyn (keep (fn [[v s]] (when-not s v)) slots)
         shape (broadcast-shape (map array/shape dyn))
@@ -489,22 +487,14 @@
   "x without its gradient tracking, when it is a value of a run under
   gen.array's batch tracer that differs across particles; else nil."
   [x]
-  (let [x (if (tape/tracked? x) (array/stop-gradient x) x)]
-    (when (batch/batched? x) x)))
-
-(defn- batch-axes
-  "The batch axes of a batched value b."
-  [b]
-  (let [s (array/shape (batch/value b))]
-    (subvec s 0 (clojure.core/- (count s) (count (array/shape b))))))
+  (when (array/batched? x)
+    (cond-> x (array/tracked? x) array/stop-gradient)))
 
 (defn- particle
-  "x's value in particle p of a batch of batch axes bs (x where it is shared
-  by every particle), read primal."
-  [x bs p]
-  (if-let [b (batched x)]
-    (array/take (array/reshape (batch/value b) (into [(reduce clojure.core/* 1 bs)] (array/shape b))) p 0)
-    x))
+  "x's value in particle p of its batch (x where it is shared by every
+  particle), read primal."
+  [x p]
+  (if-let [b (batched x)] (array/particle b p) x))
 
 (defn- host-call
   "The :ffi instruction. A function marked :memo/vectorized (written with
@@ -548,7 +538,7 @@
                                            "(array/exp, not Math/exp), or remove the mark, so that "
                                            "memo.clj calls it on each value.")
                                 :cause e})))))
-            _ (when-not (or (number? r) (boolean? r) (array/array? r) (tape/tracked? r))
+            _ (when-not (or (number? r) (boolean? r) (array/array? r) (array/tracked? r))
                 (err/raise (str "The vectorized function " name " returned " (pr-str r)
                                 ", not an array")
                            {:hint (str "A function marked ^:memo/vectorized returns a gen.array "
@@ -562,16 +552,14 @@
           (if-let [b (some batched (cons r vals))]
             ;; under gen.array's batch tracer (gen.batched), evenly spaced
             ;; particles, each checked as its own run would be (memoclj-m2jw)
-            (let [bs (batch-axes b)
-                  at (fn [x p] (particle x bs p))]
-              (array/with-backend (batch/inner-backend b)
-                (doseq [p (spaced (reduce clojure.core/* 1 bs) 8)]
-                  (spot-check name f (mapv #(at % p) pos) statics
-                              (mapv (fn [[k x s]] [k (at x p) s]) kws) (at r p)))))
+            (array/with-backend (array/particle-backend b)
+              (doseq [p (spaced (reduce clojure.core/* 1 (array/batch-shape b)) 8)]
+                (spot-check name f (mapv #(particle % p) pos) statics
+                            (mapv (fn [[k x s]] [k (particle x p) s]) kws) (particle r p))))
             (spot-check name f pos statics kws r)))
         r)
 
-      (some tape/tracked? vals)
+      (some array/tracked? vals)
       (err/raise (str "Cannot differentiate through the host function " name)
                  {:hint (str "Its arguments depend on a parameter being differentiated, and "
                              name " runs on host numbers. Write it with gen.array's operators "
@@ -590,7 +578,7 @@
   a form only passed to host functions and memo calls (args?)."
   [f params args?]
   (let [form (str "#{" (pr-str (:memo.impl/form (meta f))) "}")
-        traced? (some tape/tracked? params)
+        traced? (some array/tracked? params)
         v (try (apply f params)
                (catch Exception e
                  (throw (if (err/memo-error? e)
@@ -605,7 +593,7 @@
                             :cause e})))))]
     (cond
       (number? v) (host-number form v)
-      (or (boolean? v) (array/array? v) (tape/tracked? v) args?) v
+      (or (boolean? v) (array/array? v) (array/tracked? v) args?) v
       :else (err/raise (str "The inline form " form " gave " (pr-str v) ", not a number")
                        {:hint (str "An inline form's value is used as a number (or a boolean, or "
                                    "a gen.array array).")}))))

@@ -37,7 +37,6 @@
   (:refer-clojure :exclude [+ - * / < > <= >= == abs])
   (:require [clojure.string :as str]
             [gen.array :as array :refer [+ - * / > == where]]
-            [gen.array.tape :as tape]
             [gen.random :as rng]
             [memo.errors :as err]))
 
@@ -487,7 +486,7 @@
                            (host-array (for [d ds, c (range n), x (nth emp (nth d c))] x) [(count ds) n m])))]
         (belief-of-draws e b indep-sizes sample-sizes))
       (do
-        (when (some tape/tracked? [p z])
+        (when (some array/tracked? [p z])
           (err/raise "Monte Carlo samples cannot be differentiated through the agent's belief"
                      {:hint (str who "'s belief depends on a parameter being differentiated, and the samples "
                                  "drawn from it carry no gradient. Use the exact lowering (no :monte-carlo), or "

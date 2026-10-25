@@ -9,7 +9,6 @@
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [gen.array :as array]
-            [gen.array.batch :as batch]
             [gen.batched :as gb]
             [gen.choicemap :as cm]
             [gen.dist :as d]
@@ -355,9 +354,9 @@
 
 (deftest vectorized-functions-under-the-batch-tracer
   (let [betas [0.6 1.0 1.7]
-        under (fn [m] (batch/batched [3] (m (batch/wrap (array/array betas) [3]))))]
+        under (fn [m] ((array/vmap m) (array/array betas)))]
     (testing "each particle's table is its own call's"
-      (is (close? (mapv #(host (weighted %)) betas) (host (batch/unwrap (under weighted) [3])))))
+      (is (close? (mapv #(host (weighted %)) betas) (host (under weighted)))))
     ;; the spot-check runs on eager backends: on MLX it would force the lazy
     ;; arrays (DESIGN.md §5)
     (when (array/concrete? (array/array 0.0))
