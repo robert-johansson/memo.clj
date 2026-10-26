@@ -49,7 +49,9 @@ developed on Java 25; its MLX backend uses the foreign function interface,
 final since Java 22). Depend on it from a `deps.edn`:
 
 ```text
-{:deps {memo.clj/memo.clj {:local/root "/path/to/memo.clj"}}}
+{:deps {memo.clj/memo.clj {:git/url "https://github.com/robert-johansson/memo.clj.git"
+                           :git/tag "v1.0.0"
+                           :git/sha "fa50d9f0f0b6e2c21cc512e5ddb43039e6ed0634"}}}
 ```
 
 memo.clj pins its gen.clj. After the first download, run
