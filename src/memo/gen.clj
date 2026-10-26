@@ -13,6 +13,7 @@
   A mind's own choices are summed out exactly, as memo does: the trace holds
   only the draw. The table is checked at every call, log-prob is the log of
   the drawn cell, and a NaN gradient reaching a parameter is a loud error.
+  deterministic checks that the beliefs its return reads keep their mass.
 
   A bounded mind (M3, experimental; memo.bounded) passes its budget in the
   call's trailing map, {:memo/budget ...}: exact over its samples, dist and
@@ -362,26 +363,93 @@
 ;; The deterministic generative function
 ;; ---------------------------------------------------------------------------
 
+(defn- lost-cells
+  "The cells where bad holds, in some particle: bad over a memo's k axes,
+  each at its size or at size 1 where the mass does not vary along it,
+  perhaps batched. Index vectors into bad's per-particle shape, row-major."
+  [bad k]
+  (let [b (array/all-particles bad)
+        lead (clojure.core/- (array/ndim b) k)
+        b (if (pos? lead) (array/any b {:axis (vec (range lead))}) b)
+        data (array/->clj b)]
+    (filterv #(get-in data %) (cells (map range (array/shape b))))))
+
+(defn- check-mass!
+  "The masses a call's returns weigh by (memo.core's call with masses), those
+  of return ret (all with ret nil): each 1 in every cell of the axes, within
+  1e-6 + n·eps (n the cells it sums, as check-table!'s), or a loud error
+  naming the belief and the cells, by the axes the loss varies along."
+  [m masses ret]
+  (let [{:memo/keys [name axes domains]} m]
+    (doseq [{:keys [mass frame what loc cells return]} masses
+            :when (or (nil? ret) (= ret return))
+            ;; a check has no gradient to lose
+            :let [mass (array/stop-gradient mass)
+                  bad (> (array/abs (- mass 1.0)) (+ 1e-6 (* cells (eps (array/dtype mass)))))]]
+      (when (array/any-true? bad)
+        (let [lost (lost-cells bad (count axes))
+              ;; the totals, when one run has them all (not batched)
+              totals (when-not (array/batched? mass) (array/->clj mass))
+              varies (set (keep-indexed (fn [i n] (when (clojure.core/> n 1) i)) (array/shape mass)))
+              cell (fn [idx]
+                     (str (if (seq varies)
+                            (str "for " (apply str (interpose ", " (for [[i a d] (map vector (range) axes domains)
+                                                                          :when (varies i)]
+                                                                      (str a " = " (nth (domains/labels d) (nth idx i)))))))
+                            "in every cell")
+                          (when totals (str " (total " (if (seq idx) (get-in totals idx) totals) ")"))))]
+          (err/raise (str "Memo " name "'s return weighs by beliefs of " frame " that have lost mass ("
+                          what (when (:line loc) (str ", line " (:line loc))) ")"
+                          (if (seq axes)
+                            (str ", " (apply str (interpose "; " (map cell (take 4 lost))))
+                                 (when (clojure.core/> (count lost) 4) (str "; and " (- (count lost) 4) " cells more")))
+                            (when totals (str ": their total is " totals))))
+                     {:hint (str "memo leaves beliefs without mass silently (DESIGN.md §2.4), and a query over "
+                                 "them is 0 or too small: an observation that is impossible, or a choice whose "
+                                 "weights are all zero, in that cell. A fit would take that number as a value. "
+                                 "If the loss is meant (a 0 for an impossible case, read as one), make the "
+                                 "generative function with {:check-mass false}.")
+                      :loc {:name name :line (:line loc)}}))))))
+
 (defn deterministic
   "model, a memo, as a gen.custom/deterministic generative function whose
   return value is its table (one return of it with :return, for a memo
   with several): for splicing a mind at an address. Its parameters pass
   through the NaN guard, as dist's do. Called outside a model, it is the
-  memo. Unlike dist's, its values are not checked for lost mass (an
-  impossible observation gives 0, silently, as in memo; memoclj-wbhh).
-  opts: :return."
+  memo, with one check more:
+  - Lost mass is an error. memo leaves beliefs without mass silently (an
+    impossible observation, a choice whose weights are all zero), so a
+    query over them gives 0, or an E over mass below 1. Each query a
+    return reads (E, Pr, Var, H, KL, EU), not inside another query, is
+    checked at every call: the beliefs it weighs by total 1, in every cell
+    of the axes, within 1e-6 + n·eps; in a branch of an if, in the cells
+    where the branch is taken. Beliefs inside the model (an agent's
+    estimate feeding its choice) are memo's semantics, not checked; nor is
+    a bounded agent's sampled belief.
+  opts: :return; :check-mass, false for a model whose mass is lost on
+  purpose (true by default)."
   ([model] (deterministic model {}))
-  ([model {:keys [return] :as opts}]
+  ([model {:keys [return check-mass] :or {check-mass true} :as opts}]
    (let [m (memo-meta "deterministic" model)
-         _ (check-options "deterministic" model opts #{:return})
+         _ (check-options "deterministic" model opts #{:return :check-mass})
          mname (:memo/name m)
          nres (:memo/num-results m)
          _ (when (and (some? return) (not (and (integer? return) (clojure.core/<= 0 return (dec nres)))))
              (err/raise (str "deterministic: :return " (pr-str return) " is not a return of memo " mname
                              ", which has " nres)
                         {:loc {:name mname}}))
-         pnames (:memo/params m)]
+         _ (when-not (boolean? check-mass)
+             (err/raise (str "deterministic: :check-mass is true or false, not " (pr-str check-mass))
+                        {:loc {:name mname}}))
+         pnames (:memo/params m)
+         with-masses (:memo.impl/call-with-masses m)
+         ret (when (clojure.core/> nres 1) return)]
      (custom/deterministic
       {:apply (fn [args]
-                (let [t (apply model (guard-args mname pnames args))]
-                  (if (and (some? return) (clojure.core/> nres 1)) (array/take t return 0) t)))}))))
+                (let [args (guard-args mname pnames args)
+                      t (if check-mass
+                          (let [[t masses] (apply with-masses args)]
+                            (check-mass! m masses ret)
+                            t)
+                          (apply model args))]
+                  (if (some? ret) (array/take t ret 0) t)))}))))

@@ -73,8 +73,9 @@
 
 (defn- cached
   "call, memoized by its arguments when they are host numbers or booleans
-  (so never for values being differentiated), and its budget, until any memo
-  is redefined; never a Monte Carlo call (one with a key)."
+  (so never for values being differentiated), its budget, and whether it
+  returns masses, until any memo is redefined; never a Monte Carlo call (one
+  with a key)."
   [call]
   (let [cache (atom {:epoch -1 :table {}})
         host? #(or (number? %) (boolean? %))]
@@ -82,7 +83,7 @@
       (if-not (and (every? host? args) (every? host? (vals kwargs)) (nil? (:key opts)))
         (call args kwargs opts)
         (let [epoch @definitions
-              k [(vec args) kwargs (select-keys opts [:budget :limit])]
+              k [(vec args) kwargs (select-keys opts [:budget :limit :mass])]
               c (swap! cache #(if (= epoch (:epoch %)) % {:epoch epoch :table {}}))]
           (if-let [[_ v] (find (:table c) k)]
             v
@@ -275,11 +276,13 @@
                        {:axes (count (:memo/axes m)) :params (:memo/params m)
                         :defaults (:memo.impl/defaults m) :num-results (:memo/num-results m)}))))
         params (:params parsed)
-        ;; the program, exact (budget nil) or for a normalized budget (M3)
-        compile-for (fn [budget limit report-only]
+        ;; the program, exact (budget nil) or for a normalized budget (M3);
+        ;; with mass, it also returns the masses its returns weigh by
+        ;; (memo.gen/deterministic's check)
+        compile-for (fn [budget limit report-only mass]
                       (let [compiled (analyze/analyze parsed domain-values
                                                       (assoc opts :callee callee :bounded budget :limit limit
-                                                             :report-only report-only))
+                                                             :report-only report-only :mass mass))
                             problems (ir/check compiled)]
                         (when (seq problems)
                           (err/raise (str "memo.clj built an ill-formed program for " name)
@@ -291,20 +294,21 @@
                                                        :fns fns
                                                        :inlines inlines
                                                        :param-order (mapv :name params)})}))
-        {:keys [compiled run]} (compile-for nil nil false)
+        {:keys [compiled run]} (compile-for nil nil false false)
         agents (ast/agents parsed)
         programs (atom {})
-        bounded-program (fn [budget limit report-only]
-                          (let [k [budget limit report-only]]
-                            (or (get @programs k)
-                                (let [p (compile-for budget limit report-only)]
-                                  (swap! programs assoc k p)
-                                  p))))
-        call (cond-> (fn [args kwargs {:keys [budget limit] :as call-opts}]
+        other-program (fn [budget limit report-only mass]
+                        (let [k [budget limit report-only mass]]
+                          (or (get @programs k)
+                              (let [p (compile-for budget limit report-only mass)]
+                                (swap! programs assoc k p)
+                                p))))
+        call (cond-> (fn [args kwargs {:keys [budget limit mass] :as call-opts}]
                        (let [env (bind-params name params defaults args kwargs)]
-                         (if budget
-                           ((:run (bounded-program budget limit false)) env call-opts)
-                           (run env))))
+                         (cond
+                           budget ((:run (other-program budget limit false (boolean mass))) env call-opts)
+                           mass ((:run (other-program nil nil false true)) env)
+                           :else (run env))))
                (:cache opts) cached)
         ;; the model itself, for checking a budget's agents against the memos
         ;; it calls (once per budget, until any memo is redefined)
@@ -316,24 +320,26 @@
                     (check-agents @self budget)
                     (check-effect @self budget)
                     (swap! checked assoc budget epoch))))
-        _ (swap! definitions inc)]
+        _ (swap! definitions inc)
+        ;; a call, with extra internal options (mass) merged into its own
+        invoke (fn [args extra]
+                 (try
+                   (if (map? (last args))
+                     (let [[kwargs call-opts] (call-options name (last args))]
+                       (when (:check-agents call-opts) (check (:budget call-opts)))
+                       (call (butlast args) kwargs (merge (dissoc call-opts :check-agents) extra)))
+                     (call args {} extra))
+                   ;; memo calls nest on the JVM's stack (Python memo's RecursionError)
+                   (catch StackOverflowError _
+                     (err/raise (str "Maximum recursion depth exceeded in memo " name)
+                                {:hint (str "A recursive memo needs a base case: a condition on a parameter, "
+                                            "as in (if (> t 0) (f [..] (- t 1)) 0), that stops its memo calls. "
+                                            "A deep one needs a bigger stack: call it on a thread with one, "
+                                            "(Thread. nil f \"memo\" (* 1024 1024 1024)), or warm a ^:cache "
+                                            "memo in steps.")
+                                 :loc {:name name}}))))]
     (let [m (with-meta
-          (fn [& args]
-            (try
-              (if (map? (last args))
-                (let [[kwargs call-opts] (call-options name (last args))]
-                  (when (:check-agents call-opts) (check (:budget call-opts)))
-                  (call (butlast args) kwargs (dissoc call-opts :check-agents)))
-                (call args {} nil))
-              ;; memo calls nest on the JVM's stack (Python memo's RecursionError)
-              (catch StackOverflowError _
-                (err/raise (str "Maximum recursion depth exceeded in memo " name)
-                           {:hint (str "A recursive memo needs a base case: a condition on a parameter, "
-                                       "as in (if (> t 0) (f [..] (- t 1)) 0), that stops its memo calls. "
-                                       "A deep one needs a bigger stack: call it on a thread with one, "
-                                       "(Thread. nil f \"memo\" (* 1024 1024 1024)), or warm a ^:cache "
-                                       "memo in steps.")
-                            :loc {:name name}}))))
+          (fn [& args] (invoke args nil))
           {:memo/name name
            :memo/doc (:doc parsed)
            :memo/params (mapv :name params)
@@ -345,16 +351,19 @@
            ;; internal (:memo.impl/): not part of the API
            :memo.impl/defaults (set (keys defaults))
            :memo.impl/call call
+           ;; a call returning [table masses], the totals of the beliefs its
+           ;; returns weigh by (memo.analyze's :mass), for memo.gen/deterministic
+           :memo.impl/call-with-masses (fn [& args] (invoke args {:mass true}))
            :memo.impl/compiled compiled
            :memo.impl/ns ns
            :memo.impl/agents agents
            :memo.impl/compile (fn [budget limit report-only]
-                           (bounded-program (bounded/normalize-budget name budget)
-                                            (some->> limit (bounded/limit-value ":memo/limit"))
-                                            (boolean report-only)))
+                           (other-program (bounded/normalize-budget name budget)
+                                          (some->> limit (bounded/limit-value ":memo/limit"))
+                                          (boolean report-only) false))
            :memo.impl/callees #(callees @self)
            ;; [agent part] for each part of a normalized budget bounding something here
-           :memo.impl/bounded-parts #(:bounded-parts (:compiled (bounded-program % nil true)))
+           :memo.impl/bounded-parts #(:bounded-parts (:compiled (other-program % nil true false)))
            :memo.impl/check-budget (fn [budget] (some-> (bounded/normalize-budget name budget) check))})]
       (deliver self m)
       m)))

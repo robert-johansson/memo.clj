@@ -100,6 +100,64 @@
   (alice :observes-that (= bob.o 7))
   (return (as alice (Pr (= bob.o a)))))
 
+;; lost mass, for deterministic's check (memoclj-wbhh). The agent's weights
+;; are all zero where a = PASS, so the observer's beliefs lose their mass
+;; there, and E is 0.
+(defmemo zero-weights [[a Opt]] [beta]
+  (agent :knows a)
+  (agent :chooses [o Opt] :wpp (* a (exp (* beta o))))
+  (return (E agent.o)))
+
+;; half the observer's mass lost (where c is OFF): E over mass 1/2
+(defmemo half-lost [] []
+  (agent :chooses [c Access] :wpp 1)
+  (agent :chooses [o Opt] :wpp c)
+  (return (E agent.o)))
+
+;; lost mass in the second return only
+(defmemo second-lost [[a Opt]] []
+  (alice :knows a)
+  (alice :thinks (bob :chooses [o Opt] :wpp 1))
+  (alice :observes-that (= bob.o 7))
+  (return a)
+  (return (as alice (Pr (= bob.o a)))))
+
+;; alice's beliefs lose their mass inside a query of the observer, whose
+;; own beliefs keep theirs: memo's semantics, not checked
+(defmemo nested-lost [] []
+  (alice :thinks (bob :chooses [o Opt] :wpp 1))
+  (alice :observes-that (= bob.o 7))
+  (carol :chooses [x Access] :wpp 1)
+  (return (E (+ carol.x (as alice (Pr (= bob.o 0)))))))
+
+;; at a return, an imagined choice whose weights read alice's lost beliefs
+;; (Pr is 0) and add 1: a statement's query, not checked; the choice keeps
+;; its mass
+(defmemo imagined-lost [] []
+  (alice :thinks (bob :chooses [o Opt] :wpp 1))
+  (alice :observes-that (= bob.o 7))
+  (return (imagine
+           (alice :chooses [x Access] :wpp (+ 1 (Pr (= bob.o 0))))
+           (E alice.x))))
+
+;; zero-weights, with an if that returns -1 where the mass is lost (as
+;; memo's demo-takeaway does at its terminal state): the query in the branch
+;; not taken reaches no value. A wrong guard leaves PASS's lost mass.
+(defmemo guarded [[a Opt]] [beta]
+  (agent :knows a)
+  (agent :chooses [o Opt] :wpp (* a (exp (* beta o))))
+  (return (if (= a 0) -1 (E agent.o))))
+
+(defmemo guarded-t [[a Opt]] [beta]
+  (agent :knows a)
+  (agent :chooses [o Opt] :wpp (* a (exp (* beta o))))
+  (return (if (> a 0) (E agent.o) -1)))
+
+(defmemo misguarded [[a Opt]] [beta]
+  (agent :knows a)
+  (agent :chooses [o Opt] :wpp (* a (exp (* beta o))))
+  (return (if (= a 1) -1 (E agent.o))))
+
 (defmemo two [[a Opt]] [beta]
   (agent :chooses [o Opt] :wpp (exp (* beta o)))
   (return (Pr (= agent.o a)))
@@ -272,7 +330,9 @@
   (is (= "The value 3 of given axis u of memo L1 is not in its domain"
          (memo-message #((mg/dist L1 {:given '[u]}) [3] 1.5))))
   (is (= "deterministic: :return 5 is not a return of memo two, which has 2"
-         (memo-message #(mg/deterministic two {:return 5})))))
+         (memo-message #(mg/deterministic two {:return 5}))))
+  (is (= "deterministic: :check-mass is true or false, not 0"
+         (memo-message #(mg/deterministic two {:check-mass 0})))))
 
 (deftest deterministic-is-the-table
   (is (close? (host (choose 1.3 0.4)) (host ((mg/deterministic choose) 1.3 0.4))))
@@ -280,7 +340,46 @@
   (let [m (gen [b] (splice :mind (mg/deterministic choose) b 0.4))
         tr (gfi/simulate m [1.3] (rng/key 1))]
     (is (close? (host (choose 1.3 0.4)) (host (:retval tr))))
-    (is (close? 0.0 (host (:score tr))))))
+    (is (close? 0.0 (host (:score tr)))))
+  (testing "beliefs that keep their mass pass the check: an observation, agents' frames"
+    (is (close? (host (L1 1.5)) (host ((mg/deterministic L1) 1.5))))))
+
+(deftest deterministic-checks-lost-mass
+  (testing "an agent's beliefs that a return reads: memo's silent 0, an error"
+    (is (close? [0.0 0.0 0.0] (host (impossible))))
+    ;; alice's beliefs do not vary with a
+    (is (re-find #"^Memo impossible's return weighs by beliefs of alice that have lost mass \(Pr, line \d+\), in every cell \(total 0\.0\)$"
+                 (str (memo-message #((mg/deterministic impossible)))))))
+  (testing "the observer's, in one cell: a choice whose weights are all zero"
+    (is (close? 0.0 (first (host (zero-weights 1.0)))))
+    (is (re-find #"^Memo zero-weights's return weighs by beliefs of observer that have lost mass \(E, line \d+\), for a = PASS \(total 0\.0\)$"
+                 (str (memo-message #((mg/deterministic zero-weights) 1.0))))))
+  (testing "part of it: an E over mass 1/2"
+    (is (close? 0.5 (host (half-lost))))
+    (is (re-find #"lost mass \(E, line \d+\): their total is 0\.5$"
+                 (str (memo-message #((mg/deterministic half-lost)))))))
+  (testing "only the return deterministic returns"
+    (is (close? [0.0 1.0 2.0] (host ((mg/deterministic second-lost {:return 0})))))
+    (is (re-find #"beliefs of alice that have lost mass" (str (memo-message #((mg/deterministic second-lost {:return 1}))))))
+    (is (re-find #"beliefs of alice that have lost mass" (str (memo-message #((mg/deterministic second-lost)))))))
+  (testing "a query inside another query is weighed by it, not checked"
+    (is (close? 0.5 (host ((mg/deterministic nested-lost))))))
+  (testing "nor is a query in a statement, even an imagined one at a return"
+    (is (close? 0.5 (host ((mg/deterministic imagined-lost))))))
+  (testing "a query in an if's branch, where the branch is not taken, reaches no value"
+    (is (close? (host (guarded 1.0)) (host ((mg/deterministic guarded) 1.0))))
+    (is (close? (host (guarded-t 1.0)) (host ((mg/deterministic guarded-t) 1.0))))
+    (is (re-find #"lost mass \(E, line \d+\), for a = PASS \(total 0\.0\)$"
+                 (str (memo-message #((mg/deterministic misguarded) 1.0))))))
+  (testing "{:check-mass false}: memo's table, as it is"
+    (is (close? [0.0 0.0 0.0] (host ((mg/deterministic impossible {:check-mass false})))))
+    (is (close? 0.5 (host ((mg/deterministic half-lost {:check-mass false}))))))
+  (testing "under gradients and the batch tracer: memo's error, naming the cells"
+    (is (re-find #"lost mass \(E, line \d+\), for a = PASS \(total 0\.0\)$"
+                 (str (memo-message #((array/grad (fn [b] (array/sum ((mg/deterministic zero-weights) b)))) 1.0)))))
+    ;; batched, the totals differ by particle and are left out
+    (is (re-find #"lost mass \(E, line \d+\), for a = PASS$"
+                 (str (memo-message #((array/vmap (mg/deterministic zero-weights)) (array/array [0.5 1.0]))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; In gen.clj models: batched runs and the GFI laws

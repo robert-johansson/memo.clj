@@ -636,6 +636,17 @@
         x (if (clojure.core/> (array/ndim x) 1) (array/transpose x) x)]
     (if (empty? shape) x (array/broadcast-to x shape))))
 
+(defn- mass-table
+  "A belief's total (memo.analyze's record-mass) over the memo's axes, in
+  their order, as table makes a result, but left at size 1 along the axes
+  it does not vary along (a memo's full table can be large): its least over
+  any other dim it varies along."
+  [x {:keys [n-dims forall]}]
+  (let [axis-dims (set (map first forall))
+        others (vec (remove axis-dims (range n-dims)))
+        x (array/squeeze (pad (reduce-dims array/min x others) n-dims) (mapv axis others))]
+    (if (clojure.core/> (array/ndim x) 1) (array/transpose x) x)))
+
 (defn- calls-first
   "instrs with every memo call, and the instructions it reads (statics: its
   arguments and path conditions), moved to the front, each group in its own
@@ -697,17 +708,19 @@
   values; :fns, :inlines, :param-order. Memo calls run first (calls-first),
   and no value is kept past its last use (drops). What does not depend on
   the call (constant) is computed once per backend, at its first call
-  there."
+  there. A program with :masses (memo.analyze's :mass) returns [result
+  masses], each of its :masses with :mass, its total over the axes (mass-table)."
   [compiled ctx]
-  (let [{:keys [results]} compiled
+  (let [{:keys [results masses]} compiled
+        outputs (into results (map :tag) masses)
         all (calls-first (:instrs compiled))
         const (constant all)
         const-instrs (filterv #(const (:out %)) all)
         instrs (filterv #(not (const (:out %))) all)
-        ;; the constants read by the rest, or results
-        kept-consts (into (set (filter const results))
+        ;; the constants read by the rest, or outputs (results, masses)
+        kept-consts (into (set (filter const outputs))
                           (comp (mapcat ir/inputs) (filter const)) instrs)
-        dead (drops instrs results)
+        dead (drops instrs outputs)
         ;; #{...} forms read only as arguments of host functions and memo
         ;; calls, which may take any value (a vector, say)
         readers (reduce (fn [m instr] (reduce #(update %1 %2 (fnil conj #{}) (:i instr)) m (ir/inputs instr)))
@@ -734,5 +747,8 @@
        (let [ctx (assoc ctx :call call)
              env (reduce (fn [env [instr dead]] (apply dissoc (step ctx env instr) dead))
                          (merge (constants) params) (map vector instrs dead))
-             tables (mapv #(table (get env %) compiled) results)]
-         (if (= 1 (count tables)) (first tables) (array/stack tables)))))))
+             tables (mapv #(table (get env %) compiled) results)
+             result (if (= 1 (count tables)) (first tables) (array/stack tables))]
+         (if masses
+           [result (mapv #(assoc % :mass (mass-table (get env (:tag %)) compiled)) masses)]
+           result))))))

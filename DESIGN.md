@@ -720,8 +720,9 @@ speed research (§6.4, question 3).
     several. They stack on a leading axis.
 - **`(mg/deterministic model opts)` gives a `gen.custom/deterministic`
   generative function** returning the memo's table, or one return of it,
-  through the same NaN guard. Use it to splice a mind at an address where a
-  trace should show it. Otherwise call the model directly: it already is
+  through the same NaN guard, and with lost mass an error (§13.9,
+  memoclj-wbhh; `:check-mass false` turns that off). Use it to splice a
+  mind at an address where a trace should show it. Otherwise call the model directly: it already is
   the plain function the old sketch's `memo/fn` described. A memo's
   parameters as trainable `:params` (gen.clj's learning) can come later, if
   a client needs them.
@@ -1594,6 +1595,33 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
    0, feeding its choice), which is memo's semantics. A check for
    `deterministic` (the observer's mass at the return, per cell) is
    memoclj-wbhh's, for when a client fits through expected values.
+   *Built 2026-10-26 (memoclj-wbhh), before the 1.0 tag, at the owner's
+   word:* not only the observer's mass. Each query a return reads (`E`,
+   `Pr`, `Var`, `H`, `KL`, `EU`), not inside another query or a statement,
+   records the total of the beliefs it weighs by, per cell of the axes.
+   That covers a return reading an agent's beliefs, `(as pond (Pr ...))`,
+   the usual place of an impossible observation, which the observer's mass
+   misses. `memo.analyze` records the totals when asked (`:mass`), in a
+   variant of the program `memo.core` compiles on demand, so a plain call
+   and its IR are unchanged. `deterministic` checks the masses of the
+   return it returns, within `dist`'s tolerance (1e-6 + n·eps, n the cells
+   summed), and names the beliefs, the query and the cells, by the axes
+   the loss varies along. A total stays at its own shape, size 1 along the
+   axes it does not vary with: broadcast to the table, demo-empowerment's
+   (3125 x 169 x 169 cells, 714 MB in float64) took the JVM out of its
+   8 GB heap. Not checked: a
+   query inside another or in a choice's weights (memo's semantics), and a
+   bounded agent's sampled beliefs. An `if` computes both branches; a
+   query in one counts only where it is taken (its mass `where`d to 1
+   elsewhere), since memo's demo-takeaway returns -1 at its terminal state,
+   where the move it imagines has no mass. The condition's queries count
+   everywhere: a guard `(if (> (Pr ...) 0) ...)` over lost beliefs, like a
+   model that loses mass on purpose, passes `{:check-mass false}`. The
+   Handbook's "Stability" lets a release change the bridge's checks either
+   way (a new check for a silent wrong number, or no error where the
+   number is right). A full-suite audit with every exact call computing
+   its masses found no total off by more than the tolerance outside the
+   models that lose mass by design (see the bean).
 10. **NaN gradients where the values are right** (§2.4). *Decided
     2026-10-20:* the values keep matching JAX, and the M2 bridge makes a
     NaN gradient a loud error, so fitting never fails silently. Repairing

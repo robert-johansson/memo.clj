@@ -277,16 +277,36 @@
                                   :what what :line (:line loc) :k k :categories mprime :sets n})
      q]))
 
+(defn- record-mass
+  "With :check-mass (a return's index, while the analysis asked for masses
+  evaluates that return outside any query or statement), the total of the
+  belief ll a query weighs by, over the frame's unknown dims, recorded in
+  :masses with the frame, the query and n, the cells summed. It is 1 unless
+  the belief lost its mass (an impossible observation, a choice whose
+  weights are all zero), which memo leaves silently: memo.gen/deterministic
+  checks it (memoclj-wbhh)."
+  [state ll loc what]
+  (let [frm (fr/get-frame state)
+        cells (reduce * 1.0 (vals (into {} (keep (fn [[_ c]]
+                                                   (when-not (:known c)
+                                                     [(:idx c) (count (get-in state [:domains (:domain c)]))])))
+                                         (:choices frm))))
+        [state m] (fresh state "mass")
+        state (emit state {:i :sum :out m :arg ll :dims (unknown-dims state)})]
+    (update state :masses (fnil conj []) {:tag m :frame (:name frm) :what what :loc loc :cells cells
+                                          :return (:check-mass state)})))
+
 (defn- query-ll
   "The belief a query reads, [state sym-or-nil]: the frame's ll (read-ll), or,
   in a bounded agent's frame, an empirical belief from samples of the dims in
-  sample-dims (sample-ll)."
+  sample-dims (sample-ll). An exact belief read for a return has its mass
+  recorded (record-mass)."
   [state loc sample-dims what]
   (let [ll (read-ll state loc)
         spec (frame-budget state)]
     (if (and (:samples spec) (not (:exact state)))
       (sample-ll state loc ll sample-dims spec what)
-      [state ll])))
+      [(cond-> state (and ll (:check-mass state)) (record-mass ll loc what)) ll])))
 
 (defn- add-evidence
   "With a budget, the frame's evidence (the probability of its observations,
@@ -332,6 +352,23 @@
                                     (:name frm) " :knows " id ") statement?"))))))
     [state {:tag (:tag ch) :known (:known ch) :deps #{['self id]}}]))
 
+(defn- branch-masses
+  "With :check-mass, the masses recorded at indices [from, to), in a branch
+  of an if with condition c (the true branch when taken?), counted as 1
+  where the branch is not taken: an if computes both branches, and a query
+  in the one not taken reaches no value. A query in c is checked as it is."
+  [state from to c taken?]
+  (if-not (and (:check-mass state) (< from to))
+    state
+    (let [[state one] (fresh state "lit")
+          state (emit state {:i :const :out one :value 1.0})]
+      (reduce (fn [st i]
+                (let [m (get-in st [:masses i :tag])
+                      [st out] (fresh st "mass")]
+                  (-> (emit st {:i :where :out out :args (if taken? [c m one] [c one m])})
+                      (assoc-in [:masses i :tag] out))))
+              state (range from to)))))
+
 (defn- eval-op [state e]
   (let [{:keys [op args]} e]
     (cond
@@ -353,22 +390,28 @@
       (= op :ite)
       (let [[c-ast t-ast f-ast] args
             [state c] (eval-expr state c-ast)
+            n0 (count (:masses state))
             ;; a static condition guards the memo calls in its branches
             ;; (path conditions, as core.py's path_depends)
-            [state tv fv]
+            [state tv fv n1]
             (if (:static c-ast)
               (let [state (update state :path-conds conj (:tag c))
                     [state tv] (eval-expr state t-ast)
+                    n1 (count (:masses state))
                     state (update state :path-conds pop)
                     [state inv] (fresh state "op_inv")
                     state (emit state {:i :op :op :inv :out inv :args [(:tag c)]})
                     state (update state :path-conds conj inv)
                     [state fv] (eval-expr state f-ast)
                     state (update state :path-conds pop)]
-                [state tv fv])
+                [state tv fv n1])
               (let [[state tv] (eval-expr state t-ast)
+                    n1 (count (:masses state))
                     [state fv] (eval-expr state f-ast)]
-                [state tv fv]))
+                [state tv fv n1]))
+            state (-> state
+                      (branch-masses n0 n1 (:tag c) true)
+                      (branch-masses n1 (count (:masses state)) (:tag c) false))
             [state out] (fresh state "op_ite")]
         [(emit state {:i :where :out out :args [(:tag c) (:tag tv) (:tag fv)]})
          {:tag out
@@ -479,12 +522,16 @@
                            (= (count (set idxs)) (count idxs))))]
     (if (and pairs distinct-axes?)
       (eval-posterior state {:query (mapv first pairs) :var (mapv second pairs) :loc (:loc e)})
-      (let [[state val] (if (:bounded state)
+      (let [armed (:check-mass state)
+            ;; a query inside this one is weighed by it: its mass is not checked
+            state (assoc state :check-mass nil)
+            [state val] (if (:bounded state)
                           ;; what this query averages over is mixed by it
                           (let [mixing (:mixing state)
                                 [st v] (eval-expr (update state :mixing (fnil into []) (unknown-dims state)) expr)]
                             [(assoc st :mixing mixing) v])
                           (eval-expr state expr))
+            state (assoc state :check-mass armed)
             frm (fr/get-frame state)
             all-known? (every? #(get-in frm [:choices % :known]) (:deps val))]
         (when (and all-known? warn)
@@ -1449,22 +1496,27 @@
       (fr/update-frame assoc-in [:children who :variant] variant)))
 
 (defn eval-stmt [state s]
-  (case (:node s)
-    :pass state
-    :forall (eval-forall state s)
-    :choose (eval-choose state s)
-    :with-stmt (eval-with-stmt state s)
-    :observe (eval-observe state s)
-    :show (eval-show state s)
-    :observes-factor (eval-observes-factor state s)
-    :knows (eval-knows state s)
-    :snapshot (eval-snapshot state s)
-    :guess (eval-guess state s)
-    :variant (eval-variant state s)
-    :trace (eval-trace state s)
-    :wants (eval-wants state s)
-    :forgets-about (eval-forgets-about state s)
-    (err/raise (str "Unknown statement node " (:node s)) {:user false :loc (:loc s)})))
+  ;; a statement's queries (an imagined one's, at a return) feed its choices,
+  ;; not the return: their masses are not checked (record-mass)
+  (let [armed (:check-mass state)
+        state (cond-> state armed (assoc :check-mass nil))
+        state (case (:node s)
+                :pass state
+                :forall (eval-forall state s)
+                :choose (eval-choose state s)
+                :with-stmt (eval-with-stmt state s)
+                :observe (eval-observe state s)
+                :show (eval-show state s)
+                :observes-factor (eval-observes-factor state s)
+                :knows (eval-knows state s)
+                :snapshot (eval-snapshot state s)
+                :guess (eval-guess state s)
+                :variant (eval-variant state s)
+                :trace (eval-trace state s)
+                :wants (eval-wants state s)
+                :forgets-about (eval-forgets-about state s)
+                (err/raise (str "Unknown statement node " (:node s)) {:user false :loc (:loc s)}))]
+    (cond-> state armed (assoc :check-mass armed))))
 
 ;; -----------------------------------------------------------------------------
 ;; a whole memo
@@ -1501,15 +1553,19 @@
   :report-only, sizes above it are reported, not errors). A bounded program
   also has :bounded-report, its choices' sizes, and :bounded-parts, [agent
   part] for each part of the budget (:samples, :options) that reaches a query
-  or a choice (:options k reaches a choice of k or fewer options too)."
-  [{:keys [pctxt stmts retvals]} domains {:keys [variant callee bounded limit report-only]}]
+  or a choice (:options k reaches a choice of k or fewer options too). With
+  :mass (memo.gen/deterministic's check), the program also has :masses, the
+  totals of the beliefs its returns weigh by (record-mass), each {:tag
+  :frame :what :loc :cells :return}."
+  [{:keys [pctxt stmts retvals]} domains {:keys [variant callee bounded limit report-only mass]}]
   (let [state (reduce (fn [st [i s]]
                         (eval-stmt (assoc st :continuation (subvec stmts (inc i))) s))
                       (assoc (initial-state pctxt domains variant)
                              :callee callee :bounded bounded :limit limit :report-only report-only)
                       (map-indexed vector stmts))
-        [state vals] (reduce (fn [[st acc] retval]
-                               (let [[st val] (eval-expr st retval)]
+        [state vals] (reduce (fn [[st acc] [i retval]]
+                               (let [[st val] (eval-expr (cond-> st mass (assoc :check-mass i)) retval)
+                                     st (assoc st :check-mass nil)]
                                  (when-not (:known val)
                                    (err/raise "Returning a value that the observer has uncertainty over"
                                               (assoc (frame-err-opts st (:loc retval))
@@ -1518,16 +1574,17 @@
                                                                 "(Pr ...) expression?"))))
                                  [st (conj acc val)]))
                              [state []]
-                             retvals)
+                             (map-indexed vector retvals))
         forall (:forall state)]
-    {:instrs (:instrs state)
-     :results (mapv :tag vals)
-     :forall forall
-     :axes (mapv second forall)
-     :domains (mapv #(nth % 2) forall)
-     :shape (mapv (fn [[_ _ dom]] (count (get domains dom))) forall)
-     :n-dims (:next-dim state)
-     :bounded-report (:report state)
-     :bounded-parts (into (set (map (fn [a] [a :options]) (:all-considered state)))
-                          (for [{:keys [agent sources]} (:report state), {:keys [kind]} sources]
-                            [agent kind]))}))
+    (cond-> {:instrs (:instrs state)
+             :results (mapv :tag vals)
+             :forall forall
+             :axes (mapv second forall)
+             :domains (mapv #(nth % 2) forall)
+             :shape (mapv (fn [[_ _ dom]] (count (get domains dom))) forall)
+             :n-dims (:next-dim state)
+             :bounded-report (:report state)
+             :bounded-parts (into (set (map (fn [a] [a :options]) (:all-considered state)))
+                                  (for [{:keys [agent sources]} (:report state), {:keys [kind]} sources]
+                                    [agent kind]))}
+      mass (assoc :masses (vec (:masses state))))))

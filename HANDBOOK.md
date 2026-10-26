@@ -1761,9 +1761,8 @@ after a memo is defined again at a REPL, make it again.
 **Deterministic generative functions.** `mg/deterministic` returns the
 memo's table (or one return of it, with `:return`) as a deterministic
 generative function, for splicing a mind at an address where a trace
-should show it. Its score is 0. Outside a model, calling the memo itself
-is the same. Unlike a distribution's, its values are not checked for lost
-mass: an impossible observation gives 0, silently, as in memo.
+should show it. Its score is 0. Outside a model, calling it gives what
+calling the memo does, with one check more.
 
 ```clojure
 (def frog-mind (mg/deterministic hop))
@@ -1771,6 +1770,59 @@ mass: an impossible observation gives 0, silently, as in memo.
 (:retval (gfi/simulate (gen [beta] (splice :mind frog-mind beta)) [1.0] (rng/key 0)))
 ;=> [0.2689414213699951 0.7310585786300049]
 ```
+
+**Lost mass is an error.** memo leaves beliefs without mass silently: after
+an impossible observation, or a choice whose weights are all zero, a query
+over them gives 0, and an `E` over beliefs that lost part of their mass is
+too small. A fit would take either as a value. So `mg/deterministic`
+checks, at every call, each query its return reads (`E`, `Pr`, `Var`, `H`,
+`KL`, `EU`) that is not inside another query. The beliefs it weighs by must
+total 1 in every cell of the axes, within 1e-6 + n·eps. Otherwise the call
+is an error naming whose beliefs, the query and the cells:
+
+```clojure
+;; error: Memo stuck's return weighs by beliefs of observer that have lost mass
+(defmemo stuck [[g Gap]] []
+  (frog :knows g)
+  (frog :chooses [m Move] :wpp (< g 3))   ; no move across a gap of 3
+  (return (E frog.m)))
+
+((mg/deterministic stuck))
+```
+
+The message goes on to name the query (`E`), its line, and the cell: `for
+g = 3 (total 0.0)`. `nowhere`'s return, above, reads the pond's beliefs,
+and fails the same way. Not checked:
+
+- **A query inside another query, or in a statement** (a choice's
+  weights): the outer query, or the choice, weighs its value, which is
+  memo's semantics.
+- **A bounded agent's sampled beliefs.**
+
+A query in a branch of an `if` is checked where the branch is taken:
+
+```clojure
+(defmemo stuck-or-not [[g Gap]] []
+  (frog :knows g)
+  (frog :chooses [m Move] :wpp (< g 3))
+  (return (if (= g 3) -1 (E frog.m))))
+
+((mg/deterministic stuck-or-not))
+;=> [0.5 0.5 -1.0]
+```
+
+The condition's own queries are checked everywhere, so a guard such as
+`(if (> (Pr ...) 0) ...)` over beliefs that lost their mass is an error. A
+model that loses mass on purpose, a 0 for a case it means to be
+impossible, is made with `{:check-mass false}`:
+
+```clojure
+((mg/deterministic stuck {:check-mass false}))
+;=> [0.5 0.5 0.0]
+```
+
+On MLX the check evaluates the beliefs at each call, as a distribution's
+check evaluates its table.
 
 ---
 
@@ -2145,6 +2197,11 @@ and only a new major version removes or changes it.
   model options `^:cache` and `^{:variant ...}`.
 - **Metadata and error data:** the keys under `:memo/` listed in
   [Executing a memo](#executing-a-memo) and [Errors](#errors).
+- **The bridge's options:** `mg/dist`'s `:given` and `:return`,
+  `mg/deterministic`'s `:return` and `:check-mass`. Its checks may change
+  in either direction: a release may add a check that turns a silent wrong
+  number into an error, or stop raising an error where the number is
+  right.
 
 Not frozen: error messages, `format-error`'s, `print-table`'s and
 `program`'s text, how often a host function is called (tabulation,

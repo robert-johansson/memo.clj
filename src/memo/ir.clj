@@ -74,14 +74,14 @@
 
 (defn check
   "The problems of a program, as strings: unknown kinds, symbols read before
-  they are defined, symbols defined twice, results never defined. [] when the
-  program is well formed."
-  [{:keys [instrs results]}]
+  they are defined, symbols defined twice, results (or masses) never defined.
+  [] when the program is well formed."
+  [{:keys [instrs results masses]}]
   (loop [i 0, defined #{}, problems []]
     (if (= i (count instrs))
       (into problems
             (keep #(when-not (defined %) (str "result " % " is never defined")))
-            results)
+            (into results (map :tag) masses))
       (let [{kind :i out :out :as instr} (nth instrs i)
             problems (cond-> problems
                        (not (kinds kind))
