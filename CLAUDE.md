@@ -45,7 +45,9 @@ MEMO_DEMOS=demo-rsa,demo-fib memo-mcp/venv/bin/python -I test/fixtures/generate.
 clojure -X:test:fuzz :n 2000 :seed 1  # a differential fuzzing campaign against Python memo (memo.fuzz)
 ```
 
-gen.clj is pinned to a commit (`deps.edn`). GenGDT pins gen.clj too, and its
+gen.clj is pinned to its v1.0.0 release by its GitHub URL (`deps.edn`), and
+the tests take its laws module (`gen.clj/laws`, `:deps/root "ext/laws"`) at
+the same release. GenGDT pins gen.clj too, and its
 pin silently overrides this one, so when GenGDT moves its memo.clj pin, its
 gen.clj pin must move to the one that memo.clj commit names
 (`gengdt.pins-test` checks it). After a fresh clone, run `clojure -X:deps prep` once (gen.clj compiles its

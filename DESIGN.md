@@ -90,7 +90,11 @@ In order:
      commit (memoclj-a7b3). memo.clj does not read the handler's state
      (genclj-q6sc). gen.clj's 1.0 release candidate is 2ab533b; its tag
      will differ only in the book's prose and the CHANGELOG, so a pass
-     there counts for the tag.
+     there counts for the tag. memo.clj passed there (2e5fec3: JVM 185
+     tests / 2960 assertions, Metal 185 / 2961). *2026-10-26:* gen.clj
+     v1.0.0 is tagged (39b65bf, only tests and docs past 2ab533b), and
+     memo.clj pins it, and its laws module, by gen.clj's GitHub URL
+     (memoclj-kxj1).
      The path to the tag (gen-clj-65): pin gen.clj's release candidate
      and run the suite on every backend (memoclj-tzty), pin gen.clj's 1.0
      tag (memoclj-kxj1), then tag memo.clj's 1.0 (memoclj-y9vo).
