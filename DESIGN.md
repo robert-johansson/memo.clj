@@ -1679,13 +1679,33 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
       (20,419,565,568 bytes, repository commit 7878dc9, SHA-256
       671e47e0…40c7 checked). Its architecture is `qwen35moe`, which the
       llama.cpp gen.clj pins (v0.7.0) lists among its architectures.
-      Loading it in `gen.llm.llama` has not been tried (a GPU JVM: one at
-      a time on this Mac); gen.clj has tested Qwen3.5's hybrid at 0.8B.
-    - gen.clj's MLX-native forwards, which could read this checkpoint,
+    - gen.clj's MLX-native forwards, which could read the MLX checkpoint,
       are "later" in gen.clj's DESIGN §6.
-    - This Mac has 32 GB, so about 10 GB would remain beside the model.
-      gen.clj's genclj-h80d covers a 30B-A3B beside MLX working sets, on
-      the 64 GB MacBook.
+    - **Not on this Mac:** models above about 8 GB run on the owner's
+      64 GB MacBook, not on this 32 GB Mac. That is the owner's rule
+      (2026-10-20), recorded by gen.clj after MLX JVMs caused a kernel
+      panic here on 2026-10-19.
+    - *First tries, 2026-10-31,* both with gen.clj's scratch session
+      `tmp/qwen36-first-try.clj` (gitignored), which loads a model through
+      `gen.llm.llama`, scores continuations through `gen.llm.lm`, and
+      builds a 4 × 3 table: P(" none" | " some" | " all" | Alice ate k of
+      3 cookies), normalized per row.
+      - *Qwen3.5-0.8B (Q8_0), on this Mac:* it loads in 0.74 s, with a
+        footprint of 1.48 GB, and a warm score takes about 32 ms. The
+        table has no signal: " none" gets 0.56–0.62 in every row.
+      - *Qwen3.6-35B-A3B (Q4_K_M), on the MacBook* (M2 Max, Metal's
+        working set 55.66 GB): set up there from a plain clone of
+        gen.clj (main 4811d3c), with llama.cpp v0.7.0 built on the
+        MacBook; it runs under a guard on the system's memory pressure.
+        It loads in 2.1 s, with a footprint of 21.33 GB, and a warm score
+        takes 55–60 ms. After "The capital of Sweden is", " Stockholm."
+        is −1.38 nats against " Oslo." at −7.78. The table has signal:
+        " none" 0.986 at 0, " all" 0.936 at 3, " some" 0.527 at 2. At 1,
+        " none" (0.520) narrowly beats " some" (0.460), probably because
+        the prompt lists it first. That is usable as a literal speaker
+        P(word | count), a host function's table inside a mind.
+      - A table of 12 cells took 1.66 s on the 35B. Tabulated at every
+        call of a memo, that is the cost §14.4's cache removes.
 
 ## 14. M4: the rest (planned 2026-10-31)
 
