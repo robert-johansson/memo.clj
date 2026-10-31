@@ -120,6 +120,13 @@ In order:
 5. **M4 — the rest, as needed.** The Python transpiler as user tooling (it is
    test tooling from M1), cost reflection, certification, model synthesis,
    and the static graph that gen.clj's static modeling language provides.
+   *Planned 2026-10-31 (§14, memoclj-7tc0), in two halves:*
+   - *the parity half,* what Python memo 1.3.3 has and memo.clj lacks
+     (cost reflection, tables as data, tracing and the frame comic), plus
+     a cache of host-function tables and the transpiler in `src`; it ships
+     as memo.clj 1.1;
+   - *the research half* (certification, synthesis, the static graph),
+     which waits for the owner to give each item a purpose.
 
 Its first client is GenGDT, which writes minds in memo.clj and cycles, data
 and fitting in gen.clj. memo.clj is general: theory-of-mind, pragmatics,
@@ -1627,3 +1634,273 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
     NaN gradient a loud error, so fitting never fails silently. Repairing
     such gradients (a zero-probability term contributing 0, which departs
     from JAX) may come later as an opt-in.
+12. **LLMs and memo.clj** (asked 2026-10-31). The owner hopes to call a
+    local Qwen 3.6 35B-A3B through gen.clj's llama.cpp layer (`gen.llm`),
+    and asks whether memo.clj should call an LLM itself, or whether LLMs
+    should always go through gen.clj. *Recommended (proposed 2026-10-31):*
+    memo.clj gets no LLM API of its own and does not depend on `gen.llm`.
+    An LLM reaches memo.clj the way any gen.clj code does, in two places:
+    - **Inside a mind, as a host function.** A Clojure function that
+      scores with `gen.llm` (`gen.llm.lm/score`, log-probabilities of a
+      continuation) over finite domains is tabulated like any host
+      function (§5), as demo-7segment's torch network is in Python memo.
+      That works today, with nothing new in memo.clj. What memo.clj owes
+      it is §14.4's cache: a host function is tabulated afresh at every
+      call, every cell, and an LLM tabulated at every call of a fit is
+      far too slow. If that proves needed later, a host function could
+      also be given a whole column of cells at once, so that it scores
+      them in one `batch-next-logprobs`.
+    - **Around a mind, in gen.clj.** An LLM as a generative function
+      (gen.llm's token generative function, its token SMC) sits in the
+      same gen.clj model as a memo used through `memo.gen`. A proposer
+      and synthesis (§14.6) are gen.clj code that writes memo.clj forms.
+
+    Why:
+    - Every `gen.llm` namespace is experimental in gen.clj 1.0
+      (`{:api :experimental}`), so a memo.clj API over it could not be
+      frozen.
+    - An engine holds GPU memory and a KV cache (reserved in
+      `gen.array.memory`, released by `with-open`). With gen.clj as its
+      one owner, "one GPU-heavy JVM at a time" on the Mac stays
+      manageable.
+    - memo's minds are finite. An LLM fits inside one as a table over
+      finite domains, which is what a host function already is. Open-ended
+      text is not a memo construct.
+    - memo.clj's core stays Clojure and gen.clj (§11).
+
+    *Practical, and gen.clj's side (checked 2026-10-31):*
+    - The checkpoint on this Mac (`~/.cache/models/Qwen3.6-35B-A3B-4bit`,
+      19 GB) is in MLX's format: mlx-community's 4-bit safetensors,
+      converted by mlx-vlm, architecture `qwen3_5_moe` (256 experts,
+      hybrid linear attention, image-text-to-text). llama.cpp cannot load
+      it, so `gen.llm.llama` needs a GGUF of the model.
+    - *Downloaded 2026-10-31:* ggml-org's Q4_K_M,
+      `~/gen-clj-models/ggml-org-2026-10-31/Qwen3.6-35B-A3B-Q4_K_M.gguf`
+      (20,419,565,568 bytes, repository commit 7878dc9, SHA-256
+      671e47e0…40c7 checked). Its architecture is `qwen35moe`, which the
+      llama.cpp gen.clj pins (v0.7.0) lists among its architectures.
+      Loading it in `gen.llm.llama` has not been tried (a GPU JVM: one at
+      a time on this Mac); gen.clj has tested Qwen3.5's hybrid at 0.8B.
+    - gen.clj's MLX-native forwards, which could read this checkpoint,
+      are "later" in gen.clj's DESIGN §6.
+    - This Mac has 32 GB, so about 10 GB would remain beside the model.
+      gen.clj's genclj-h80d covers a 30B-A3B beside MLX working sets, on
+      the 64 GB MacBook.
+
+## 14. M4: the rest (planned 2026-10-31)
+
+*Planned 2026-10-31 at the owner's request (memoclj-7tc0); nothing here is
+built, and every choice marked (proposed) is the owner's to decide. M4 has
+two halves.*
+- *The parity half* (§14.1–§14.5) is what Python memo 1.3.3 has and
+  memo.clj lacks: cost reflection, tables as data, tracing and the frame
+  comic. Two items of memo.clj's own join it: a cache of host-function
+  tables, and the transpiler in `src`. Python memo defines the first
+  three, so they need no client and no research. New constructs come in a
+  minor release (§13.4), so this half ships as memo.clj 1.1.
+- *The research half* (§14.6) continues memo-clj's research program and
+  reaches gen.clj's static language. Each item waits for the owner to give
+  it a purpose.
+
+### 14.1 Cost reflection
+
+**Python memo 1.3.3** (`parse.py`, `core.py`'s `ECost`, `codegen.py`):
+- **The syntax:** `cost @ f(args)` is an expression; `time @` is its alias,
+  and `space @` and `size @` read other measures. `f` is a memo, and its
+  arguments must be static: otherwise the compile error is "parameter not
+  statically known", with a memo call's hint.
+- **The value** is a host number, known (no uncertainty, no deps). It is
+  computed outside the jitted program, by calling `f(..., return_cost=True)`,
+  and is 0 where the path condition (the static guard of a recursion) is
+  false.
+- **`time`** is XLA's `cost_analysis()` of f's compiled program, flops plus
+  transcendentals. **`space`** is XLA's `memory_analysis()`,
+  `temp_size_in_bytes`. Each memo is its own jitted program, so both add the
+  costs of the memos f calls, per call site, recursion unrolled
+  (`aux.cost += res_aux.cost`).
+- **`size`** is the number of nodes in f's own syntax tree (`weigh` over its
+  statements and returns, counting every field of every dataclass), not its
+  callees'.
+- **Stability:** Python memo's Handbook warns that these values "are _not_
+  guaranteed to be stable across versions of memo or JAX, because they
+  depend on compiler internals".
+- **Where it is used:**
+  - test.py's seven cases (`cost_1`, `cost_kwarg`, `cost_time`,
+    `cost_time_matches_cost`, `cost_space`, `cost_size`, `cost_size_kwarg`),
+    which `testpy_test` skips today as M4. `cost_kwargs_unpacking_err`
+    stays skipped: memo.clj has no `**`.
+  - demo-takeaway's `quick`, which weighs moves by
+    `exp(π * 500000 / (cost @ π(t)))`, so its table depends on the FLOP
+    count itself. Its twin is not ported (`:not-ported`).
+- **memo.clj today:** the reader reserves `(cost @(f ...))` and its three
+  siblings (§8), and `memo.parse` raises "cost reflection is not supported
+  in memo.clj yet (DESIGN.md M4)".
+
+**What memo.clj can match:**
+- **`size @` exactly** (proposed). It is a function of the program text,
+  and memo.parse's AST mirrors Python memo's node for node (memo.pygen's
+  premise). The counter follows `weigh`'s rule over Python memo's dataclass
+  fields; where a memo.clj node has a field that Python's lacks, or the
+  reverse, it follows Python's. Parity tests use fixtures from twins.
+- **Not `time @` or `space @`.** memo.clj has no XLA, gen.array exposes no
+  cost analysis on any backend, and XLA's numbers change with JAX's
+  version.
+
+**Proposed:**
+- **`time @` (and `cost @`) count the operations of memo.clj's program.**
+  This is memo-clj's definition (its `memo.cost`, to be reviewed before it
+  is lifted):
+  - an arithmetic operation counts once per output cell, and a reduction
+    once per input cell;
+  - structure (layout, gathers, broadcasts) is free, and so are constants:
+    what memo.lower computes once per backend counts as XLA's constant
+    folding does, nothing;
+  - a tabulated host function counts once per cell;
+  - callees are unrolled per call site, as Python memo's are, with
+    recursion resolved by evaluating the static guards.
+
+  The count is a function of the program and its static arguments alone.
+  It is the same on every backend, and stable within a minor release (a
+  change goes in the release notes). It is not Python memo's number: a
+  documented divergence (§2.4), like `print-table`'s text. Where test.py
+  pins values, they agree anyway: `cost @ inline()` is 0.0, since a
+  constant is free in both, and `time @` equals `cost @`.
+- **`space @` is the peak of live intermediate bytes** under memo.lower's
+  schedule, which drops each value after its last use (§5). It is counted
+  at the backend's dtype, and callees are added per call site, as Python
+  memo adds them. So it halves from float64 to float32 backends, a
+  documented difference (§13.8). The alternative is cells, free of dtype,
+  which Python's bytes would not resemble.
+- **On the host,** Python memo's `f(..., return_cost=True)` becomes
+  `(memo.core/cost f & args)`, returning `{:time n :space n :size n}` from
+  the same counters, without running f: the counts follow from the
+  program's dims.
+- **Under a budget (M3)** a memo lowers to another program (§7.5), and
+  `cost @ f(...)` counts the program f runs in that call, budget included.
+  A bounded agent's thinking then costs more as k grows. That is what a
+  resource-rational model reads: memo-clj's use, and Moors' operating
+  conditions in GenGDT. This part is experimental, with M3.
+- **Static, not differentiated:** the count is an integer. It depends on
+  parameters only through recursion guards, and, as in Python memo, it
+  cannot be a memo call's argument (it is not static).
+- **demo-takeaway's `quick` is ported with two tests:** Python memo's
+  table, with Python memo's FLOP count passed in place of `cost @ π(t)`
+  (the twin reads the count from the fixture), and memo.clj's own count
+  against its definition.
+
+### 14.2 Tables as data (`return_pandas`, `return_xarray`)
+
+- **Python memo:**
+  - `f(..., return_pandas=True)` gives a DataFrame: a column per axis
+    (enum members by name) and a column per return.
+  - `return_xarray=True` gives a DataArray: dims, with coords as labels,
+    or a Dataset for several returns.
+- **memo.clj's core depends on Clojure and gen.clj alone (§11),** so it gets
+  no dataframe library. Proposed:
+  - `(memo.core/rows f result)` returns a vector of maps, one per cell:
+    each axis's keyword maps to its label (an enum member's name, a number
+    otherwise), and each return's name to its value. That is
+    `print-table`'s content as data, and tablecloth or tech.ml.dataset
+    read it as it is.
+  - Optionally, `(memo.core/labelled f result)` returns `{:dims [...]
+    :coords {...} :data array}`, xarray's shape.
+  - Values are read through `stop-gradient` (rule 6), as `print-table`
+    reads them.
+
+### 14.3 Tracing (`debug_trace`) and the frame comic (`save_comic`)
+
+- **`debug_trace`:** at each memo call, Python memo prints `--> f(params)`,
+  then `<-- f(params) has shape ...`, the cost when it was computed, and
+  the time taken. Proposed: a dynamic var, `memo.core/*trace*`, that prints
+  the same lines, indented by call depth. A var rather than a call option,
+  so a trace follows calls into callees.
+- **`save_comic`:** Python memo writes a Graphviz `.dot` of the frames (each
+  frame a cluster, its choices as nodes, an observation's conditions as
+  dashed edges), and a `.png` when `dot` is installed. Proposed:
+  `(memo.core/comic f)` returns the `.dot` text, built from memo.frames'
+  frame tree; writing the file and running `dot` are the user's, so no
+  dependency is added. Parity is the graph's structure, not the bytes of
+  the text: Python's node names carry object ids.
+
+### 14.4 Host-function tables cached (opt-in)
+
+- **Today** every call tabulates every host function anew. memo.lower
+  caches no host function's values, since they can change with nothing in
+  the memo changed (an atom read, a helper redefined), and a stale table
+  would be a silent wrong number (§5, constants). memo-clj cached tables
+  per static-argument values; the Handbook lists that as not built.
+- **Why now:** an expensive host function is tabulated at every call and
+  every cell, and a fit calls the memo thousands of times. Examples are an
+  LLM's score (§13.12), a physics simulator, or a neural network like
+  demo-7segment's.
+- **Proposed:** opt-in per function, by metadata on its var
+  (`^:memo/cache-table`, a name apart from a model's `^:cache`).
+  - A table is kept per var, function value, static arguments, backend
+    and dtype.
+  - Redefining the function puts a new value in the var, which drops its
+    tables.
+  - The cache is bounded by size, as M3's caches are (§7.2).
+  - It is never used where the function is given a value being
+    differentiated, or a batched value.
+  - Marking a function promises that it is pure: an atom it reads is the
+    user's to manage. The Handbook says so.
+
+### 14.5 The transpiler as user tooling
+
+- **Today:**
+  - `memo.pygen` (memo.clj forms to Python memo source, 549 lines) and
+    `memo.python` (it runs the pinned Python memo from memo-mcp's venv) are
+    under `test/` (§4).
+  - The fuzzer and the corpus's round trip use them; 327 calls reproduce
+    the fixtures.
+- **Proposed:** `memo.pygen` moves to `src`, experimental.
+  - `(memo.pygen/source vars-or-forms)` returns `{:python str :warnings
+    [...] :skipped #{...}}`. A defmemo's var keeps its form
+    (`:memo.impl/form`); domains and helper functions are given as vars or
+    forms.
+  - What it cannot translate is a loud error naming the construct: a host
+    function beyond its scalar translator, an inline `#{...}` it cannot
+    read, a `^:memo/vectorized` function, a budget (Python memo has none),
+    `memo.gen`.
+  - The emitted text is not frozen, just as `program`'s is not.
+  - `memo.python`, the runner, stays test tooling: users run the source
+    in their own Python.
+  - Its tests stay the round trip, now over `src`.
+- **Why:** to share a model with Python memo's users, and to check a
+  model's numbers against the reference.
+
+### 14.6 The research half (for the owner's decisions)
+
+Each item needs a purpose before it can be designed.
+- **Certification.** In memo-clj: a Malli grammar of the AST, a small
+  trusted core, and semantic checks of machine-written programs (the TOPML
+  paper's line). In memo.clj the parser and memo.analyze already refuse
+  ill-formed programs with Python memo's messages. Certification would add
+  a statement of which checks a program passed, for programs a machine
+  wrote. It waits on synthesis, or on another client that writes programs.
+- **Model synthesis.** memo-clj's LLM proposer turned evidence into program
+  edits, which were then certified. §10 lists it as not lifted, while §1
+  put it in M4; this plan reads §1 as "deferred". With gen.clj's `gen.llm`
+  (experimental), synthesis would be gen.clj code that proposes memo.clj
+  forms, constrained by a grammar (`gen.llm.grammar`) and scored by
+  memo.clj: a module outside the core (§13.12).
+- **The static graph.** gen.clj's static modeling language updates a trace
+  incrementally. A memo inside a static gen.clj model would let an update
+  skip a mind whose arguments did not change. That needs a client whose
+  fits update traces (GenGDT's), and measurements first.
+
+### 14.7 Order and the release (proposed)
+
+1. Cost reflection:
+   - `size @` first (exact parity: test.py's cases and new twins);
+   - then `time @` and `cost @`, `space @`, and `memo.core/cost`;
+   - test.py's seven cases come off the skipped list, and demo-takeaway's
+     `quick` is ported.
+2. Tables as data.
+3. The trace and the comic.
+4. The host-table cache.
+5. The transpiler in `src`.
+6. An acceptance pass (§9: before each milestone closes).
+7. memo.clj 1.1.0. The Handbook's Stability adds cost reflection's syntax
+   and the new vars; the counts themselves are not frozen, any more than
+   error messages are. Release notes, and a tag.
