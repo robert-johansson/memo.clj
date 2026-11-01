@@ -13,7 +13,7 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.0.1"
 
 ## [Unreleased]
 
-## [1.0.1] - unreleased
+## [1.0.1] - 2026-11-01
 
 Documentation and licensing only: no change to code, results or the API.
 
