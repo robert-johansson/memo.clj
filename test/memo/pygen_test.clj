@@ -82,12 +82,8 @@
 (def not-transpiled
   "Twins with no Python round trip, and why (besides those whose host
   functions the transpiler skips: Clojure that has no scalar Python form)."
-  (let [cost "cost reflection (M4): Python memo's twin is there, memo.clj's is not"]
-    {:cost-1 cost :cost-kwarg cost :cost-time cost :cost-time-matches-cost cost
-     :cost-space cost :cost-size cost :cost-size-kwarg cost
-     :quick "demo-takeaway's quick: cost reflection (M4)"
-     :inspect-alice "defined by eval (to capture what :inspect prints)"
-     :inline-agent "must not compile in memo.clj"}))
+  {:inspect-alice "defined by eval (to capture what :inspect prints)"
+   :inline-agent "must not compile in memo.clj"})
 
 (defn- skipped-helper?
   "Whether a call failed in Python because it calls a host function the

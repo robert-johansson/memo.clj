@@ -39,7 +39,7 @@
 
 (deftest cost-mode-prints-the-cost
   (let [lines (traced-lines #(memo/cost rec 0 {:b 9}))]
-    (is (some #(re-matches #"\s+cost = \{:time \d+, :space \d+\}" %) lines))))
+    (is (some #(re-matches #"\s+cost = \{:time \d+, :space \d+, :work \d+\}" %) lines))))
 
 (deftest a-differentiated-argument-is-not-read
   (let [lines (atom nil)

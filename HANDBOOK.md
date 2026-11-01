@@ -1422,6 +1422,10 @@ call's. Four measures:
   they are called.
 - `(size @(f ...))`: the number of nodes of f's syntax tree, counted as
   Python memo counts them.
+- `(work @(f ...))`, memo.clj's own: `time`, but a `^:cache` memo's call
+  (see [Caching](#caching)) is charged once, however often the run reaches
+  it. `time` charges it at every call site, as Python memo does. Without
+  `^:cache` memos, `work` is `time`.
 
 The value is a number every agent knows, and 0 where the path conditions
 around it do not hold, which lets a recursion measure itself. The same
@@ -1634,32 +1638,46 @@ other functions.
 `(memo/program m)` is the model's compiled program, as text (Python's
 `debug_print_compiled=True`), for reading: its format may change.
 
-Python memo's `return_pandas`, `return_xarray` and `save_comic` have no
-counterpart: read results with `array/->clj`.
+Python memo's `return_xarray` and `save_comic` have no counterpart: read
+results with `rows` or `array/->clj`.
 
 ## Options
 
 Options are metadata on the model's name (Python's decorator options).
 
 **Caching.** `^:cache` (or `^{:cache true}`) remembers results by their
-parameters, Python's `@memo(cache=True)`, for calls whose arguments are
-all numbers or booleans: calls with values being differentiated, or with
-an array parameter, are not cached. Every cache is dropped when any memo
-is defined again, since a callee may have changed.
+parameters' values, Python's `@memo(cache=True)`, for calls whose
+arguments are all numbers or booleans: calls with values being
+differentiated, or with an array parameter, are not cached. A parameter
+passed by position, by name or by its default is the same call. Every
+cache is dropped when any memo is defined again, since a callee may have
+changed.
 
 ```clojure
 (defmemo ^:cache cached [] [a]
   (alice :chooses [x X] :wpp (exp (* a x)))
   (return (E alice.x)))
 
-(identical? (cached 0.5) (cached 0.5))
+(identical? (cached 0.5) (cached {:a 0.5}))
 ;=> true
+```
+
+A recursion through a cached memo computes each call once, and `work @`
+counts that (see [Cost Reflection](#cost-reflection)), where `time @`
+charges every call site, as Python memo does:
+
+```clojure
+(defmemo ^:cache fib [] [n]
+  (return (if (< n 2) 1 (+ (fib [] (- n 1)) (fib [] (- n 2))))))
+
+(select-keys (memo/cost fib 10) [:time :work])
+;=> {:time 1062, :work 66}
 ```
 
 **Theories.** `^{:variant :child}` imposes a theory on the whole model (see
 [`:has-theory`](#has-theory)).
 
-Python memo's `debug_trace=True` has no counterpart.
+Python memo's `debug_trace=True` is `memo.core/*trace*` (see above).
 
 ## Automatic Differentiation
 
@@ -2290,8 +2308,8 @@ memo.clj 1.0 freezes what is below: after it, a release may add to it,
 and only a new major version removes or changes it.
 
 - **Vars.** `memo.core`: `defmemo`, `memo?`, `print-table`, `program`, and
-  `cost`, `rows` and `*trace*` (added for 1.1; `cost`'s counts and the
-  trace's text are not frozen).
+  `cost`, `rows` and `*trace*` (added for 1.1; the counts of `cost` and of
+  `time @`, `space @` and `work @`, and the trace's text, are not frozen).
   `memo.domains`: `defenum`, `defdomain`, `Bool`, `domain?`, `enum?`,
   `product?`, `values`, `labels`, `members`, `field-keys`, `field`,
   `fields`, `pack`, `product-domain`. A domain's record fields are not
@@ -2299,7 +2317,8 @@ and only a new major version removes or changes it.
   `format-error`, `*warnings?*`. `memo.gen`: `dist`, `deterministic`. A
   public var marked `^:no-doc` is internal.
 - **The language:** the statements and expressions of this Handbook,
-  Python memo's at the pinned release. New Python memo releases are
+  Python memo's at the pinned release, and `work @` (memo.clj's own, added
+  for 1.1). New Python memo releases are
   followed deliberately: new constructs in minor releases, fixes in
   patch releases, each in the release notes.
 - **Calls:** positional parameters, then a trailing map of names
@@ -2364,6 +2383,8 @@ have: minds in gen.clj models (`memo.gen`), and bounded minds
 | `@memo(cache=True)`, `variant=Variant.CHILD` | `^:cache`, `^{:variant :child}` |
 | `f(a, print_table=True)` | `(memo/print-table f (f a))` |
 | `f(a, return_pandas=True)` | `(memo/rows f (f a))` |
+| `cost @ f(a)`, `time @`, `space @`, `size @` | `(cost @(f a))`, `(time @(f a))`, `(space @(f a))`, `(size @(f a))` |
+| `f(a, return_cost=True)` | `(memo/cost f a)` |
 | `@memo(debug_trace=True)` | `(binding [memo/*trace* true] (f a))` |
 | `debug_print_compiled=True` | `(memo/program f)` |
 | `jax.value_and_grad(f)(a, b)` | `((gen.array/value-and-grad f) a b)` |
@@ -2445,7 +2466,8 @@ What memo.clj computes differently, on purpose:
     complex number.
 - **Caching.** A `^:cache` model can be differentiated (calls with values
   being differentiated are not cached); Python memo's `cache=True` raises a
-  `TypeError` under `jax.grad`. Its cache is dropped when any memo is
+  `TypeError` under `jax.grad`. Its key is the parameters' values, where
+  Python's functools cache keys `f(2)` and `f(n=2)` apart. Its cache is dropped when any memo is
   redefined; Python memo's keeps tables computed with the old definition.
 - **The escape hatch is Clojure.** `#{alice.x}` is a compile error; in
   Python memo, `{alice.x}` is a `NameError` when the model is called.
@@ -2461,7 +2483,8 @@ What memo.clj computes differently, on purpose:
   small models with choices, its `space` is larger (no reuse, and float64
   on the JVM backend). `size` is Python memo's exactly. A model that reads
   `time @` (demo-takeaway's `quick`) gives a different table, unless the
-  two counts happen to agree.
+  two counts happen to agree. `work @` is memo.clj's own; Python memo has
+  none.
 
 Where the memo Handbook and Python memo 1.3.3 disagree, memo.clj follows
 Python memo:

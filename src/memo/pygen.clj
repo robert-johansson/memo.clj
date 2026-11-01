@@ -286,6 +286,11 @@
              ",\n        " then "\n    ]")))
     :inline (str "{" (py-scalar (:form e)) "}")
     :ffi (str (sanitize (:name e)) "(" (emit-call-args e) ")")
+    ;; Python's @ binds as *: parenthesized, so any context reads it whole
+    :cost (if (= :work (:metric e))
+            (throw (ex-info "cannot translate to Python: work @ is memo.clj's own, Python memo has none"
+                            {:pygen/unsupported 'work}))
+            (str "(" (name (:metric e)) " @ " (sanitize (:name e)) "(" (emit-call-args e) "))"))
     :memo (str (sanitize (:name e))
                (when (:which-retval e) (str "[" (:which-retval e) "]"))
                "[" (str/join ", " (map choice-ref->py (:ids e))) "]"

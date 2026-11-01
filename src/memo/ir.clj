@@ -42,7 +42,7 @@
     {:i :inline :out s :idx k}                 the k-th #{…} form's value
     {:i :cost :out s :name f :metric m :args [s…] :kwargs [[p s]…] :guards [s…]}
         a measure of the memo f called with these (static) arguments,
-        m :time, :space or :size (cost reflection, memo.cost): a host
+        m :time, :space, :work or :size (cost reflection, memo.cost): a host
         number, 0 where a guard is false
 
   With a budget (M3; memo.bounded):

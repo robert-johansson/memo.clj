@@ -159,7 +159,8 @@
 (defn- parse-cost
   "(cost @(f args... :kw v...)), and time @, space @, size @: Python memo's
   cost @ f(args), an ECost (DESIGN.md §14.1). f is a memo, called without
-  axes; cost is time's alias."
+  axes; cost is time's alias. work @ is memo.clj's own: time, with each
+  distinct ^:cache call charged once."
   [head call pctxt loc]
   (when-not (and (seq? call) (symbol? (first call)))
     (err/raise (str "(" head " @(f ...)) needs a memo call")
@@ -396,11 +397,12 @@
                 {:node :with :who who :expr (parse-expr (second args) pctxt)
                  :loc loc :static false}))
 
-          ;; Python memo's cost @ f(...), time @, space @, size @: the reader
-          ;; reads (cost @(f ...)) as (cost (clojure.core/deref (f ...))).
-          ;; Any other (cost ...) is a host function call, as cost(...) is in
-          ;; Python memo (demo-trucks has one).
-          (and (#{'cost 'time 'space 'size} head)
+          ;; Python memo's cost @ f(...), time @, space @, size @, and
+          ;; memo.clj's work @: the reader reads (cost @(f ...)) as
+          ;; (cost (clojure.core/deref (f ...))). Any other (cost ...) is a
+          ;; host function call, as cost(...) is in Python memo (demo-trucks
+          ;; has one).
+          (and (#{'cost 'time 'space 'size 'work} head)
                (= 1 (count args))
                (seq? (first args))
                (= 'clojure.core/deref (first (first args))))

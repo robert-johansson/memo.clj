@@ -58,10 +58,11 @@
 (defn- gen-clj-names
   "The gen.clj namespaces and vars the source file f names, as [ns var]
   pairs, var nil for a namespace it requires: read as forms (no strings or
-  comments), with f's namespace's aliases, and its refers."
+  comments), with f's namespace's aliases, and its refers (loaded here, so
+  that the test does not depend on which tests ran before it)."
   [f]
   (with-open [r (java.io.PushbackReader. (io/reader f))]
-    (let [the-ns (the-ns (second (read r)))
+    (let [the-ns (let [n (second (read r))] (require n) (the-ns n))
           gen? #(str/starts-with? (str %) "gen.")
           forms (binding [*ns* the-ns *read-eval* false]
                   (doall (take-while #(not= ::eof %) (repeatedly #(read {:eof ::eof} r)))))

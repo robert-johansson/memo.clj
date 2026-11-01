@@ -8,7 +8,10 @@
     is free, a recursion is linear in its depth, a memo call counts its
     callee per call site, a host function its :memo/cost, constants count
     whatever memo.lower caches, a budget's k raises the count) and their
-    errors. test.py's cost cases are in memo.testpy-test."
+    errors. test.py's cost cases are in memo.testpy-test.
+  - work @, memo.clj's own: time, but each distinct ^:cache call charged
+    once (a cached Fibonacci's work is linear in n where its time is
+    Fibonacci's); without ^:cache, time."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -16,6 +19,7 @@
             [gen.array :as array]
             [memo.core :as memo :refer [defmemo]]
             [memo.errors :as err]
+            [memo.pygen :as pygen]
             [memo.test-support :as ts]))
 
 (defn- fixture-namespace
@@ -171,3 +175,65 @@
          (ex-message (ts/compile-error 'memo.cost-test '(defmemo bad-axes [] [] (return (cost @(rec [0] 1))))))))
   (is (= "Unknown memo plain" (message #(times-plain))) "time @ of a host function")
   (is (= "1 is not a memo" (message #(memo/cost 1)))))
+
+;; -----------------------------------------------------------------------------
+;; work @
+
+(defmemo ^:cache cfib [] [n]
+  (return (if (< n 2) 1 (+ (cfib [] (- n 1)) (cfib [] (- n 2))))))
+(defmemo fib [] [n]
+  (return (if (< n 2) 1 (+ (fib [] (- n 1)) (fib [] (- n 2))))))
+;; the same, its memo called without axes (memo.lower's direct :ffi)
+(defmemo ^:cache cfib-no-axes [] [n]
+  (return (if (< n 2) 1 (+ (cfib-no-axes :n (- n 1)) (cfib-no-axes (- n 2))))))
+
+(defmemo ^:cache crec [[x X]] [a]
+  (return (if (> a 0) (crec [x] (- a 1)) 0)))
+(defmemo ctwice [[x X]] [a] (return (+ (crec [x] a) (crec [x] a))))
+(defmemo conce-and-x [[x X]] [a] (return (+ (crec [x] a) x)))
+
+(defmemo works [] [n] (return (work @(cfib n))))
+(defmemo tabulates-a-memo [] [] (alice :chooses [y X] :wpp 1) (return (E (fib alice.y))))
+
+(defn- w [m & args] (:work (apply memo/cost m args)))
+
+(deftest work-is-time-without-a-cached-memo
+  (doseq [[m args] [[rec [3]] [twice [2]] [calls-pricey []] [all-constant []] [fib [6]]
+                    [pick [1.0 {:memo/budget {'alice {:samples 2}}}]]]]
+    (let [c (apply memo/cost m args)]
+      (is (= (:time c) (:work c)) (str (:memo/name (meta m)) " " (pr-str args))))))
+
+(deftest a-cached-call-is-charged-once
+  (let [own (w cfib 0)]
+    (is (pos? own))
+    (doseq [n [2 3 4 6 10]]
+      (is (= (* (inc n) own) (w cfib n)) (str "n = " n ": cfib n, n-1, ..., 0, each once"))
+      (is (= (w fib n) (t fib n) (t cfib n)) "time charges every call site, cached or not"))
+    (is (= (t cfib 6) (+ (t cfib 5) (t cfib 4) own)) "time: Fibonacci's recurrence"))
+  (doseq [a [0 2]]
+    (is (= (w ctwice a) (w conce-and-x a)) (str "a = " a ": the second call is the first's"))
+    (is (= (t crec a) (- (t ctwice a) (t conce-and-x a))) "time: per call site, as Python memo's")))
+
+(deftest work-inside-a-memo
+  (is (= (double (w cfib 10)) (double (ts/host (works 10)))))
+  (is (= (double (w cfib 10)) (double (ts/host (works 10)))) "a second time, from the caches"))
+
+(deftest a-cached-call-is-its-parameters-values
+  (is (identical? (crec 2) (crec {:a 2})) "by position or by name, one entry")
+  (is (not (identical? (crec 2) (crec 3)))))
+
+(deftest a-memo-called-without-axes-counts-as-a-memo-call
+  ;; cfib-no-axes calls itself by name and by position: one call each
+  (doseq [n [0 3 6]]
+    (is (= (dissoc (memo/cost cfib n) :size) (dissoc (memo/cost cfib-no-axes n) :size)) (str "n = " n)))
+  (is (= 1.0 (double (ts/host (tabulates-a-memo)))))
+  (is (= "Cost reflection cannot count the memo fib, called as a host function on values that vary"
+         (message #(memo/cost tabulates-a-memo)))))
+
+(deftest work-is-memo-clj-s-own
+  (is (= "(work @(f ...)) measures the whole memo, without axes"
+         (ex-message (ts/compile-error 'memo.cost-test '(defmemo bad-axes [] [] (return (work @(cfib [] 1))))))))
+  (let [{:keys [skipped warnings]} (pygen/transpile-forms ['(defmemo w-in-python [] [] (return (work @(cfib 1))))]
+                                                          (the-ns 'memo.cost-test))]
+    (is (= #{'w-in-python} skipped))
+    (is (str/includes? (first warnings) "work @ is memo.clj's own, Python memo has none"))))

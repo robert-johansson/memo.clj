@@ -330,25 +330,49 @@
                                 ", not a non-negative integer")
                            {:hint "Declare a host function's cost per cell as ^{:memo/cost n}, n an integer."}))))
 
+(defn- direct-memo
+  "The memo an :ffi instruction calls as a memo call is called (a memo
+  without axes, all its arguments static: host-call), or nil."
+  [{:keys [fns resolve-memo]} {:keys [name statics kwargs]}]
+  (let [v (get fns name)
+        f (if v @v (resolve-memo name))]
+    (when (and (:memo.impl/call (meta f)) (every? true? statics) (every? #(nth % 2) kwargs))
+      f)))
+
 (defn- ops
   "time @'s count of one instruction, from the shapes of its value and
   inputs: an elementwise operation once per output cell, a reduction once
   per input cell, a host function once per cell tabulated (or its
   :memo/cost per cell); structure (layout, gathers, broadcasts, aliases),
   literals and parameters are free, and a memo call counts its callee's
-  (call-memo)."
-  ^long [{:keys [fns]} env instr v]
+  (callee-table), one without axes too."
+  ^long [{:keys [fns] :as ctx} env instr v]
   (case (:i instr)
     (:op :where :nan-to-num :sample-belief :sample-weight :subsets) (cells v)
     (:sum :max) (cells (get env (:arg instr)))
-    :ffi (clojure.core/* (cells v) (host-cost (get fns (:name instr)) (:name instr)))
+    :ffi (if (direct-memo ctx instr)
+           0
+           (clojure.core/* (cells v) (host-cost (get fns (:name instr)) (:name instr))))
     0))
 
 (defn- account-callee!
-  "A memo call's cost, in cost mode: its time and its space, per call site."
-  [ctx {:keys [time space]}]
+  "A memo call's cost, in cost mode: its time and its space, per call site;
+  its work outside ^:cache calls per call site too, and the ^:cache calls
+  under it (:charged, their work by call) merged, so a call reached twice is
+  charged once (memo.core's work)."
+  [ctx {:keys [time space work charged]}]
   (when-let [acc (:cost-acc ctx)]
-    (swap! acc #(-> % (update :time clojure.core/+ time) (update :callees clojure.core/+ space)))))
+    (swap! acc #(-> % (update :time clojure.core/+ time) (update :callees clojure.core/+ space)
+                    (update :work clojure.core/+ work) (update :charged merge charged)))))
+
+(defn- callee-table
+  "A memo's table from (call args kwargs opts); in cost mode the callee
+  returns [table cost], and its cost goes to the caller's."
+  [ctx call args kwargs opts]
+  (let [res (call args kwargs opts)]
+    (if (:cost opts)
+      (let [[table c] res] (account-callee! ctx c) table)
+      res)))
 
 (defn- call-memo [{:keys [resolve-memo domain-values] :as ctx} env
                   {:keys [name which args kwargs guards dims domains] :as instr}]
@@ -358,12 +382,9 @@
         _ (check-domains domain-names domains (mapv domains/values callee-domains)
                          (mapv domain-values domains) {:name (:name ctx)})
         table (if (every? #(array/truthy? (get env %)) guards)
-                (let [opts (callee-opts ctx instr)
-                      res (call (mapv #(get env %) args)
-                                (into {} (map (fn [[k s]] [k (get env s)])) kwargs)
-                                opts)
-                      ;; in cost mode the callee returns [table cost]
-                      res (if (:cost opts) (let [[t c] res] (account-callee! ctx c) t) res)]
+                (let [res (callee-table ctx call (mapv #(get env %) args)
+                                        (into {} (map (fn [[k s]] [k (get env s)])) kwargs)
+                                        (callee-opts ctx instr))]
                   (if (some? which) (array/take res which 0) res))
                 (array/zeros shape))]
     (place table dims)))
@@ -615,10 +636,17 @@
                                                                   (map vector pos statics))
                                                             (keep (fn [[_ x s]] (when-not s x)) kws))))]
     (cond
-      (and (:memo.impl/call (meta f)) (every? true? statics) (every? #(nth % 2) kws))
+      (direct-memo ctx instr)
       (if (every? #(array/truthy? (get env %)) guards)
-        ((:memo.impl/call (meta f)) pos kw-map (callee-opts ctx instr))
+        (callee-table ctx (:memo.impl/call (meta f)) pos kw-map (callee-opts ctx instr))
         (array/zeros dyn-shape))
+
+      ;; tabulated, each cell a call of the memo that cost mode does not see
+      (and (:memo.impl/call (meta f)) (:cost-acc ctx))
+      (err/raise (str "Cost reflection cannot count the memo " name
+                      ", called as a host function on values that vary")
+                 {:hint (str "time @ counts a memo called as a memo. Pass the values that vary "
+                             "as axes, (" name " [...] ...), so that it is called once.")})
 
       vectorized?
       ;; elementwise: its result has at most the arguments' extent
@@ -875,7 +903,10 @@
              ;; constants among them), measured before each value's last
              ;; reader drops it
              live0 (when (:cost call) (reduce clojure.core/+ 0 (map value-bytes (vals cenv))))
-             acc (when (:cost call) (atom {:time cops :live live0 :peak (max cpeak live0) :callees 0}))
+             ;; work: time, but for the ^:cache calls under it, kept apart
+             ;; (:charged) so that each is charged once (memo.core)
+             acc (when (:cost call) (atom {:time cops :work cops :charged {}
+                                           :live live0 :peak (max cpeak live0) :callees 0}))
              ctx (cond-> (assoc ctx :call call) acc (assoc :cost-acc acc))
              counted? (fn [s] (not (contains? params s)))
              env (reduce (fn [env [instr dead]]
@@ -889,6 +920,7 @@
                                  (swap! acc (fn [a]
                                               (let [live (clojure.core/+ (:live a) grown)]
                                                 (assoc a :time (clojure.core/+ (:time a) n)
+                                                       :work (clojure.core/+ (:work a) n)
                                                        :peak (max (:peak a) live)
                                                        :live (clojure.core/- live freed)))))))
                              (apply dissoc env dead)))
@@ -897,5 +929,6 @@
              result (if (= 1 (count tables)) (first tables) (array/stack tables))]
          (cond
            masses [result (mapv #(assoc % :mass (mass-table (get env (:tag %)) compiled)) masses)]
-           acc [result (let [{:keys [time peak callees]} @acc] {:time time :space (clojure.core/+ peak callees)})]
+           acc [result (let [{:keys [time peak callees work charged]} @acc]
+                         {:time time :space (clojure.core/+ peak callees) :work work :charged charged})]
            :else result))))))

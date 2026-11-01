@@ -1760,13 +1760,13 @@ revised by a prototype of 2026-10-31 (memoclj-it67). M4 has two halves.*
 - **Where it is used:**
   - test.py's seven cases (`cost_1`, `cost_kwarg`, `cost_time`,
     `cost_time_matches_cost`, `cost_space`, `cost_size`, `cost_size_kwarg`),
-    which `testpy_test` skips today as M4. `cost_kwargs_unpacking_err`
+    which `testpy_test` skipped before M4. `cost_kwargs_unpacking_err`
     stays skipped: memo.clj has no `**`.
   - demo-takeaway's `quick`, which weighs moves by
     `exp(π * 500000 / (cost @ π(t)))`, so its table depends on the FLOP
-    count itself. Its twin is not ported (`:not-ported`).
-- **memo.clj today:** the reader reserves `(cost @(f ...))` and its three
-  siblings (§8), and `memo.parse` raises "cost reflection is not supported
+    count itself. Its twin was not ported before M4 (`:not-ported`).
+- **memo.clj before M4:** the reader reserved `(cost @(f ...))` and its three
+  siblings (§8), and `memo.parse` raised "cost reflection is not supported
   in memo.clj yet (DESIGN.md M4)".
 
 **What memo.clj can match:**
@@ -1841,6 +1841,35 @@ its source location (1 + 4 fields).
   table, with Python memo's FLOP count passed in place of `cost @ π(t)`
   (the twin reads the count from the fixture), and memo.clj's own count
   against its definition.
+
+**`work @`, memo.clj's own** (decided 2026-11-01 by the owner,
+memoclj-fry4). `time @` charges a `^:cache` memo's calls per call site, as
+Python memo does, so `cost @ π(20)` in demo-takeaway is 1.18e10, though a
+run with its caches does far less. `(work @(f ...))`, and `:work` in
+`memo.core/cost`, count `time`, with each distinct call of a `^:cache`
+memo charged once per measurement: the operations a run with empty caches
+does. A distinct call is the memo with its parameters' values and its
+budget.
+- **How it is counted:** a `^:cache` memo's cost-mode record moves its own
+  work (outside the cached calls under it) into a map, `:charged`, under
+  its call. A caller adds its callees' uncached work and merges their maps,
+  and a measurement's work is its uncached work plus the map's values.
+  Each record stays a function of its call, so the cache keeps it.
+- **Without `^:cache`,** work is time. A cached Fibonacci's work is linear
+  in n where its time follows Fibonacci's recurrence
+  (`memo.cost-test`).
+- **Python memo has no `work @`,** so memo.pygen refuses it; it translates
+  the other four measures, and the Python round trip now runs test.py's
+  cost cases and `quick`.
+- **Found while building it:**
+  - A memo called without axes (`(f args)`, memo.clj's own, memo.lower's
+    direct `:ffi`) returned `[table cost]` unread in cost mode, so
+    `memo.core/cost` crashed. It now counts as a memo call does.
+  - A memo tabulated as a host function (its arguments varying) is a loud
+    error in cost mode: the count cannot see the calls per cell.
+  - The `^:cache` key is now the parameters' values, not the call's
+    spelling. Python's functools cache keys `f(2)` and `f(n=2)` apart, so
+    the same call ran twice.
 
 ### 14.2 Tables as data (`return_pandas`, `return_xarray`)
 

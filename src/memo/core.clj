@@ -72,23 +72,37 @@
   then, since a memo it calls may have changed (memo-clj's lesson)."}
   definitions (atom 0))
 
+(defn- public-cost
+  "A cost mode's record as memo.core/cost gives it: work is the work outside
+  ^:cache calls and each ^:cache call under it (:charged) once."
+  [{:keys [time space work charged]}]
+  {:time time :space space :work (reduce + work (vals charged))})
+
 (defn- cached
   "call, memoized by its arguments when they are host numbers or booleans
   (so never for values being differentiated), its budget, and whether it
   returns masses, until any memo is redefined; never a Monte Carlo call (one
-  with a key)."
-  [call]
+  with a key). A call is its parameters' values (bind, from args and
+  kwargs), however they are passed: by position, by name or by default. In
+  cost mode such a call's work goes under :charged, by the memo (its
+  qualified name, ident) and the call, so the caller charges it once however
+  many times it is reached (public-cost)."
+  [ident bind call]
   (let [cache (atom {:epoch -1 :table {}})
         host? #(or (number? %) (boolean? %))]
     (fn [args kwargs opts]
       (if-not (and (every? host? args) (every? host? (vals kwargs)) (nil? (:key opts)))
         (call args kwargs opts)
         (let [epoch @definitions
-              k [(vec args) kwargs (select-keys opts [:budget :limit :mass :cost])]
+              k [(bind args kwargs) (select-keys opts [:budget :limit :mass :cost])]
               c (swap! cache #(if (= epoch (:epoch %)) % {:epoch epoch :table {}}))]
           (if-let [[_ v] (find (:table c) k)]
             v
-            (let [v (call args kwargs opts)]
+            (let [v (call args kwargs opts)
+                  v (if-not (:cost opts)
+                      v
+                      (let [[table {:keys [work] :as cost}] v]
+                        [table (-> cost (assoc :work 0) (update :charged assoc [ident k] work))]))]
               (swap! cache #(if (= epoch (:epoch %)) (assoc-in % [:table k] v) %))
               v)))))))
 
@@ -275,7 +289,7 @@
               ;; cost mode and masses return [table more]
               [table c] (cond (:cost opts) out (:mass opts) [(first out) nil] :else [out nil])]
           (println (str pad "<--  " shown " has shape " (array/shape table)))
-          (when c (println (str pad "     cost = " (pr-str c))))
+          (when c (println (str pad "     cost = " (pr-str (public-cost c)))))
           (println (str pad (format "     time = %.6f sec" (/ (- (System/nanoTime) t0) 1e9))))
           out)))))
 
@@ -352,7 +366,8 @@
                                    mass ((:run (other-program nil nil false true)) env)
                                    cost (run env {:cost true})
                                    :else (run env)))))
-               (:cache opts) cached)
+               (:cache opts) (as-> c (cached (symbol (str ns) (str name))
+                                             #(bind-params name params defaults %1 %2) c)))
         size (cost/size parsed)
         ;; the parameters a count can depend on: those that reach a guard (a
         ;; recursion's path condition) or a memo call's or a cost @'s
@@ -379,7 +394,7 @@
                          (set (map :name params))
                          (into #{} (keep #(when (= :param (:i %)) (:name %))) reached-instrs)))
         relevant? (fn [p] (contains? count-params (symbol (clojure.core/name p))))
-        ;; {:time :space :size} for these arguments and options, from a run in
+        ;; {:time :space :work :size} for these arguments and options, from a run in
         ;; cost mode: a function of the program, the count-params' values and
         ;; the budget (and the backend's dtypes), so cached by them until any
         ;; memo is redefined
@@ -411,7 +426,7 @@
                       (if-let [[_ c] (find (:table t) k)]
                         c
                         (let [[_ c] (call args kwargs (assoc call-opts :cost true))
-                              c (assoc c :size size)]
+                              c (assoc (public-cost c) :size size)]
                           (swap! costs #(if (= epoch (:epoch %)) (assoc-in % [:table k] c) %))
                           c))))
         ;; the model itself, for checking a budget's agents against the memos
@@ -461,7 +476,7 @@
            :memo.impl/compiled compiled
            ;; size @'s measure (memo.cost): a property of the text alone
            :memo.impl/size size
-           ;; cost reflection, (cost-call args kwargs call-opts) -> {:time :space :size}
+           ;; cost reflection, (cost-call args kwargs call-opts) -> {:time :space :work :size}
            :memo.impl/cost-call cost-call
            ;; the same from a call's arguments, a trailing map as a call's
            :memo.impl/cost (fn [args]
@@ -655,14 +670,19 @@
 
 (defn cost
   "Cost reflection on the host, Python memo's f(..., return_cost=True):
-  {:time n :space n :size n} for the memo m called with args (a trailing map
-  as a call's: parameters by name, :memo/budget and :memo/limit). The same
-  measures as (cost @(m args...)), time @, space @ and size @ inside a memo
-  (DESIGN.md §14.1):
+  {:time n :space n :work n :size n} for the memo m called with args (a
+  trailing map as a call's: parameters by name, :memo/budget and
+  :memo/limit). The same measures as (cost @(m args...)), time @, space @,
+  work @ and size @ inside a memo (DESIGN.md §14.1):
   - :time, the operations of memo.clj's run (an elementwise operation per
     output cell, a reduction per input cell, a host function per cell or its
     var's :memo/cost; constants included; memos called counted per call
-    site). Not Python memo's number, which is XLA's flops.
+    site, ^:cache ones too, as Python memo counts them). Not Python memo's
+    number, which is XLA's flops.
+  - :work, memo.clj's own: :time, but with each distinct call of a ^:cache
+    memo (by its arguments and budget) charged once, however many times the
+    run reaches it: the operations a run with its caches empty does. Without
+    ^:cache memos, :time.
   - :space, the peak bytes of the run's live values, at the backend's dtypes,
     plus the memos it calls, per call site.
   - :size, the nodes of m's syntax tree, as Python memo counts them.

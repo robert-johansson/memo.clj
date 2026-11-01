@@ -22,6 +22,9 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.0.1"
     from Python memo's XLA numbers (the Handbook's Differences).
   - A host function may declare its cost per cell with `^{:memo/cost n}`.
   - A bounded agent's budget is counted.
+  - `(work @(f ...))` and `:work`, memo.clj's own: `time`, with each
+    distinct call of a `^:cache` memo charged once, the work a run with its
+    caches does. `time` charges them per call site, as Python memo does.
 - **`memo.core/rows`** (M4, DESIGN §14.2): a result as data, one map per
   cell, Python memo's `return_pandas` without a dataframe library.
 - **`memo.core/*trace*`** (M4, DESIGN §14.3): a trace of every memo call,
@@ -31,11 +34,16 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.0.1"
   it drops them.
 - **`memo.pygen`** in `src`, experimental (M4, DESIGN §14.5): the
   transpiler, with `(memo.pygen/source vars)` giving a namespace's models,
-  domains and helper functions as a Python memo module.
+  domains and helper functions as a Python memo module. It translates
+  `cost @` and its siblings, and refuses `work @`, which Python memo lacks.
 
 ### Changed
 - `(+ x)` is kept as Python memo's unary plus, where memo.clj dropped it.
   On a static boolean it now gives Python's 1, where it gave `true`.
+- A `^:cache` memo's cache is keyed by its parameters' values, however they
+  are passed: `(f 2)`, `(f {:n 2})` and a default are one entry, where they
+  were separate entries (as in Python memo's `cache=True`). Results are
+  unchanged.
 
 ## [1.0.1] - 2026-11-01
 
