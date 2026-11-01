@@ -34,11 +34,13 @@
 
   ;; gen.clj's MLX backend (Metal by default): clojure -X:test:mlx
   ;; gen.clj looks for its native library relative to the working directory,
-  ;; so another project names it
+  ;; so another project names it: here a gen.clj checkout beside memo.clj,
+  ;; with its native libraries built (gen.clj's native/build-mlx.sh)
   :mlx {:jvm-opts ["-Dgen.backend=mlx"
-                   "-Dgen.mlx.lib=/Users/robert/code/gen.clj/native/build/macos-arm64/lib"
+                   "-Dgen.mlx.lib=../gen.clj/native/build/macos-arm64/lib"
                    "--enable-native-access=ALL-UNNAMED"]}
 
-  ;; gen.clj's working copy instead of the pin: clojure -X:dev:test
-  :dev {:override-deps {gen.clj/gen.clj {:local/root "/Users/robert/code/gen.clj"}
-                         gen.clj/laws {:local/root "/Users/robert/code/gen.clj/ext/laws"}}}}}
+  ;; gen.clj's working copy instead of the pin, a checkout beside memo.clj:
+  ;; clojure -X:dev:test
+  :dev {:override-deps {gen.clj/gen.clj {:local/root "../gen.clj"}
+                         gen.clj/laws {:local/root "../gen.clj/ext/laws"}}}}}

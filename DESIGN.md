@@ -29,7 +29,7 @@ In order:
    - It runs on every gen.clj backend: the JVM, MLX's CPU, Metal and CUDA.
      Its whole suite passes on each (2026-10-22, gen.clj 3022944): the JVM
      and Metal, MLX's CPU in float32 and in float64 on the Mac and on x86,
-     and CUDA on an RTX PRO 6000 (fenrir).
+     and CUDA on an RTX PRO 6000 (x86_64).
    - Gradients with respect to parameters come from gen.array's reverse-mode
      autodiff.
 2. **M2 — the GFI bridge.** A memo model is a gen.clj object:
@@ -633,7 +633,7 @@ is written against it.
 *Built 2026-10-22* (`src/memo/gen.clj`, `test/memo/gen_test.clj`, the
 Handbook's "Minds in gen.clj models"), as specified below. The whole suite
 passes on the JVM, Metal and MLX's CPU in float64 on the Mac, and on MLX's
-CPU in float64 and CUDA on fenrir; since gen.clj 73f22a0, MLX's CPU in
+CPU in float64 and CUDA on the RTX PRO 6000; since gen.clj 73f22a0, MLX's CPU in
 float32 too, on both. Each of eleven planted bugs is caught. gen.clj's GFI laws run over two models that trace memo
 distributions, from gen.clj's laws module `ext/laws` at the pinned commit
 (since 2026-10-25; before, the tests put the `test/` of the gen.clj in use
@@ -1575,6 +1575,14 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
    private remote of the beans repository is pending). *Decided 2026-10-24
    (memoclj-okbr):* published as a private GitHub repository,
    robert-johansson/memo.clj, as gen.clj, memo-clj and GenGDT are.
+   *Decided 2026-11-01 (memoclj-rciq):* public under the MIT License at
+   1.0.1, as gen.clj went public at its 1.0. 1.0.1 changes no code: it adds
+   `LICENSE`, `LICENSE-memo` (Python memo's MIT notice, for the parts
+   derived from it: the Handbook, the port of its test suite, the demo
+   twins and their fixtures), a README and a CHANGELOG, and drops the
+   tree's absolute paths. memo-mcp, the oracle's home
+   (robert-johansson/memo-mcp), is public and MIT too. The beans stay in
+   their own private repository.
 8. **Float64 against float32 parity** for the constructs where the dtype
    changes the answer (§2.4): run those parity tests in float32, keep them
    out of the fuzzer's grammar, or accept documented differences?
