@@ -2368,6 +2368,18 @@ have: minds in gen.clj models (`memo.gen`), and bounded minds
 | `debug_print_compiled=True` | `(memo/program f)` |
 | `jax.value_and_grad(f)(a, b)` | `((gen.array/value-and-grad f) a b)` |
 
+To share a model with Python memo's users, or check it against the
+reference, `memo.pygen/source` (experimental) gives the Python memo source
+of vars of one namespace: its models, domains and helper functions of
+scalars, each read from the file it was loaded from, in the order Python
+needs. What it cannot translate (a `^:memo/vectorized` function, say) is a
+loud error naming it:
+
+```text
+(memo.pygen/source [#'coin-flip #'Coin])
+;=> "...class Coin(IntEnum):\n    HEADS = 0\n    TAILS = 1\n\n@memo\ndef coin_flip[c: Coin](p): ..."
+```
+
 What memo.clj computes differently, on purpose:
 
 - **Results are full tables.** Axes come at their domains' full sizes;

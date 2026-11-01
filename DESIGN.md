@@ -491,7 +491,8 @@ Namespaces (decided, 2026-10-20; root `memo`):
   combinatorics, and the lowering of the bounded IR instructions. The
   analysis (`memo.analyze`) emits them when it is given a budget; the exact
   program is compiled without one.
-- `memo.pygen`, the transpiler: under `test` until M4.
+- `memo.pygen`, the transpiler: under `test` until M4; in `src` since
+  2026-11-01 (§14.5), experimental, with `source` for users.
 
 memo-clj's single `compile` namespace (1.3k lines) is split along the
 analysis/IR seam. M3 needs the analysis without the exact lowering.
@@ -1940,6 +1941,14 @@ its source location (1 + 4 fields).
   - `memo.python`, the runner, stays test tooling: users run the source
     in their own Python.
   - Its tests stay the round trip, now over `src`.
+  - *Built 2026-11-01* (memoclj-4ylz): `git mv` to `src`, the namespace
+    marked experimental. `source` takes vars of one namespace, not
+    `:memo.impl/form` (a memo keeps only its inline forms): it reads each
+    var's form from the file it was loaded from (`clojure.repl/source-fn`),
+    orders values, helpers and models as Python needs, and refuses loudly
+    a vectorized function or anything `transpile-forms` would skip. Tests:
+    it equals `transpile-forms` on the same forms; its module run in
+    Python memo gives memo.clj's numbers; its refusals.
 - **Why:** to share a model with Python memo's users, and to check a
   model's numbers against the reference.
 

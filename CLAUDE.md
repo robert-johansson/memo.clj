@@ -63,6 +63,7 @@ Java binding).
 | lowering | `memo.lower`: the exact lowering, IR → gen.array |
 | API | `memo.core` (`defmemo`, calls, `print-table`, `program`), `memo.domains` (`defenum`), `memo.errors` |
 | GFI bridge (M2) | `memo.gen`: `dist` (a memo as a gen.clj distribution), `deterministic` (as a deterministic generative function); DESIGN.md §6 |
+| Python memo source (M4, experimental) | `memo.pygen`: memo.clj forms to Python memo source; `source` for users (vars read from their files), `transpile-forms` for the fuzzer and the round trip; DESIGN.md §14.5 |
 | bounded minds (M3, experimental) | `memo.bounded`: the budget (`:memo/budget` in a call's trailing map), the combinatorics and the lowering of `:sample-belief`, `:sample-weight`, `:subsets`, which `memo.analyze` emits when given a budget; `memo.gen/estimated` for Monte Carlo budgets; DESIGN.md §7 |
 
 ## Rules

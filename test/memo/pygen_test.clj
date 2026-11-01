@@ -6,8 +6,12 @@
   memo (memo-mcp); without it, the round trip is skipped, loudly."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.java.shell :as sh]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [memo.core :refer [defmemo]]
+            [memo.domains :refer [defenum]]
+            [memo.errors :as err]
             [memo.pygen :as pygen]
             [memo.python :as py]
             [memo.test-support :as ts]))
@@ -121,3 +125,44 @@
     (let [ran (reduce + (map check-part corpus))]
       (println (str "\nround trip: " ran " calls of the corpus's twins ran in Python memo, as transpiled\n"))
       (is (< 300 ran) "most of the corpus transpiles"))))
+
+;; -----------------------------------------------------------------------------
+;; memo.pygen/source, for users (M4, DESIGN.md §14.5; experimental)
+
+(defenum Side LEFT RIGHT)
+(defn tilt [x] (* 0.25 x))
+(defmemo lean [[s Side]] [p]
+  (alice :chooses [s Side] :wpp (if (= s Side.LEFT) (+ p (tilt 1)) (- 1 p)))
+  (return (Pr (= alice.s s))))
+(defn ^:memo/vectorized tilt-v [x] x)
+
+(defn- message [thunk]
+  (try (thunk) nil (catch Exception e (some-> (err/root-memo-error e) ex-message))))
+
+(deftest source-for-users
+  (let [forms (filterv #(and (seq? %) (#{'Side 'tilt 'lean} (second %)))
+                       (read-forms "test/memo/pygen_test.clj"))
+        python (pygen/source [#'lean #'Side #'tilt])]
+    (is (= (:python (pygen/transpile-forms (sort-by #(case (str (first %)) "defenum" 0 "defn" 1 2) forms)
+                                           'memo.pygen-test))
+           python)
+        "the transpiler's module, its forms read from this file, in Python's order")
+    (is (< (str/index-of python "class Side(IntEnum)") (str/index-of python "def tilt")
+           (str/index-of python "def lean")))
+    (testing "run in Python memo, it gives memo.clj's numbers"
+      (if-not (py/available?)
+        (println "Skipping memo.pygen/source in Python memo: no Python memo (memo-mcp)")
+        (let [dir (doto (io/file (System/getProperty "java.io.tmpdir") (str "memo-pygen-" (System/nanoTime))) .mkdirs)
+              f (io/file dir "lean_module.py")]
+          (spit f (str "import sys\nsys.path.insert(0, " (pr-str (.getAbsolutePath (io/file py/memo-src))) ")\n"
+                       python "\nimport json\nprint(json.dumps(lean(0.3).tolist()))\n"))
+          (let [{:keys [exit out err]} (sh/sh py/venv-python "-I" (.getPath f))]
+            (is (zero? exit) err)
+            (is (ts/close? (edn/read-string (last (str/split-lines out))) (ts/host (lean 0.3))))))))))
+
+(deftest source-refuses-loudly
+  (is (= "memo.pygen/source cannot translate the vectorized function tilt-v"
+         (message #(pygen/source [#'lean #'tilt-v]))))
+  (is (= "memo.pygen/source takes vars of one namespace, not 2"
+         (message #(pygen/source [#'lean #'clojure.core/inc]))))
+  (is (= "memo.pygen/source takes vars" (message #(pygen/source ['lean])))))

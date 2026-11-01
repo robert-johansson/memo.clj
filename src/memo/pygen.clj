@@ -1,7 +1,13 @@
 (ns memo.pygen
-  "The transpiler: memo.clj source to Python memo source, test tooling
-  (DESIGN.md §4, §9): the differential fuzzer runs the same programs in
-  both, and the corpus's twins check the transpiler by round trip.
+  "Experimental (M4, DESIGN.md §14.5): outside 1.x's promise; its output's
+  text may change in any release.
+
+  The transpiler: memo.clj source to Python memo source. For users, source:
+  the models, domains and helper functions of a namespace as a Python memo
+  module, to share a model with Python memo's users or check its numbers
+  against the reference. memo.clj's own tests use it too (DESIGN.md §9): the
+  differential fuzzer runs the same programs in both, and the corpus's twins
+  check the transpiler by round trip.
 
   An unparser: memo.parse's AST mirrors Python memo's node for node, so a
   parsed defmemo maps onto Python memo's syntax. Enum members are resolved
@@ -18,8 +24,10 @@
   Lifted from memo-clj's memo.pygen after review against Python memo 1.3.2's
   parse.py; changes: cast is emitted, enum members are values, more scalar
   forms translate (long, double, cond, ...)."
-  (:require [clojure.string :as str]
+  (:require [clojure.repl :as repl]
+            [clojure.string :as str]
             [clojure.walk]
+            [memo.errors :as err]
             [memo.domains :as domains]
             [memo.parse :as parse]))
 
@@ -547,3 +555,51 @@
                   "\n\n" (str/join "\n\n" (:chunks out)) "\n")
      :warnings (:warnings out)
      :skipped (:skipped out)})))
+
+;; -----------------------------------------------------------------------------
+;; for users
+
+(defn- form-of
+  "A var's top-level form, read from the file it was loaded from (as
+  clojure.repl/source finds it)."
+  [v]
+  (let [m (meta v)
+        sym (symbol (str (ns-name (:ns m))) (str (:name m)))
+        src (try (repl/source-fn sym) (catch Exception _ nil))]
+    (or (some-> src read-string)
+        (err/raise (str "No source for " sym)
+                   {:hint (str "memo.pygen/source reads a var's form from the file it was loaded from; "
+                               sym " was defined elsewhere (at a REPL, say). Load it from a file.")}))))
+
+(def ^:private emit-order
+  "Python needs a name defined before it is read: values, then helper
+  functions, then models."
+  {"def" 0 "defenum" 0 "defdomain" 0 "defn" 1 "defmemo" 2})
+
+(defn source
+  "Experimental. Python memo source for vars of one namespace: its memos
+  (defmemo), domains (defenum, defdomain, def of a vector) and helper
+  functions (defn, of scalars), each read from the file it was loaded from,
+  in the order Python needs. What cannot be translated is a loud error that
+  names it (a host function beyond the scalar translator, an inline #{...}
+  it cannot read, a ^:memo/vectorized function): Python memo would not
+  compute the same model without it. Budgets and memo.gen have no Python
+  counterpart; Python memo runs the source as written."
+  [vars]
+  (let [nss (set (map (comp :ns meta) vars))]
+    (when-not (and (seq vars) (every? var? vars))
+      (err/raise "memo.pygen/source takes vars" {:hint "(memo.pygen/source [#'flip #'Coin])"}))
+    (when (< 1 (count nss))
+      (err/raise (str "memo.pygen/source takes vars of one namespace, not " (count nss))
+                 {:hint (str "The vars' namespaces: " (str/join ", " (map ns-name nss)) ".")}))
+    (let [forms (sort-by #(get emit-order (when (seq? %) (name (first %))) 3) (map form-of vars))
+          vectorized (keep (fn [v] (when (:memo/vectorized (meta v)) (:name (meta v)))) vars)
+          _ (when (seq vectorized)
+              (err/raise (str "memo.pygen/source cannot translate the vectorized function "
+                              (str/join ", " vectorized))
+                         {:hint "A ^:memo/vectorized function computes with gen.array; translate it to JAX by hand."}))
+          {:keys [python warnings skipped]} (transpile-forms forms (first nss))]
+      (when (seq skipped)
+        (err/raise (str "memo.pygen/source cannot translate " (str/join ", " (sort skipped)))
+                   {:hint (str/join "; " warnings)}))
+      python)))

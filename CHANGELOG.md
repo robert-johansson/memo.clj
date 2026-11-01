@@ -29,6 +29,9 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.0.1"
 - **`^:memo/cache-table`** (M4, DESIGN §14.4): a pure, expensive host
   function's tables kept across calls, by its arguments' values; redefining
   it drops them.
+- **`memo.pygen`** in `src`, experimental (M4, DESIGN §14.5): the
+  transpiler, with `(memo.pygen/source vars)` giving a namespace's models,
+  domains and helper functions as a Python memo module.
 
 ### Changed
 - `(+ x)` is kept as Python memo's unary plus, where memo.clj dropped it.
