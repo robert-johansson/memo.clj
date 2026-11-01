@@ -1909,6 +1909,15 @@ its source location (1 + 4 fields).
     differentiated, or a batched value.
   - Marking a function promises that it is pure: an atom it reads is the
     user's to manage. The Handbook says so.
+  - *Built 2026-11-01* (memoclj-c69h): memo.lower's `tabulate-cached`,
+    one cache by var (`host-tables`), each entry's function value kept so
+    a redefinition drops the var's tables. Not just "per static
+    arguments" as planned: a table follows from its dynamic arguments'
+    values too (`(f (* k x))` changes with k), so the key holds every
+    argument, the dynamic ones read from their arrays (never a
+    differentiated one, which is refused before), and the backend. Bounded
+    by `*host-cache-cells*` (4·10^6 numbers), past which it starts over.
+    A batched argument is not cached.
 
 ### 14.5 The transpiler as user tooling
 

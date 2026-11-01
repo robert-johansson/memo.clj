@@ -1089,6 +1089,24 @@ function and its arguments, with the original exception as its cause; a
 vectorized function that throws on whole arrays (say, `Math/exp` on one)
 becomes a memo error naming the function.
 
+A tabulated function is called again at every call of the model, since its
+values may change with nothing in the model changed (an atom it reads, a
+helper redefined). An expensive one, a simulator or a language model's
+score, can opt in to keeping its tables: marked `^:memo/cache-table`, it
+promises to be pure, so a later call with the same arguments (the static
+ones whole, the others by their values) reads the table kept. Redefining
+the function drops its tables, and they are never kept for a batched
+argument. Its cost per cell for [cost reflection](#cost-reflection) can be
+declared with `^{:memo/cost n}`:
+
+```clojure
+(defn ^:memo/cache-table ^{:memo/cost 1000} judge [n] (if (even? n) 1.0 0.5))
+
+(defmemo judged [] []
+  (alice :chooses [n N] :wpp (judge n))
+  (return (Pr (even? alice.n))))
+```
+
 ## Choice Expressions
 
 Once an agent makes a choice, later expressions can reference it.
@@ -2290,7 +2308,8 @@ and only a new major version removes or changes it.
   size, several returns on a leading axis, a 0-d value without axes, read
   portably with `array/->clj` or `array/item`).
 - **Host functions:** `^:memo/vectorized`, `^:array` parameters, the
-  model options `^:cache` and `^{:variant ...}`.
+  model options `^:cache` and `^{:variant ...}`; `^:memo/cache-table` and
+  `^{:memo/cost n}` (added for 1.1).
 - **Metadata and error data:** the keys under `:memo/` listed in
   [Executing a memo](#executing-a-memo) and [Errors](#errors).
 - **The bridge's options:** `mg/dist`'s `:given` and `:return`,
@@ -2446,8 +2465,6 @@ Python memo:
 
 Not built:
 
-- `return_xarray` (`rows` gives the table as data) and `save_comic`;
-- a cache of tabulated host functions per value of their static
-  arguments.
+- `return_xarray` (`rows` gives the table as data) and `save_comic`.
 
 The design, and the reasons for each decision, are in `DESIGN.md`.

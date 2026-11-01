@@ -463,6 +463,53 @@
       (call 0)
       (array/reshape (array/array (mapv call (range n))) shape))))
 
+;; host functions that opt in (^:memo/cache-table, DESIGN.md §14.4): their
+;; tables kept across calls, by var; redefining the function drops them
+
+(def ^:dynamic *host-cache-cells*
+  "The most numbers the host-function tables kept (^:memo/cache-table) may
+  hold together; past it the cache starts over."
+  4000000)
+
+(defonce ^:private host-tables (atom {:cells 0 :by-var {}}))
+
+(defn- table-key
+  "The values a host function's table follows from: its arguments, the
+  static ones whole and the others read from their arrays, and the backend."
+  [pos statics kws]
+  (let [content (fn [x s] (if (or s (number? x) (boolean? x) (sequential? x)) x (array/->clj x)))]
+    [(mapv content pos statics) (mapv (fn [[k x s]] [k (content x s)]) kws) array/*backend*]))
+
+(defn- tabulate-cached
+  "tabulate, kept for a function whose var is marked ^:memo/cache-table: the
+  function promises to be pure (its table follows from its arguments
+  alone), so a later call with the same arguments reads the table kept.
+  Never for a batched value (the table would be one particle's)."
+  [v name f pos statics kws]
+  (if-not (and (:memo/cache-table (meta v))
+               (not-any? array/batched? (concat pos (map second kws))))
+    (tabulate name f pos statics kws)
+    (let [k (table-key pos statics kws)
+          {:keys [by-var]} @host-tables
+          entry (get by-var v)]
+      (if-let [[_ t] (and (identical? f (:fn entry)) (find (:tables entry) k))]
+        t
+        (let [t (tabulate name f pos statics kws)
+              n (long (array/size t))]
+          (swap! host-tables
+                 (fn [{:keys [cells by-var] :as c}]
+                   (let [{:keys [cells by-var]} (if (clojure.core/> (clojure.core/+ cells n) *host-cache-cells*)
+                                                  {:cells 0 :by-var {}}
+                                                  c)
+                         e (get by-var v)
+                         ;; a redefined function (a new value in the var): its old tables go
+                         [kept freed] (if (identical? f (:fn e))
+                                        [(:tables e) 0]
+                                        [{} (reduce clojure.core/+ 0 (map array/size (vals (:tables e))))])]
+                     {:cells (clojure.core/- (clojure.core/+ cells n) freed)
+                      :by-var (assoc by-var v {:fn f :tables (assoc kept k t)})})))
+          t)))))
+
 (defn- samples
   "x's values at the row-major indices idxs of shape (x broadcast to it), on
   the host: only those elements are read, primal values for a value being
@@ -616,7 +663,7 @@
                              "a gradient with gen.array/custom-vjp and mark that. (Python memo "
                              "gives a silent zero gradient here.)")})
 
-      :else (tabulate name f pos statics kws))))
+      :else (tabulate-cached v name f pos statics kws))))
 
 ;; -----------------------------------------------------------------------------
 ;; programs

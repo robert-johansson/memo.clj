@@ -26,6 +26,9 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.0.1"
   cell, Python memo's `return_pandas` without a dataframe library.
 - **`memo.core/*trace*`** (M4, DESIGN §14.3): a trace of every memo call,
   Python memo's `debug_trace`.
+- **`^:memo/cache-table`** (M4, DESIGN §14.4): a pure, expensive host
+  function's tables kept across calls, by its arguments' values; redefining
+  it drops them.
 
 ### Changed
 - `(+ x)` is kept as Python memo's unary plus, where memo.clj dropped it.
