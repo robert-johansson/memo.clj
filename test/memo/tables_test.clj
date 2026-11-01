@@ -56,3 +56,10 @@
   (is (= "rows: the result has shape [2 2 3], but flip's results have shape [2]"
          (message #(memo/rows flip (two)))))
   (is (= "rows: the result is :x, not flip's table" (message #(memo/rows flip :x)))))
+
+(defmemo x [[x N]] [] (return (* 2 x)))
+
+(deftest an-axis-named-as-the-memo-is-refused
+  ;; Python memo's return_pandas keeps the axis and drops the values
+  (is (= "rows: the memo x has an axis named x, so its values and that axis would share the key :x"
+         (message #(memo/rows x (x))))))

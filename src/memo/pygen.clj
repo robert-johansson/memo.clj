@@ -24,7 +24,8 @@
   Lifted from memo-clj's memo.pygen after review against Python memo 1.3.2's
   parse.py; changes: cast is emitted, enum members are values, more scalar
   forms translate (long, double, cond, ...)."
-  (:require [clojure.repl :as repl]
+  (:require [clojure.java.io :as io]
+            [clojure.repl :as repl]
             [clojure.string :as str]
             [clojure.walk]
             [memo.errors :as err]
@@ -291,10 +292,15 @@
             (throw (ex-info "cannot translate to Python: work @ is memo.clj's own, Python memo has none"
                             {:pygen/unsupported 'work}))
             (str "(" (name (:metric e)) " @ " (sanitize (:name e)) "(" (emit-call-args e) "))"))
-    :memo (str (sanitize (:name e))
+    :memo (if (empty? (:ids e))
+            (throw (ex-info (str "cannot translate (" (:name e) " [] ...): a memo call without axes has no "
+                                 "Python memo form (" (sanitize (:name e)) "[](...) is not Python, and "
+                                 (sanitize (:name e)) "[()](...) fails in Python memo's compiler)")
+                            {:pygen/unsupported (:name e)}))
+            (str (sanitize (:name e))
                (when (:which-retval e) (str "[" (:which-retval e) "]"))
                "[" (str/join ", " (map choice-ref->py (:ids e))) "]"
-               "(" (emit-call-args e) ")")
+               "(" (emit-call-args e) ")"))
     (throw (ex-info (str "unknown expr node " (:node e)) {:e e}))))
 
 ;; -----------------------------------------------------------------------------
@@ -566,15 +572,122 @@
 
 (defn- form-of
   "A var's top-level form, read from the file it was loaded from (as
-  clojure.repl/source finds it)."
+  clojure.repl/source finds it, by the line it was defined at), and checked
+  to define the var: a file edited since it was loaded has another form
+  there, or the var's under other text."
   [v]
   (let [m (meta v)
         sym (symbol (str (ns-name (:ns m))) (str (:name m)))
-        src (try (repl/source-fn sym) (catch Exception _ nil))]
-    (or (some-> src read-string)
-        (err/raise (str "No source for " sym)
-                   {:hint (str "memo.pygen/source reads a var's form from the file it was loaded from; "
-                               sym " was defined elsewhere (at a REPL, say). Load it from a file.")}))))
+        src (try (repl/source-fn sym) (catch Exception _ nil))
+        ;; clojure.repl reads only files on the classpath; a file loaded by
+        ;; path (clojure -M -i, load-file) has its path as :file
+        file (when-let [f (:file m)] (let [f (io/file f)] (when (and (.isAbsolute f) (.isFile f)) f)))
+        form (or (some-> src read-string)
+                 (when (and file (:line m))
+                   (with-open [r (clojure.lang.LineNumberingPushbackReader. (io/reader file))]
+                     (dotimes [_ (dec (:line m))] (.readLine r))
+                     (binding [*ns* (:ns m) *read-eval* false] (read {:eof nil} r))))
+                 (err/raise (str "No source for " sym)
+                            {:hint (str "memo.pygen/source reads a var's form from the file it was loaded from; "
+                                        sym " was defined elsewhere (at a REPL, say). Load it from a file.")}))]
+    (when-not (and (seq? form) (symbol? (second form)) (= (name (second form)) (str (:name m))))
+      (err/raise (str "The file " (:file m) " has changed since " sym " was loaded")
+                 {:hint (str "Line " (:line m) " no longer defines " sym ". Reload the namespace, (require '"
+                             (ns-name (:ns m)) " :reload), and call memo.pygen/source again.")}))
+    form))
+
+(def ^:private python-taken
+  "Names a model's Python cannot have as its own: the module's imports
+  (transpile-forms' preamble), and memo.lib's names, which Python memo
+  imports into every model it compiles, so that they shadow the module's
+  (Bool among them: Python memo's two-member Bool wins over a model's own)."
+  #{"IntEnum" "jax" "np" "memo" "domain" "Variant"
+    "AuxInfo" "Bool" "Cost" "MemoError" "array_index" "cache" "check_domains"
+    "check_exotic_param" "check_scalar_param" "check_which_retval" "collapse_diagonal"
+    "construct_vmap" "ffi" "jnp" "make_pandas_data" "make_xarray_data" "marg" "maxx"
+    "memo_result" "pad" "pprint_table" "time"})
+
+(defn- python-identifier?
+  "Whether a Clojure name becomes a Python identifier (so not an operator
+  such as - or not=)."
+  [n]
+  (and (re-find #"^[A-Za-z_]" n) (re-matches #"[A-Za-z_][A-Za-z0-9_]*" (sanitize n))))
+
+(def ^:private python-keywords
+  "Python's keywords, which no Python name can be."
+  #{"False" "None" "True" "and" "as" "assert" "async" "await" "break" "class" "continue"
+    "def" "del" "elif" "else" "except" "finally" "for" "from" "global" "if" "import" "in"
+    "is" "lambda" "nonlocal" "not" "or" "pass" "raise" "return" "try" "while" "with" "yield"})
+
+(defn- bound-names
+  "The names a form binds or names, which become Python names as they are:
+  its unqualified symbols, but for those in a list's head (a form's or a
+  function's, if or return), unless the list is a statement whose head is an
+  agent ((alice :chooses ...)); each part of a dotted symbol."
+  [form]
+  (letfn [(walk [x]
+            (cond
+              (seq? x) (let [[h & more] x
+                             agent? (and (symbol? h) (keyword? (first more)))]
+                         (concat (when agent? (walk h)) (mapcat walk more)))
+              (coll? x) (mapcat walk x)
+              (and (symbol? x) (nil? (namespace x)))
+              (or (some->> (parse/dotted-parts x) (map str)) [(name x)])
+              :else nil))]
+    (into #{} (filter python-identifier?) (walk form))))
+
+(defn- form-names
+  "The names in a form that become Python identifiers: its unqualified
+  symbols, each part of a dotted one (alice.x), and keywords (a call's
+  :p 0.5 is p=0.5)."
+  [form]
+  (into #{}
+        (comp (mapcat (fn [x]
+                        (cond
+                          (and (symbol? x) (nil? (namespace x)))
+                          (or (some->> (parse/dotted-parts x) (map str)) [(name x)])
+                          (and (keyword? x) (nil? (namespace x))) [(name x)])))
+              (filter python-identifier?))
+        (tree-seq coll? seq form)))
+
+(defn- check-python-names
+  "Two Clojure names that become one Python name (a-b and a_b, big? and
+  big-qm), or a var named as Python memo's own names (python-taken), would
+  make Python compute another model, silently: loud errors. A model's names
+  are checked with the vars' (a parameter may clash with a helper), each
+  model apart from the others. A model reading such a var without passing
+  it (its own Bool) is refused too: Python would read memo.lib's."
+  [ns vars forms]
+  (let [top (map (comp str :name meta) vars)
+        read-vars (for [form forms
+                        n (form-names form)
+                        :when (python-taken (sanitize n))
+                        :let [v (try (ns-resolve ns (symbol n)) (catch Exception _ nil))]
+                        :when (and (var? v) (not= v #'domains/Bool)
+                                   (not= 'clojure.core (ns-name (:ns (meta v)))))]
+                    n)]
+    (doseq [n (distinct (concat top read-vars)) :when (python-taken (sanitize n))]
+      (err/raise (str "memo.pygen/source cannot translate " n ": Python memo's models read their own "
+                      (sanitize n))
+                 {:hint (str "Python memo imports " (sanitize n) " into every model (memo.lib), or the module "
+                             "does, and it would win over this namespace's. Rename " n ".")}))
+    (doseq [form forms
+            :let [kw (first (sort (filter (comp python-keywords sanitize) (bound-names form))))]
+            :when kw]
+      (err/raise (str "memo.pygen/source cannot translate " kw ": " (sanitize kw) " is a Python keyword")
+                 {:hint (str "Python cannot name a parameter, agent, choice or definition " (sanitize kw)
+                             ". Rename " kw ".")}))
+    (doseq [form forms
+            :let [clash (->> (into (set top) (form-names form))
+                             (group-by sanitize)
+                             (keep (fn [[py ns]] (when (< 1 (count ns)) [py (sort ns)])))
+                             (sort-by first)
+                             first)]
+            :when clash]
+      (let [[py ns] clash]
+        (err/raise (str "memo.pygen/source would give " (str/join " and " ns) " one Python name, " py)
+                   {:hint (str "Python identifiers have no - or ?, so these names become the same one, and "
+                               "the model would read one in place of the other. Rename one of them.")})))))
 
 (def ^:private emit-order
   "Python needs a name defined before it is read: values, then helper
@@ -584,11 +697,14 @@
 (defn source
   "Experimental. Python memo source for vars of one namespace: its memos
   (defmemo), domains (defenum, defdomain, def of a vector) and helper
-  functions (defn, of scalars), each read from the file it was loaded from,
-  in the order Python needs. What cannot be translated is a loud error that
-  names it (a host function beyond the scalar translator, an inline #{...}
-  it cannot read, a ^:memo/vectorized function): Python memo would not
-  compute the same model without it. Budgets and memo.gen have no Python
+  functions (defn, of scalars), each read from the file it was loaded from
+  (as the file is now: one edited since, so that a var's line holds another
+  form, is a loud error), in the order Python needs. What cannot be
+  translated is a loud error that names it (a host function beyond the
+  scalar translator, an inline #{...} it cannot read, a ^:memo/vectorized
+  function, two names that become one Python name, a name Python memo's
+  models import, such as Bool or pad): Python memo would not compute the
+  same model without it. Budgets and memo.gen have no Python
   counterpart; Python memo runs the source as written."
   [vars]
   (let [nss (set (map (comp :ns meta) vars))]
@@ -603,6 +719,7 @@
               (err/raise (str "memo.pygen/source cannot translate the vectorized function "
                               (str/join ", " vectorized))
                          {:hint "A ^:memo/vectorized function computes with gen.array; translate it to JAX by hand."}))
+          _ (check-python-names (first nss) vars forms)
           {:keys [python warnings skipped]} (transpile-forms forms (first nss))]
       (when (seq skipped)
         (err/raise (str "memo.pygen/source cannot translate " (str/join ", " (sort skipped)))

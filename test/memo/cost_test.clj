@@ -174,6 +174,9 @@
   (is (= "(cost @(f ...)) measures the whole memo, without axes"
          (ex-message (ts/compile-error 'memo.cost-test '(defmemo bad-axes [] [] (return (cost @(rec [0] 1))))))))
   (is (= "Unknown memo plain" (message #(times-plain))) "time @ of a host function")
+  (is (str/includes? (try (times-plain) nil (catch Exception e (:memo/hint (ex-data (err/root-memo-error e)))))
+                     "^{:memo/cost n}")
+      "its hint is cost @'s, not a memo call's (whose axes cost @ refuses)")
   (is (= "1 is not a memo" (message #(memo/cost 1)))))
 
 ;; -----------------------------------------------------------------------------
@@ -237,3 +240,53 @@
                                                           (the-ns 'memo.cost-test))]
     (is (= #{'w-in-python} skipped))
     (is (str/includes? (first warnings) "work @ is memo.clj's own, Python memo has none"))))
+
+;; -----------------------------------------------------------------------------
+;; arrays, host functions changed, wrong calls
+
+(defn ^:memo/vectorized total [t] (array/sum t))
+(defmemo sums [] [^:array table] (return (total table)))
+(defmemo sums-too [] [^:array table] (return (total table)))
+(defmemo times-sums [] [^:array table] (return (time @(sums table))))
+
+(defn- ones [n] (array/array (vec (repeat n 1.0))))
+
+(deftest space-counts-what-the-run-computes-not-its-parameters
+  ;; two memos alike, each counted fresh at its own size
+  (is (= (memo/cost sums (ones 3)) (memo/cost sums-too (ones 300))))
+  (is (= (memo/cost sums (ones 300)) (memo/cost sums-too (ones 300)))))
+
+(deftest an-array-argument-may-be-a-vector
+  (is (= (memo/cost sums (ones 3)) (memo/cost sums [1.0 1.0 1.0])))
+  (is (= (memo/cost sums {:table (ones 4)}) (memo/cost sums {:table [1.0 1.0 1.0 1.0]})))
+  (is (= (double (:time (memo/cost sums (ones 3)))) (double (ts/host (times-sums [1.0 1.0 1.0]))))
+      "time @ of a memo given a vector"))
+
+(defn ^{:memo/cost 1000} sim [x] x)
+(defmemo simulates [[c X]] [] (return (sim c)))
+
+(deftest a-host-function-changed-is-counted-again
+  (let [before (t simulates)]
+    (try
+      (alter-meta! #'sim assoc :memo/cost 5)
+      (is (= (- before (* 2 995)) (t simulates)) "another :memo/cost")
+      (finally (alter-meta! #'sim assoc :memo/cost 1000)))
+    (is (= before (t simulates)))
+    (let [old sim]
+      (try
+        (alter-var-root #'sim (constantly (fn [x] x)))
+        (alter-meta! #'sim dissoc :memo/cost)
+        (is (= (- before (* 2 999)) (t simulates)) "redefined without its :memo/cost")
+        (finally (alter-var-root #'sim (constantly old)) (alter-meta! #'sim assoc :memo/cost 1000))))))
+
+(deftest a-count-kept-does-not-answer-a-wrong-call
+  (t tempered 0.1 2)
+  (is (= "Too many arguments to memo tempered (it takes 2)" (message #(t tempered 0.1 2 3))))
+  (is (= "memo tempered has no parameter nope" (message #(t tempered 0.1 2 {:nope 1})))))
+
+(defmemo how-hard [] [] (return (time @(pick 1.0))))
+
+(deftest a-budget-reaches-the-memos-a-memo-measures
+  (let [budget {:memo/budget {'alice {:samples 2}}}]
+    (is (= (double (t pick 1.0 budget)) (double (ts/host (how-hard budget))))
+        "alice is pick's agent, which how-hard only measures")))

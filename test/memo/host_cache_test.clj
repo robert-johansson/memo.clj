@@ -54,6 +54,28 @@
     (is (= 0 (counted #(scored 6))))
     (is (= 3 (counted #(scored 5))) "evicted")))
 
+(deftest a-table-larger-than-the-bound-is-not-kept
+  (binding [lower/*host-cache-cells* 2]
+    (is (= 3 (counted #(scored 7))))
+    (is (= 3 (counted #(scored 7))) "3 cells > 2: tabulated again")))
+
+(defn ^:memo/vectorized ^:memo/cache-table doubled-v [x] (array/* 2.0 x))
+(defmemo uses-doubled-v [[x X]] [] (return (doubled-v x)))
+
+(deftest a-vectorized-function-has-no-table-to-keep
+  (is (= "The function doubled-v is ^:memo/vectorized and ^:memo/cache-table"
+         (message #(uses-doubled-v)))))
+
 (deftest a-differentiated-value-still-refused
   (is (= "Cannot differentiate through the host function expensive"
          (message #((array/grad (fn [k] (array/sum (scored k)))) (array/array 1.0))))))
+
+;; -0.0 and 0.0 are one value to Clojure's = and hash (and Python's), two
+;; to a pure function: each cache keeps them apart
+(defn ^:memo/cache-table sign-of [z] (Math/copySign 1.0 (double z)))
+(defmemo signs [] [z] (return (sign-of z)))
+(defmemo ^:cache cached-sign [] [z] (return #{(Math/copySign 1.0 (double z))}))
+
+(deftest negative-zero-is-its-own-argument
+  (is (= [1.0 -1.0 1.0] (mapv #(double (ts/host (signs %))) [0.0 -0.0 0.0])) "a host table")
+  (is (= [1.0 -1.0 1.0] (mapv #(double (ts/host (cached-sign %))) [0.0 -0.0 0.0])) "a ^:cache memo"))

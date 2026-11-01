@@ -494,11 +494,23 @@
 
 (defonce ^:private host-tables (atom {:cells 0 :by-var {}}))
 
+(defn exact-key
+  "x as a cache key that keeps apart what a pure function can tell apart and
+  Clojure's = and hash do not (nor Python's): -0.0 and 0.0 (1/x, atan2).
+  Internal, for memo.core's caches and the host tables."
+  [x]
+  (cond
+    (and (float? x) (zero? (double x)) (neg? (Math/copySign 1.0 (double x)))) ::negative-zero
+    (map? x) (into {} (map (fn [[k v]] [(exact-key k) (exact-key v)])) x)
+    (sequential? x) (mapv exact-key x)
+    :else x))
+
 (defn- table-key
   "The values a host function's table follows from: its arguments, the
-  static ones whole and the others read from their arrays, and the backend."
+  static ones whole and the others read from their arrays (exact-key), and
+  the backend."
   [pos statics kws]
-  (let [content (fn [x s] (if (or s (number? x) (boolean? x) (sequential? x)) x (array/->clj x)))]
+  (let [content (fn [x s] (exact-key (if (or s (number? x) (boolean? x) (sequential? x)) x (array/->clj x))))]
     [(mapv content pos statics) (mapv (fn [[k x s]] [k (content x s)]) kws) array/*backend*]))
 
 (defn- tabulate-cached
@@ -517,7 +529,9 @@
         t
         (let [t (tabulate name f pos statics kws)
               n (long (array/size t))]
-          (swap! host-tables
+          ;; a table larger than the whole bound is not kept
+          (when (clojure.core/<= n *host-cache-cells*)
+           (swap! host-tables
                  (fn [{:keys [cells by-var] :as c}]
                    (let [{:keys [cells by-var]} (if (clojure.core/> (clojure.core/+ cells n) *host-cache-cells*)
                                                   {:cells 0 :by-var {}}
@@ -528,7 +542,7 @@
                                         [(:tables e) 0]
                                         [{} (reduce clojure.core/+ 0 (map array/size (vals (:tables e))))])]
                      {:cells (clojure.core/- (clojure.core/+ cells n) freed)
-                      :by-var (assoc by-var v {:fn f :tables (assoc kept k t)})})))
+                      :by-var (assoc by-var v {:fn f :tables (assoc kept k t)})}))))
           t)))))
 
 (defn- samples
@@ -648,6 +662,11 @@
                  {:hint (str "time @ counts a memo called as a memo. Pass the values that vary "
                              "as axes, (" name " [...] ...), so that it is called once.")})
 
+      (and vectorized? (:memo/cache-table (meta v)))
+      (err/raise (str "The function " name " is ^:memo/vectorized and ^:memo/cache-table")
+                 {:hint (str "A vectorized function is called once on whole arrays, not tabulated, so "
+                             "it has no table to keep. Remove one of the marks.")})
+
       vectorized?
       ;; elementwise: its result has at most the arguments' extent
       (let [r (try (direct)
@@ -729,9 +748,17 @@
   [{:keys [resolve-memo] :as ctx} env {:keys [name metric args kwargs guards] :as instr}]
   (if-not (every? #(array/truthy? (get env %)) guards)
     0
-    (let [f (resolve-memo name)
+    (let [f (try (resolve-memo name)
+                 (catch clojure.lang.ExceptionInfo e
+                   (if (err/memo-error? e)
+                     (err/raise (ex-message e)
+                                {:hint (str "(" (clojure.core/name metric) " @(" name " ...)) measures a memo, "
+                                            "a defmemo's model, called without axes: (time @(f args...)). "
+                                            "A host function declares its cost per cell on its var, "
+                                            "^{:memo/cost n}.")})
+                     (throw e))))
           {:memo.impl/keys [size cost-call]} (meta f)
-          host (fn [x] (if (or (number? x) (boolean? x)) x (array/stop-gradient x)))]
+          host (fn [x] (if (or (number? x) (boolean? x) (sequential? x)) x (array/stop-gradient x)))]
       ;; resolve-memo refuses a name that is not a memo ("Unknown memo f")
       (if (= :size metric)
         size
@@ -864,6 +891,8 @@
         kept-consts (into (set (filter const outputs))
                           (comp (mapcat ir/inputs) (filter const)) instrs)
         dead (drops instrs outputs)
+        ;; the :param instructions' values, which space @ does not count
+        param-outs (into #{} (keep #(when (= :param (:i %)) (:out %))) instrs)
         ;; #{...} forms read only as arguments of host functions and memo
         ;; calls, which may take any value (a vector, say)
         readers (reduce (fn [m instr] (reduce #(update %1 %2 (fnil conj #{}) (:i instr)) m (ir/inputs instr)))
@@ -908,7 +937,9 @@
              acc (when (:cost call) (atom {:time cops :work cops :charged {}
                                            :live live0 :peak (max cpeak live0) :callees 0}))
              ctx (cond-> (assoc ctx :call call) acc (assoc :cost-acc acc))
-             counted? (fn [s] (not (contains? params s)))
+             ;; space counts what the run computes: not the parameters, nor
+             ;; the :param instructions that read them
+             counted? (fn [s] (not (or (contains? params s) (contains? param-outs s))))
              env (reduce (fn [env [instr dead]]
                            (let [env (step ctx env instr)]
                              (when acc

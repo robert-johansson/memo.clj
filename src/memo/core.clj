@@ -94,7 +94,7 @@
       (if-not (and (every? host? args) (every? host? (vals kwargs)) (nil? (:key opts)))
         (call args kwargs opts)
         (let [epoch @definitions
-              k [(bind args kwargs) (select-keys opts [:budget :limit :mass :cost])]
+              k [(lower/exact-key (bind args kwargs)) (select-keys opts [:budget :limit :mass :cost])]
               c (swap! cache #(if (= epoch (:epoch %)) % {:epoch epoch :table {}}))]
           (if-let [[_ v] (find (:table c) k)]
             v
@@ -155,15 +155,34 @@
                                " to be a defmemo, defined by the time it is called.")})))))
 
 (defn- callees
-  "The memos m calls (as memos or as host functions), resolved now."
+  "The memos m calls (as memos or as host functions) or measures (cost @,
+  time @, space @, work @: a measure runs the memo under the call's budget;
+  size @ runs nothing), resolved now."
   [m]
   (let [{:memo.impl/keys [compiled ns]} (meta m)]
     (into #{}
-          (keep (fn [{:keys [i name]}]
-                  (when (#{:call-memo :ffi} i)
+          (keep (fn [{:keys [i name metric]}]
+                  (when (or (#{:call-memo :ffi} i) (and (= :cost i) (not= :size metric)))
                     (let [f (some-> (ns-resolve (the-ns ns) name) deref)]
                       (when (:memo.impl/call (meta f)) f)))))
           (:instrs compiled))))
+
+(defn- host-fingerprint
+  "The host functions m and the memos it calls reach, transitively, as they
+  are now: each var with its value and its :memo/cost. memo.core/cost keeps
+  a count for one fingerprint, so a host function redefined, or given
+  another :memo/cost, is counted again."
+  [m]
+  (loop [todo [m] seen #{} acc #{}]
+    (if-let [f (peek todo)]
+      (if (seen f)
+        (recur (pop todo) seen acc)
+        (let [{:memo.impl/keys [compiled ns]} (meta f)
+              hosts (for [{:keys [i name]} (:instrs compiled) :when (= :ffi i)
+                          :let [v (ns-resolve (the-ns ns) name)] :when (var? v)]
+                      [v @v (:memo/cost (meta v))])]
+          (recur (into (pop todo) (callees f)) (conj seen f) (into acc hosts))))
+      acc)))
 
 (defn- reachable-agents
   "The agents of m and of the memos it calls, transitively: {:agents
@@ -260,9 +279,12 @@
   --> f(args) as it starts; <-- f(args) has shape [..] as it ends, with
   its cost when it runs in cost mode (memo.core/cost, cost @) and the time
   it took (on MLX, the time to build its lazy arrays). Lines are indented
-  by call depth, so a memo's calls show inside it. A ^:cache memo's call
-  answered from its cache prints nothing, as in Python memo. Arguments
-  print as numbers, or as an array's shape (never read from the array).
+  by call depth, so a memo's calls show inside it, and a call under a
+  budget shows it. A ^:cache memo's call answered from its cache prints
+  nothing, as in Python memo, and so does a count memo.core/cost has
+  cached. Arguments print as numbers, or as an array's shape (never read
+  from the array; a vector's too), by name as name=value. Each line is one
+  write, so calls on other threads do not split it.
   (binding [memo.core/*trace* true] (f ...))."
   false)
 
@@ -271,26 +293,41 @@
 (defn- trace-arg [x]
   (cond (or (number? x) (boolean? x)) (pr-str x)
         (array/array? x) (str "#array" (array/shape x))
+        (sequential? x) (str "#array" (try (array/shape (array/array x))
+                                           (catch Exception _ [(count x)])))
         :else (pr-str x)))
 
+(defn- trace-line
+  "One line of the trace, in one write (println writes the line and its
+  newline apart, so lines of calls on other threads would interleave)."
+  [s]
+  (let [^java.io.Writer w *out*]
+    (locking w (.write w (str s "\n")) (.flush w))))
+
 (defn- traced
-  "call, printing a trace around it while *trace* is true."
-  [name call]
+  "call, printing a trace around it while *trace* is true; size is size @'s
+  measure, for the cost line."
+  [name size call]
   (fn [args kwargs opts]
     (if-not *trace*
       (call args kwargs opts)
       (let [pad (apply str (repeat *trace-depth* "  "))
             shown (str name "(" (str/join ", " (concat (map trace-arg args)
-                                                       (map (fn [[k v]] (str k " " (trace-arg v))) kwargs)))
-                       ")")
+                                                       (map (fn [[k v]] (str (clojure.core/name k) "=" (trace-arg v)))
+                                                            kwargs)))
+                       ")"
+                       ;; the normalized budget, without its nil and false entries
+                       (when-let [b (:budget opts)]
+                         (str " with budget "
+                              (pr-str (into {} (map (fn [[a m]] [a (into {} (filter val) m)])) b)))))
             t0 (System/nanoTime)]
-        (println (str pad " --> " shown))
+        (trace-line (str pad " --> " shown))
         (let [out (binding [*trace-depth* (inc *trace-depth*)] (call args kwargs opts))
               ;; cost mode and masses return [table more]
               [table c] (cond (:cost opts) out (:mass opts) [(first out) nil] :else [out nil])]
-          (println (str pad "<--  " shown " has shape " (array/shape table)))
-          (when c (println (str pad "     cost = " (pr-str (public-cost c)))))
-          (println (str pad (format "     time = %.6f sec" (/ (- (System/nanoTime) t0) 1e9))))
+          (trace-line (str pad "<--  " shown " has shape " (array/shape table)))
+          (when c (trace-line (str pad "     cost = " (pr-str (assoc (public-cost c) :size size)))))
+          (trace-line (str pad (format "     time = %.6f sec" (/ (- (System/nanoTime) t0) 1e9))))
           out)))))
 
 (defn- make-memo
@@ -358,7 +395,8 @@
                                 p))))
         ;; in cost mode (:cost in the options) a call returns [table cost]
         ;; traced inside the cache, so a cached answer prints nothing (*trace*)
-        call (cond-> (traced name
+        size (cost/size parsed)
+        call (cond-> (traced name size
                              (fn [args kwargs {:keys [budget limit mass cost] :as call-opts}]
                                (let [env (bind-params name params defaults args kwargs)]
                                  (cond
@@ -368,7 +406,6 @@
                                    :else (run env)))))
                (:cache opts) (as-> c (cached (symbol (str ns) (str name))
                                              #(bind-params name params defaults %1 %2) c)))
-        size (cost/size parsed)
         ;; the parameters a count can depend on: those that reach a guard (a
         ;; recursion's path condition) or a memo call's or a cost @'s
         ;; argument (all of them, when an inline #{...} does, a function of
@@ -399,6 +436,9 @@
         ;; the budget (and the backend's dtypes), so cached by them until any
         ;; memo is redefined
         costs (atom {:epoch -1 :table {}})
+        ;; the model itself (delivered once it is made), for the host
+        ;; functions its counts depend on and for its budgets' checks
+        self (promise)
         cost-call (fn [args kwargs call-opts]
                     (let [arg-params (map-indexed (fn [i a] [(:name (nth params i nil)) a]) args)
                           ;; a batched argument the count does not depend on is
@@ -416,12 +456,22 @@
                           args (mapv (fn [[p a]] (one p a)) arg-params)
                           kwargs (into {} (map (fn [[k v]] [k (one k v)])) kwargs)
                           epoch @definitions
-                          ;; by parameter name, whether passed by position or by name
-                          k [(into (into {} (keep (fn [[[p _] a]] (when (and p (relevant? p)) [p a])))
-                                         (map vector arg-params args))
-                                   (keep (fn [[kk v]] (when (relevant? kk) [(symbol (clojure.core/name kk)) v])))
-                                   kwargs)
-                             (select-keys call-opts [:budget :limit]) array/*backend*]
+                          ;; the call's parameters, checked as the call checks
+                          ;; them (a count kept must not answer a wrong call)
+                          env (bind-params name params defaults args kwargs)
+                          shape-of (fn [v]
+                                     (cond (or (number? v) (boolean? v)) []
+                                           (sequential? v) (try (array/shape (array/array v))
+                                                                (catch Exception _ [(count v)]))
+                                           (or (array/array? v) (array/tracked? v)) (array/shape v)
+                                           :else v))
+                          ;; by parameter, however it is passed: a count-param by
+                          ;; its value, any other by its shape (an array's size
+                          ;; is the run's), with the host functions as they are
+                          k [(lower/exact-key
+                              (into {} (map (fn [[p v]] [p (if (relevant? p) v [::shape (shape-of v)])])) env))
+                             (select-keys call-opts [:budget :limit]) array/*backend*
+                             (host-fingerprint @self)]
                           t (swap! costs #(if (= epoch (:epoch %)) % {:epoch epoch :table {}}))]
                       (if-let [[_ c] (find (:table t) k)]
                         c
@@ -431,7 +481,6 @@
                           c))))
         ;; the model itself, for checking a budget's agents against the memos
         ;; it calls (once per budget, until any memo is redefined)
-        self (promise)
         checked (atom {})
         check (fn [budget]
                 (let [epoch @definitions]
@@ -687,10 +736,13 @@
     plus the memos it calls, per call site.
   - :size, the nodes of m's syntax tree, as Python memo counts them.
   It runs m once, in cost mode, and caches the result until any memo is
-  redefined, by its budget, its backend, and the arguments the count can
-  depend on: the parameters that reach a recursion's guard or a memo call.
-  A parameter that only weighs choices (a temperature) is not one, so a fit
-  that moves it reuses the count instead of running m again."
+  redefined, by its budget, its backend, the host functions it reaches (a
+  function redefined, or given another :memo/cost, is counted again), and
+  the arguments the count can depend on: the parameters that reach a
+  recursion's guard or a memo call, by value; the others by shape. A
+  parameter that only weighs choices (a temperature) is one of the others,
+  so a fit that moves it reuses the count instead of running m again. The
+  arguments are checked as a call checks them, a count kept or not."
   [m & args]
   (when-not (memo? m)
     (err/raise (str (pr-str m) " is not a memo") {:hint "memo.core/cost measures a memo defined by defmemo."}))
@@ -766,10 +818,16 @@
   axis's keyword to its label there (an enum member's name, a domain's value
   otherwise), and the memo's name, as a keyword, to the cell's value, or,
   for a memo with several returns, to the vector of its values. Any Clojure
-  data library reads it as it is. Values are read without their gradients."
+  data library reads it as it is. Values are read without their gradients.
+  A memo with an axis of its own name is a loud error: the axis and the
+  value would share the key (Python memo's return_pandas drops the values)."
   [m result]
   (let [{:keys [name axes domains num-results cells value]} (table-data "rows" m result)
         k (keyword (str name))]
+    (when (some #(= (str %) (str name)) axes)
+      (err/raise (str "rows: the memo " name " has an axis named " name
+                      ", so its values and that axis would share the key " k)
+                 {:hint (str "Rename the axis or the memo; print-table shows both.")}))
     (vec (for [cell cells]
            (assoc (zipmap (map keyword axes)
                           (map (fn [d i] (if (domains/enum? d) (nth (domains/labels d) i) (nth (domains/values d) i)))

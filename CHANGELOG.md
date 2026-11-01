@@ -25,6 +25,9 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.0.1"
   - `(work @(f ...))` and `:work`, memo.clj's own: `time`, with each
     distinct call of a `^:cache` memo charged once, the work a run with its
     caches does. `time` charges them per call site, as Python memo does.
+  - A count is kept until a memo, or a host function it reaches, changes.
+    It is kept by the parameters it depends on, the others by their shape.
+    The arguments are checked as a call's, a count kept or not.
 - **`memo.core/rows`** (M4, DESIGN §14.2): a result as data, one map per
   cell, Python memo's `return_pandas` without a dataframe library.
 - **`memo.core/*trace*`** (M4, DESIGN §14.3): a trace of every memo call,
@@ -36,6 +39,11 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.0.1"
   transpiler, with `(memo.pygen/source vars)` giving a namespace's models,
   domains and helper functions as a Python memo module. It translates
   `cost @` and its siblings, and refuses `work @`, which Python memo lacks.
+  It also refuses two names that become one Python name, names Python
+  memo's models import for themselves (`Bool`, `pad`, `time`, ...), Python
+  keywords, memo calls without axes (Python memo has no form for them), and
+  a file edited since it was loaded. Files loaded by path (`clojure -M -i`)
+  are read.
 
 ### Changed
 - `(+ x)` is kept as Python memo's unary plus, where memo.clj dropped it.
@@ -44,6 +52,11 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.0.1"
   are passed: `(f 2)`, `(f {:n 2})` and a default are one entry, where they
   were separate entries (as in Python memo's `cache=True`). Results are
   unchanged.
+
+### Fixed
+- A `^:cache` memo and a `^:memo/cache-table` function took `-0.0` and
+  `0.0` as the same argument, so a function that tells them apart (`1/x`,
+  `atan2`) could read the other one's result.
 
 ## [1.0.1] - 2026-11-01
 

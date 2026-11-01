@@ -24,9 +24,9 @@
 (deftest a-call-and-its-calls
   (let [lines (traced-lines #(rec 2))]
     (is (= [" --> rec(2)"
-            "   --> rec(a 1, b 1)"
-            "     --> rec(a 0, b 2)"
-            "    <--  rec(a 0, b 2) has shape [2]"]
+            "   --> rec(a=1, b=1)"
+            "     --> rec(a=0, b=2)"
+            "    <--  rec(a=0, b=2) has shape [2]"]
            (take 4 lines)))
     (is (re-matches #"\s+time = \d+\.\d{6} sec" (nth lines 4)))
     (is (= "<--  rec(2) has shape [2]" (nth lines 7)) "the outer call ends last, unindented")
@@ -39,7 +39,7 @@
 
 (deftest cost-mode-prints-the-cost
   (let [lines (traced-lines #(memo/cost rec 0 {:b 9}))]
-    (is (some #(re-matches #"\s+cost = \{:time \d+, :space \d+, :work \d+\}" %) lines))))
+    (is (some #(re-matches #"\s+cost = \{:time \d+, :space \d+, :work \d+, :size \d+\}" %) lines))))
 
 (deftest a-differentiated-argument-is-not-read
   (let [lines (atom nil)
@@ -47,3 +47,17 @@
                         (array/sum (cached-flip p))))]
     (is (ts/close? 0.0 (ts/host (g (array/array 0.3)))))
     (is (= " --> cached-flip(#array[])" (first @lines)) "its shape, not its value")))
+
+(defmemo ^{:doc "an array parameter"} lookup [[x X]] [^:array t] (return #{(nth t 0)}))
+
+(deftest a-vector-argument-prints-as-its-shape
+  (is (= " --> lookup(#array[50])" (first (traced-lines #(lookup (vec (range 50.0))))))))
+
+(defmemo picks [[x X]] []
+  (alice :thinks (bob :chooses [y X] :wpp (+ 1 y)))
+  (alice :chooses [x X] :wpp (exp (E (= x bob.y))))
+  (return (Pr (= alice.x x))))
+
+(deftest a-budget-shows
+  (is (= " --> picks() with budget {alice {:samples 2, :algorithm :one-and-done, :draws 1}}"
+         (first (traced-lines #(picks {:memo/budget {'alice {:samples 2}}}))))))

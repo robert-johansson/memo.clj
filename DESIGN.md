@@ -1948,6 +1948,11 @@ budget.
     differentiated one, which is refused before), and the backend. Bounded
     by `*host-cache-cells*` (4·10^6 numbers), past which it starts over.
     A batched argument is not cached.
+  - *The acceptance pass* (memoclj-4ahc): the key keeps `-0.0` and `0.0`
+    apart (`memo.lower/exact-key`, also `^:cache`'s and the count's key);
+    a table larger than the whole bound is not kept; a function marked
+    both `^:memo/vectorized` and `^:memo/cache-table` is a loud error,
+    since a vectorized function has no table.
 
 ### 14.5 The transpiler as user tooling
 
@@ -1958,10 +1963,10 @@ budget.
   - The fuzzer and the corpus's round trip use them; 327 calls reproduce
     the fixtures.
 - **Decided 2026-11-01:** `memo.pygen` moves to `src`, experimental.
-  - `(memo.pygen/source vars-or-forms)` returns `{:python str :warnings
-    [...] :skipped #{...}}`. A defmemo's var keeps its form
-    (`:memo.impl/form`); domains and helper functions are given as vars or
-    forms.
+  - The plan: `(memo.pygen/source vars-or-forms)` returning `{:python str
+    :warnings [...] :skipped #{...}}`, a defmemo's var keeping its form
+    (`:memo.impl/form`). As built (below), `source` takes vars and returns
+    the Python string; `transpile-forms` gives the map.
   - What it cannot translate is a loud error naming the construct: a host
     function beyond its scalar translator, an inline `#{...}` it cannot
     read, a `^:memo/vectorized` function, a budget (Python memo has none),
@@ -1978,6 +1983,19 @@ budget.
     a vectorized function or anything `transpile-forms` would skip. Tests:
     it equals `transpile-forms` on the same forms; its module run in
     Python memo gives memo.clj's numbers; its refusals.
+  - *The acceptance pass* (memoclj-4ahc, 2026-11-01) found four ways for
+    `source` to give Python that computes another model, silently. Each is
+    now a loud error:
+    - two names that become one Python name (`a-b` and `a_b`, `big?` and
+      `big-qm`);
+    - a name Python memo's models import for themselves (memo.lib's
+      `Bool`, `pad`, `time` and the rest, and the module's imports). A
+      model's own `Bool` lost to Python's two-member one;
+    - a Python keyword as a name;
+    - a file edited since it was loaded, which `source-fn` read by line
+      number alone.
+    A file loaded by its path (`clojure -M -i`, `load-file`) is read too:
+    `source-fn` reads only classpath resources.
 - **Why:** to share a model with Python memo's users, and to check a
   model's numbers against the reference.
 

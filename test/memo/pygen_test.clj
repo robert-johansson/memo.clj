@@ -132,6 +132,17 @@
   (return (Pr (= alice.s s))))
 (defn ^:memo/vectorized tilt-v [x] x)
 
+;; names Python cannot keep apart, or has its own
+(defn big? [x] (> x 1))
+(defn big-qm [x] x)
+(def side_p 0.5)
+(defmemo local-clash [] [side-p] (return (+ side-p #{side_p})))
+(defn pad [x] x)
+(defmemo pads [[s Side]] [] (return (pad s)))
+(defmemo lambda-param [] [lambda] (return (* 2 lambda)))
+(defmemo halved [] [n] (return (/ n 2)))
+(defmemo calls-halved [] [] (return (halved [] 2)))
+
 (defn- message [thunk]
   (try (thunk) nil (catch Exception e (some-> (err/root-memo-error e) ex-message))))
 
@@ -161,4 +172,41 @@
          (message #(pygen/source [#'lean #'tilt-v]))))
   (is (= "memo.pygen/source takes vars of one namespace, not 2"
          (message #(pygen/source [#'lean #'clojure.core/inc]))))
-  (is (= "memo.pygen/source takes vars" (message #(pygen/source ['lean])))))
+  (is (= "memo.pygen/source takes vars" (message #(pygen/source ['lean]))))
+  (testing "two names that become one Python name"
+    (is (= "memo.pygen/source would give big-qm and big? one Python name, big_qm"
+           (message #(pygen/source [#'big? #'big-qm]))))
+    (is (= "memo.pygen/source would give side-p and side_p one Python name, side_p"
+           (message #(pygen/source [#'local-clash #'side_p])))
+        "a model's parameter and a var"))
+  (testing "a name Python memo's models import (memo.lib's pad), passed or only read"
+    (is (= "memo.pygen/source cannot translate pad: Python memo's models read their own pad"
+           (message #(pygen/source [#'pads #'Side #'pad]))))
+    (is (= "memo.pygen/source cannot translate pad: Python memo's models read their own pad"
+           (message #(pygen/source [#'pads #'Side])))))
+  (testing "a memo call without axes: Python memo has none"
+    (is (= "memo.pygen/source cannot translate calls-halved"
+           (message #(pygen/source [#'calls-halved #'halved])))))
+  (testing "a Python keyword as a name"
+    (is (= "memo.pygen/source cannot translate lambda: lambda is a Python keyword"
+           (message #(pygen/source [#'lambda-param])))))
+  (testing "a file edited since it was loaded: the var's line holds another form"
+    (let [line (:line (meta #'lean))]
+      (try
+        (alter-meta! #'lean assoc :line (:line (meta #'tilt)))
+        (is (= "The file memo/pygen_test.clj has changed since memo.pygen-test/lean was loaded"
+               (message #(pygen/source [#'lean #'Side #'tilt]))))
+        (finally (alter-meta! #'lean assoc :line line))))))
+
+(deftest source-of-a-file-loaded-by-its-path
+  ;; clojure -M -i models.clj and load-file give a var its file's path, not a
+  ;; classpath resource
+  (let [dir (doto (io/file (System/getProperty "java.io.tmpdir") (str "memo-pygen-load-" (System/nanoTime))) .mkdirs)
+        f (io/file dir "loaded_models.clj")]
+    (spit f (str "(ns memo.pygen-loaded-models (:require [memo.core :refer [defmemo]]))\n"
+                 "(def Z [0 1])\n"
+                 "(defmemo zf [[z Z]] [] (return (* 2 z)))\n"))
+    (load-file (.getAbsolutePath f))
+    (let [python (pygen/source [(resolve 'memo.pygen-loaded-models/zf) (resolve 'memo.pygen-loaded-models/Z)])]
+      (is (str/includes? python "def zf[z: Z]():"))
+      (is (str/includes? python "Z = ")))))

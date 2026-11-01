@@ -1096,8 +1096,10 @@ score, can opt in to keeping its tables: marked `^:memo/cache-table`, it
 promises to be pure, so a later call with the same arguments (the static
 ones whole, the others by their values) reads the table kept. Redefining
 the function drops its tables, and they are never kept for a batched
-argument. Its cost per cell for [cost reflection](#cost-reflection) can be
-declared with `^{:memo/cost n}`:
+argument. memo.clj keeps at most four million numbers of tables in all, and
+starts over past that. A vectorized function is not tabulated, so marking
+it too is an error. Its cost per cell for
+[cost reflection](#cost-reflection) can be declared with `^{:memo/cost n}`:
 
 ```clojure
 (defn ^:memo/cache-table ^{:memo/cost 1000} judge [n] (if (even? n) 1.0 0.5))
@@ -1460,16 +1462,18 @@ simulator or a language model's score, say:
 ```
 
 A count is computed once, by a run of the memo in a counting mode, and
-reused until any memo is redefined. It is reused across the values of the
-parameters it cannot depend on: those that reach no recursion's guard and
-no memo call, such as a temperature in a `:wpp`. So a model that reads
-`cost @` while it is fitted does not run the memo it measures again at
-every step.
+reused until any memo is redefined, or a host function it reaches is
+redefined or given another `:memo/cost`. It is reused across the values of
+the parameters it cannot depend on: those that reach no recursion's guard
+and no memo call, such as a temperature in a `:wpp` (an array parameter
+by its shape). So a model that reads `cost @` while it is fitted does not
+run the memo it measures again at every step.
 
 A bounded agent's budget (see [Bounded minds](#bounded-minds)) is counted
 too: `(memo/cost f args... {:memo/budget ...})`, and a `cost @` inside a
 bounded call, measure the program that runs, so an agent that imagines
-more samples costs more. The measures are memo.clj's: Python memo's `time`
+more samples costs more. A budget may name the agents of a memo that is
+only measured. The measures are memo.clj's: Python memo's `time`
 and `space` are XLA's flops and scratch bytes, which change with JAX's
 version, and memo.clj's differ from them (see
 [Differences](#differences-from-python-memo)). `size` matches Python
@@ -2393,8 +2397,12 @@ To share a model with Python memo's users, or check it against the
 reference, `memo.pygen/source` (experimental) gives the Python memo source
 of vars of one namespace: its models, domains and helper functions of
 scalars, each read from the file it was loaded from, in the order Python
-needs. What it cannot translate (a `^:memo/vectorized` function, say) is a
-loud error naming it:
+needs. What it cannot translate is a loud error naming it: a
+`^:memo/vectorized` function, say, two names that would be one in Python
+(`big?` and `big-qm`), or a name Python memo's models import for
+themselves (`Bool`, `pad`, `time`: its two-member `Bool` would win over a
+namespace's own). It reads each file as it is now, and refuses a var
+whose line holds another form since the file was edited: reload it first.
 
 ```text
 (memo.pygen/source [#'coin-flip #'Coin])
@@ -2467,7 +2475,9 @@ What memo.clj computes differently, on purpose:
 - **Caching.** A `^:cache` model can be differentiated (calls with values
   being differentiated are not cached); Python memo's `cache=True` raises a
   `TypeError` under `jax.grad`. Its key is the parameters' values, where
-  Python's functools cache keys `f(2)` and `f(n=2)` apart. Its cache is dropped when any memo is
+  Python's functools cache keys `f(2)` and `f(n=2)` apart. It keeps
+  `-0.0` and `0.0` apart, and `1` and `1.0` (on the JVM a long and a double,
+  whose results' dtypes can differ), which Python's takes as one. Its cache is dropped when any memo is
   redefined; Python memo's keeps tables computed with the old definition.
 - **The escape hatch is Clojure.** `#{alice.x}` is a compile error; in
   Python memo, `{alice.x}` is a `NameError` when the model is called.
