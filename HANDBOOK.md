@@ -50,8 +50,8 @@ final since Java 22). Depend on it from a `deps.edn`:
 
 ```text
 {:deps {memo.clj/memo.clj {:git/url "https://github.com/robert-johansson/memo.clj.git"
-                           :git/tag "v1.0.0"
-                           :git/sha "fa50d9f0f0b6e2c21cc512e5ddb43039e6ed0634"}}}
+                           :git/tag "v1.0.1"
+                           :git/sha "0eb85ba21b35aedc4cc363c65a7b9660b655b132"}}}
 ```
 
 memo.clj pins its gen.clj. After the first download, run
