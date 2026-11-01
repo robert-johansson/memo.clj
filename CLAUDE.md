@@ -10,9 +10,10 @@ memo.clj's syntax, executable (`test/memo/handbook_doc_test.clj` runs it).
 ## The oracle and the references
 
 - **Python memo 1.3.3** (kach/memo `d8aac63`) is the oracle. It lives in
-  `memo-mcp/memo` (memo-mcp is the owner's MCP server, gitignored here), with
-  a venv in `memo-mcp/venv`. The memo-dsl MCP tools run, compile and explain
-  Python memo programs.
+  `memo-mcp/memo` (memo-mcp is the owner's MCP server, public and MIT at
+  github.com/robert-johansson/memo-mcp, cloned here with
+  `--recurse-submodules` and gitignored), with a venv in `memo-mcp/venv`.
+  The memo-dsl MCP tools run, compile and explain Python memo programs.
 - **It is not always right.** DESIGN.md §2.4 lists its bugs and the
   semantics memo.clj must copy; §9's upstream ledger keeps the corrected
   values. A disagreement is triaged into the ledger or fixed here, never
