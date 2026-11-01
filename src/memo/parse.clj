@@ -156,6 +156,26 @@
                       (every? (comp :static second) kwargs*))
          :loc loc}))))
 
+(defn- parse-cost
+  "(cost @(f args... :kw v...)), and time @, space @, size @: Python memo's
+  cost @ f(args), an ECost (DESIGN.md §14.1). f is a memo, called without
+  axes; cost is time's alias."
+  [head call pctxt loc]
+  (when-not (and (seq? call) (symbol? (first call)))
+    (err/raise (str "(" head " @(f ...)) needs a memo call")
+               {:hint (str "Write (" head " @(f args...)), as Python memo's " head " @ f(args).")
+                :loc loc}))
+  (let [[f & args] call]
+    (when (vector? (first args))
+      (err/raise (str "(" head " @(f ...)) measures the whole memo, without axes")
+                 {:hint (str "Drop the axes: (" head " @(" f " args...)).") :loc loc}))
+    (let [[pos kw] (split-kwargs args loc)]
+      {:node :cost :name f
+       :args (parse-args-list pos pctxt loc)
+       :kwargs (parse-kwargs kw pctxt loc)
+       :metric (if (= 'cost head) :time (keyword (name head)))
+       :loc loc :static false})))
+
 (defn- entropy-ref [op a pctxt loc]
   (let [[who & ids] (dotted-parts a)]
     (if (= 1 (count ids))
@@ -384,8 +404,7 @@
                (= 1 (count args))
                (seq? (first args))
                (= 'clojure.core/deref (first (first args))))
-          (err/raise "cost reflection is not supported in memo.clj yet (DESIGN.md M4)"
-                     {:loc loc})
+          (parse-cost head (second (first args)) pctxt loc)
 
           (contains? reserved-heads head)
           (err/raise (str "Unexpected use of reserved form " head) {:loc loc})

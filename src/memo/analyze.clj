@@ -680,6 +680,35 @@
       :known (every? :known chs)
       :deps (set (map (fn [[_ sw si]] [sw si]) ids))}]))
 
+(defn- eval-cost
+  "(cost @(f args...)), time @, space @, size @ (DESIGN.md §14.1): a measure
+  of the memo f called with these arguments, which are static as a memo
+  call's are (Python memo's messages). The value is a known host number,
+  depending on no choice, and 0 where the path conditions around it do not
+  hold (a recursion's base case), as in Python memo."
+  [state {:keys [name args kwargs metric]}]
+  (let [[state arg-vals]
+        (reduce (fn [[st acc] a]
+                  (let [[st v] (eval-expr st a)]
+                    (when-not (:static a)
+                      (err/raise "parameter not statically known"
+                                 (assoc (frame-err-opts st (:loc a)) :hint not-static-hint)))
+                    [st (conj acc v)]))
+                [state []] args)
+        [state kw-vals]
+        (reduce (fn [[st acc] [k a]]
+                  (let [[st v] (eval-expr st a)]
+                    (when-not (:static a)
+                      (err/raise (str "keyword argument " k " not statically known")
+                                 (assoc (frame-err-opts st (:loc a)) :hint not-static-hint)))
+                    [st (conj acc [k (:tag v)])]))
+                [state []] kwargs)
+        [state out] (fresh state (str "cost_" name))]
+    [(emit state {:i :cost :out out :name name :metric metric
+                  :args (mapv :tag arg-vals) :kwargs kw-vals
+                  :guards (:path-conds state)})
+     {:tag out :known true :deps #{}}]))
+
 (defn- eval-ffi
   "(f args...): the host function f at every element of its dynamic
   arguments. Known when all its arguments are; static when all are static."
@@ -903,6 +932,7 @@
     :expect (eval-expect state e)
     :ffi (eval-ffi state e)
     :memo (eval-memo-call state e)
+    :cost (eval-cost state e)
     :entropy (eval-entropy state e)
     :kl (eval-kl state e)
     :imagine (eval-imagine state e)

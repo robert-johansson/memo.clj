@@ -101,6 +101,31 @@
   (alice :chooses [x X] :wpp 1)
   (return (E (recursive-kwarg [alice.x] :a 3))))
 
+;; cost reflection (M4, DESIGN.md §14.1)
+(defmemo cost-1 [] []
+  (return (cost @(inline))))
+
+(defmemo cost-kwarg [] []
+  (alice :chooses [x X] :wpp 1)
+  (return (cost @(recursive-kwarg :a 2))))
+
+(defmemo cost-time [] []
+  (return (time @(inline))))
+
+(defmemo cost-time-matches-cost [] []
+  (return (= (time @(recursive-kwarg :a 2)) (cost @(recursive-kwarg :a 2)))))
+
+(defmemo cost-space [] []
+  (alice :chooses [x X] :wpp 1)
+  (return (space @(recursive-kwarg :a 2))))
+
+(defmemo cost-size [] []
+  (return (size @(inline))))
+
+(defmemo cost-size-kwarg [] []
+  (alice :chooses [x X] :wpp 1)
+  (return (size @(recursive-kwarg :a 2))))
+
 (defmemo kwarg-mixed [] []
   (alice :chooses [x X] :wpp 1)
   (return (E (recursive-kwarg [alice.x] 3 :b 10))))
@@ -498,13 +523,20 @@
 
 (def not-applicable
   "Cases with no counterpart in memo.clj, and why."
-  (let [kwargs "Python's **kwargs syntax, which memo.clj's syntax has no counterpart for"
-        cost "cost reflection (time @, space @, size @), which is M4 (DESIGN.md §1)"]
+  (let [kwargs "Python's **kwargs syntax, which memo.clj's syntax has no counterpart for"]
     {:kwargs-unpacking-err kwargs
      :cost-kwargs-unpacking-err kwargs
-     :ffi-kwargs-expansion kwargs
-     :cost-1 cost :cost-kwarg cost :cost-time cost :cost-time-matches-cost cost
-     :cost-space cost :cost-size cost :cost-size-kwarg cost}))
+     :ffi-kwargs-expansion kwargs}))
+
+(def memo-clj-values
+  "Where memo.clj's value differs from Python memo's on purpose, a check of
+  memo.clj's: time @ and space @ count memo.clj's own run, not XLA's flops
+  and scratch bytes (DESIGN.md §14.1; memo.cost-test checks the counts)."
+  {;; recursive_kwarg(a=2): three levels of 7 operations, each counted where
+   ;; it is called (Python XLA: 12)
+   :cost-kwarg #(= 21.0 (double %))
+   ;; bytes at the backend's dtypes, so the backend's own number
+   :cost-space #(pos? (double %))})
 
 (def memo-clj-messages
   "Where memo.clj's message differs from Python memo's on purpose: it shows
@@ -554,8 +586,14 @@
           (if (instance? Exception r)
             (is false (str "threw: " (ex-message r)))
             (do (is (= shape (array/shape r)))
-                (if digest
+                (cond
+                  (memo-clj-values k)
+                  (is ((memo-clj-values k) (ts/host r)) (str "memo.clj " (pr-str (ts/host r))))
+
+                  digest
                   (is (ts/matches-digest? digest r))
+
+                  :else
                   (is (ts/close? value (ts/host r))
                       (str "python " (pr-str value) "\nmemo.clj " (pr-str (ts/host r))))))))))))
 
@@ -564,5 +602,6 @@
     (is (= 102 (count (:cases fixture))) "test.py's 101 cases, imagine_ok defined twice")
     (doseq [k names]
       (is (or (not-applicable k) (compile-forms k) (twin k)) (str (name k) " has no twin")))
-    (is (every? names (concat (keys compile-forms) (keys not-applicable) (keys memo-clj-messages)))
+    (is (every? names (concat (keys compile-forms) (keys not-applicable) (keys memo-clj-messages)
+                               (keys memo-clj-values)))
         "no twin, form or message for a case test.py does not have")))

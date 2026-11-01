@@ -84,7 +84,7 @@
       (if-not (and (every? host? args) (every? host? (vals kwargs)) (nil? (:key opts)))
         (call args kwargs opts)
         (let [epoch @definitions
-              k [(vec args) kwargs (select-keys opts [:budget :limit :mass])]
+              k [(vec args) kwargs (select-keys opts [:budget :limit :mass :cost])]
               c (swap! cache #(if (= epoch (:epoch %)) % {:epoch epoch :table {}}))]
           (if-let [[_ v] (find (:table c) k)]
             v
@@ -304,13 +304,76 @@
                               (let [p (compile-for budget limit report-only mass)]
                                 (swap! programs assoc k p)
                                 p))))
-        call (cond-> (fn [args kwargs {:keys [budget limit mass] :as call-opts}]
+        ;; in cost mode (:cost in the options) a call returns [table cost]
+        call (cond-> (fn [args kwargs {:keys [budget limit mass cost] :as call-opts}]
                        (let [env (bind-params name params defaults args kwargs)]
                          (cond
                            budget ((:run (other-program budget limit false (boolean mass))) env call-opts)
                            mass ((:run (other-program nil nil false true)) env)
+                           cost (run env {:cost true})
                            :else (run env))))
                (:cache opts) cached)
+        size (cost/size parsed)
+        ;; the parameters a count can depend on: those that reach a guard (a
+        ;; recursion's path condition) or a memo call's or a cost @'s
+        ;; argument (all of them, when an inline #{...} does, a function of
+        ;; every parameter). The others (a temperature in a :wpp, say) change
+        ;; values, never shapes or which memos run, so the cost cache ignores
+        ;; them: a fit that moves them does not run the memo again.
+        count-params (let [instrs (:instrs compiled)
+                           by-out (into {} (map (juxt :out identity)) instrs)
+                           seeds (mapcat (fn [{:keys [i] :as instr}]
+                                           (case i
+                                             (:call-memo :cost) (ir/inputs instr)
+                                             :ffi (:guards instr)
+                                             nil))
+                                         instrs)
+                           reached (loop [todo (vec seeds) seen #{}]
+                                     (if-let [s (peek todo)]
+                                       (if (seen s)
+                                         (recur (pop todo) seen)
+                                         (recur (into (pop todo) (some-> (by-out s) ir/inputs)) (conj seen s)))
+                                       seen))
+                           reached-instrs (keep by-out reached)]
+                       (if (some #(= :inline (:i %)) reached-instrs)
+                         (set (map :name params))
+                         (into #{} (keep #(when (= :param (:i %)) (:name %))) reached-instrs)))
+        relevant? (fn [p] (contains? count-params (symbol (clojure.core/name p))))
+        ;; {:time :space :size} for these arguments and options, from a run in
+        ;; cost mode: a function of the program, the count-params' values and
+        ;; the budget (and the backend's dtypes), so cached by them until any
+        ;; memo is redefined
+        costs (atom {:epoch -1 :table {}})
+        cost-call (fn [args kwargs call-opts]
+                    (let [arg-params (map-indexed (fn [i a] [(:name (nth params i nil)) a]) args)
+                          ;; a batched argument the count does not depend on is
+                          ;; measured on one particle; one it depends on is refused
+                          one (fn [p x]
+                                (if-not (array/batched? x)
+                                  x
+                                  (if (and p (relevant? p))
+                                    (err/raise (str "Cost reflection on " name " with " p " batched")
+                                               {:hint (str "time @ and space @ count one call, and " p
+                                                           " (" (pr-str (array/batch-shape x)) " particles) "
+                                                           "decides how much of " name " runs.")
+                                                :loc {:name name}})
+                                    (array/particle (cond-> x (array/tracked? x) array/stop-gradient) 0))))
+                          args (mapv (fn [[p a]] (one p a)) arg-params)
+                          kwargs (into {} (map (fn [[k v]] [k (one k v)])) kwargs)
+                          epoch @definitions
+                          ;; by parameter name, whether passed by position or by name
+                          k [(into (into {} (keep (fn [[[p _] a]] (when (and p (relevant? p)) [p a])))
+                                         (map vector arg-params args))
+                                   (keep (fn [[kk v]] (when (relevant? kk) [(symbol (clojure.core/name kk)) v])))
+                                   kwargs)
+                             (select-keys call-opts [:budget :limit]) array/*backend*]
+                          t (swap! costs #(if (= epoch (:epoch %)) % {:epoch epoch :table {}}))]
+                      (if-let [[_ c] (find (:table t) k)]
+                        c
+                        (let [[_ c] (call args kwargs (assoc call-opts :cost true))
+                              c (assoc c :size size)]
+                          (swap! costs #(if (= epoch (:epoch %)) (assoc-in % [:table k] c) %))
+                          c))))
         ;; the model itself, for checking a budget's agents against the memos
         ;; it calls (once per budget, until any memo is redefined)
         self (promise)
@@ -357,7 +420,16 @@
            :memo.impl/call-with-masses (fn [& args] (invoke args {:mass true}))
            :memo.impl/compiled compiled
            ;; size @'s measure (memo.cost): a property of the text alone
-           :memo.impl/size (cost/size parsed)
+           :memo.impl/size size
+           ;; cost reflection, (cost-call args kwargs call-opts) -> {:time :space :size}
+           :memo.impl/cost-call cost-call
+           ;; the same from a call's arguments, a trailing map as a call's
+           :memo.impl/cost (fn [args]
+                             (if (map? (last args))
+                               (let [[kwargs call-opts] (call-options name (last args))]
+                                 (when (:check-agents call-opts) (check (:budget call-opts)))
+                                 (cost-call (vec (butlast args)) kwargs (or (dissoc call-opts :check-agents) {})))
+                               (cost-call (vec args) {} {})))
            :memo.impl/ns ns
            :memo.impl/agents agents
            :memo.impl/compile (fn [budget limit report-only]
@@ -540,6 +612,29 @@
   "Whether x is a memo: the model a defmemo defines (not its var)."
   [x]
   (boolean (:memo.impl/call (meta x))))
+
+(defn cost
+  "Cost reflection on the host, Python memo's f(..., return_cost=True):
+  {:time n :space n :size n} for the memo m called with args (a trailing map
+  as a call's: parameters by name, :memo/budget and :memo/limit). The same
+  measures as (cost @(m args...)), time @, space @ and size @ inside a memo
+  (DESIGN.md §14.1):
+  - :time, the operations of memo.clj's run (an elementwise operation per
+    output cell, a reduction per input cell, a host function per cell or its
+    var's :memo/cost; constants included; memos called counted per call
+    site). Not Python memo's number, which is XLA's flops.
+  - :space, the peak bytes of the run's live values, at the backend's dtypes,
+    plus the memos it calls, per call site.
+  - :size, the nodes of m's syntax tree, as Python memo counts them.
+  It runs m once, in cost mode, and caches the result until any memo is
+  redefined, by its budget, its backend, and the arguments the count can
+  depend on: the parameters that reach a recursion's guard or a memo call.
+  A parameter that only weighs choices (a temperature) is not one, so a fit
+  that moves it reuses the count instead of running m again."
+  [m & args]
+  (when-not (memo? m)
+    (err/raise (str (pr-str m) " is not a memo") {:hint "memo.core/cost measures a memo defined by defmemo."}))
+  ((:memo.impl/cost (meta m)) args))
 
 (defn program
   "A memo's compiled IR program, as text (Python memo's

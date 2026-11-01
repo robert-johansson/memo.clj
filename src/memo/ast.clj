@@ -4,7 +4,7 @@
 
   Expressions {:node … :static bool :loc {…}}:
     :lit :op :ffi :memo :choice :expect :entropy :kl :with :imagine :inline
-    :posterior :predict :util
+    :posterior :predict :util :cost
   Statements {:node … :loc {…}}:
     :pass :choose :observe :show :observes-factor :with-stmt :forall :knows
     :snapshot :variant :trace :wants :guess :forgets-about
@@ -14,7 +14,7 @@
 
 (def expr-nodes
   #{:lit :op :ffi :memo :choice :expect :entropy :kl :with :imagine :inline
-    :posterior :predict :util})
+    :posterior :predict :util :cost})
 
 (def stmt-nodes
   #{:pass :choose :observe :show :observes-factor :with-stmt :forall :knows

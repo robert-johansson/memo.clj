@@ -157,11 +157,13 @@
                                      (return (E alice.n))))
                 @(ns-resolve 'memo.slice1-test 'bool-minus))]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unsupported operand type for -" (f)))))
-  (testing "a construct that is not built yet says so"
-    (is (re-find #"not supported in memo.clj yet"
-                 (ex-message (ts/compile-error 'memo.slice1-test
-                                               '(defmemo later [] []
-                                                  (return (cost @(uniform-pick)))))))))
+  (testing "cost reflection (built in M4) measures a memo called with static arguments only"
+    (is (nil? (ts/compile-error 'memo.slice1-test '(defmemo measured [] [] (return (cost @(uniform-pick)))))))
+    (is (= "parameter not statically known"
+           (ex-message (ts/compile-error 'memo.slice1-test
+                                         '(defmemo measured-badly [] []
+                                            (alice :chooses [n N] :wpp 1)
+                                            (return (E (cost @(mean-roll alice.n))))))))))
   (testing "a parameter must be a scalar"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"was not a numeric scalar"
                           (mean-roll (array/array [0.1 0.2]))))))

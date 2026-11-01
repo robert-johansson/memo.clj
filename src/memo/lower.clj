@@ -298,11 +298,57 @@
 
 (defn- callee-opts
   "What a memo call inside a bounded call passes on: the budget and the limit,
-  and a key of its own (instr-key); nil for an exact call."
+  and a key of its own (instr-key); in cost mode, the cost mode; nil for a
+  plain exact call."
   [ctx instr]
   (when-let [c (:call ctx)]
     (cond-> (assoc (select-keys c [:budget :limit]) :propagated true)
-      (:key c) (assoc :key (instr-key ctx instr)))))
+      (:key c) (assoc :key (instr-key ctx instr))
+      (:cost c) (assoc :cost true))))
+
+;; -----------------------------------------------------------------------------
+;; cost reflection (DESIGN.md §14.1): time @ and space @ count a memo's actual
+;; run, in a cost mode passed in its call's options; size @ is memo.cost's,
+;; from the text
+
+(def ^:private dtype-bytes
+  {:float64 8 :float32 4 :float16 2 :bfloat16 2 :int64 8 :int32 4 :int16 2 :int8 1
+   :uint64 8 :uint32 4 :uint16 2 :uint8 1 :bool 1})
+
+(defn- cells ^long [x] (long (array/size x)))
+
+(defn- value-bytes ^long [x]
+  (clojure.core/* (cells x) (long (get dtype-bytes (array/dtype x) 8))))
+
+(defn- host-cost
+  "A host function's cost per cell tabulated: its var's :memo/cost, else 1."
+  [v name]
+  (let [c (:memo/cost (meta v))]
+    (cond (nil? c) 1
+          (and (integer? c) (not (neg? c))) (long c)
+          :else (err/raise (str "The host function " name "'s :memo/cost is " (pr-str c)
+                                ", not a non-negative integer")
+                           {:hint "Declare a host function's cost per cell as ^{:memo/cost n}, n an integer."}))))
+
+(defn- ops
+  "time @'s count of one instruction, from the shapes of its value and
+  inputs: an elementwise operation once per output cell, a reduction once
+  per input cell, a host function once per cell tabulated (or its
+  :memo/cost per cell); structure (layout, gathers, broadcasts, aliases),
+  literals and parameters are free, and a memo call counts its callee's
+  (call-memo)."
+  ^long [{:keys [fns]} env instr v]
+  (case (:i instr)
+    (:op :where :nan-to-num :sample-belief :sample-weight :subsets) (cells v)
+    (:sum :max) (cells (get env (:arg instr)))
+    :ffi (clojure.core/* (cells v) (host-cost (get fns (:name instr)) (:name instr)))
+    0))
+
+(defn- account-callee!
+  "A memo call's cost, in cost mode: its time and its space, per call site."
+  [ctx {:keys [time space]}]
+  (when-let [acc (:cost-acc ctx)]
+    (swap! acc #(-> % (update :time clojure.core/+ time) (update :callees clojure.core/+ space)))))
 
 (defn- call-memo [{:keys [resolve-memo domain-values] :as ctx} env
                   {:keys [name which args kwargs guards dims domains] :as instr}]
@@ -312,9 +358,12 @@
         _ (check-domains domain-names domains (mapv domains/values callee-domains)
                          (mapv domain-values domains) {:name (:name ctx)})
         table (if (every? #(array/truthy? (get env %)) guards)
-                (let [res (call (mapv #(get env %) args)
+                (let [opts (callee-opts ctx instr)
+                      res (call (mapv #(get env %) args)
                                 (into {} (map (fn [[k s]] [k (get env s)])) kwargs)
-                                (callee-opts ctx instr))]
+                                opts)
+                      ;; in cost mode the callee returns [table cost]
+                      res (if (:cost opts) (let [[t c] res] (account-callee! ctx c) t) res)]
                   (if (some? which) (array/take res which 0) res))
                 (array/zeros shape))]
     (place table dims)))
@@ -598,6 +647,24 @@
                        {:hint (str "An inline form's value is used as a number (or a boolean, or "
                                    "a gen.array array).")}))))
 
+(defn- cost-value
+  "A :cost instruction's value: the memo's measure for these arguments, from
+  its cost mode (memo.core), under the call's budget, or its size (the
+  text's); 0 where a guard is false, as in Python memo."
+  [{:keys [resolve-memo] :as ctx} env {:keys [name metric args kwargs guards] :as instr}]
+  (if-not (every? #(array/truthy? (get env %)) guards)
+    0
+    (let [f (resolve-memo name)
+          {:memo.impl/keys [size cost-call]} (meta f)
+          host (fn [x] (if (or (number? x) (boolean? x)) x (array/stop-gradient x)))]
+      ;; resolve-memo refuses a name that is not a memo ("Unknown memo f")
+      (if (= :size metric)
+        size
+        (get (cost-call (mapv (comp host #(get env %)) args)
+                        (into {} (map (fn [[k s]] [k (host (get env s))])) kwargs)
+                        (dissoc (or (callee-opts ctx instr) {}) :cost :propagated))
+             metric)))))
+
 (defn- step [ctx env instr]
   (let [arg #(get env %)]
     (assoc env (:out instr)
@@ -616,6 +683,7 @@
                           (swap-axes (pad (arg (:arg instr)) (inc (max d1 d2))) (axis d1) (axis d2)))
              :alias (arg (:arg instr))
              :call-memo (call-memo ctx env instr)
+             :cost (cost-value ctx env instr)
              :ffi (host-call ctx env instr)
              :sample-belief (bounded/sample-belief (arg (:arg instr)) (some-> (:evidence instr) arg)
                                                    (mapv arg (:weights instr)) instr (instr-key ctx instr))
@@ -689,7 +757,7 @@
   (reduce (fn [const {:keys [i out] :as instr}]
             (if (case i
                   (:const :domain :ones) true
-                  (:param :inline :call-memo :ffi) false
+                  (:param :inline :call-memo :ffi :cost) false
                   ;; Monte Carlo draws differ at every call (M3)
                   (:sample-belief :sample-weight :subsets) (and (not (:draws instr))
                                                                 (every? const (ir/inputs instr)))
@@ -735,20 +803,52 @@
         ;; meet in one process); a batch backend is one per batch shape, so
         ;; the cache starts over past four
         cache (atom {})
+        ;; {:env :ops :peak}: the constants, time @'s count of computing them
+        ;; and the bytes that takes (every value kept until the end), which
+        ;; every call's cost includes: a cost must not depend on this cache
         constants (fn []
                     (let [b array/*backend*]
                       (or (get @cache b)
-                          (let [env (select-keys (reduce #(step ctx %1 %2) {} const-instrs) kept-consts)]
-                            (swap! cache (fn [m] (assoc (if (clojure.core/>= (count m) 4) {} m) b env)))
-                            env))))]
+                          (let [[env n bytes] (reduce (fn [[env n bytes] instr]
+                                                        (let [env (step ctx env instr)
+                                                              v (get env (:out instr))]
+                                                          [env (clojure.core/+ n (ops ctx env instr v))
+                                                           (clojure.core/+ bytes (value-bytes v))]))
+                                                      [{} 0 0] const-instrs)
+                                c {:env (select-keys env kept-consts) :ops n :peak bytes}]
+                            (swap! cache (fn [m] (assoc (if (clojure.core/>= (count m) 4) {} m) b c)))
+                            c))))]
     (fn run
       ([params] (run params nil))
       ([params call]
-       (let [ctx (assoc ctx :call call)
-             env (reduce (fn [env [instr dead]] (apply dissoc (step ctx env instr) dead))
-                         (merge (constants) params) (map vector instrs dead))
+       (let [{cenv :env cops :ops cpeak :peak} (constants)
+             ;; cost mode (:cost in the call's options): time, and space as the
+             ;; peak bytes of the values computed, not the parameters: the
+             ;; constants' computation, then the run's live values (the
+             ;; constants among them), measured before each value's last
+             ;; reader drops it
+             live0 (when (:cost call) (reduce clojure.core/+ 0 (map value-bytes (vals cenv))))
+             acc (when (:cost call) (atom {:time cops :live live0 :peak (max cpeak live0) :callees 0}))
+             ctx (cond-> (assoc ctx :call call) acc (assoc :cost-acc acc))
+             counted? (fn [s] (not (contains? params s)))
+             env (reduce (fn [env [instr dead]]
+                           (let [env (step ctx env instr)]
+                             (when acc
+                               (let [s (:out instr)
+                                     v (get env s)
+                                     n (ops ctx env instr v)
+                                     grown (if (counted? s) (value-bytes v) 0)
+                                     freed (reduce clojure.core/+ 0 (map #(if (counted? %) (value-bytes (get env %)) 0) dead))]
+                                 (swap! acc (fn [a]
+                                              (let [live (clojure.core/+ (:live a) grown)]
+                                                (assoc a :time (clojure.core/+ (:time a) n)
+                                                       :peak (max (:peak a) live)
+                                                       :live (clojure.core/- live freed)))))))
+                             (apply dissoc env dead)))
+                         (merge cenv params) (map vector instrs dead))
              tables (mapv #(table (get env %) compiled) results)
              result (if (= 1 (count tables)) (first tables) (array/stack tables))]
-         (if masses
-           [result (mapv #(assoc % :mass (mass-table (get env (:tag %)) compiled)) masses)]
-           result))))))
+         (cond
+           masses [result (mapv #(assoc % :mass (mass-table (get env (:tag %)) compiled)) masses)]
+           acc [result (let [{:keys [time peak callees]} @acc] {:time time :space (clojure.core/+ peak callees)})]
+           :else result))))))

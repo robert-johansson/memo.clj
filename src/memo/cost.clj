@@ -51,7 +51,6 @@
    :guess [:who :id :target-who :target-id]
    :forgets-about [:who :ids]})
 
-(def ^:private expr-nodes (conj ast/expr-nodes :cost))
 
 (defn- node? [x] (and (map? x) (contains? x :node)))
 
@@ -86,7 +85,7 @@
                                    {:node node})))
         own (+ 1
                (if loc 5 1)
-               (if (expr-nodes node) 1 0)               ; :static
+               (if (ast/expr-nodes node) 1 0)           ; :static
                (reduce + 0 (map #(weigh-field % (get n %)) fields)))]
     ;; Python's EOp(NEG) around the literal: the node, its location, :static, :op
     (if (negative-literal? n)

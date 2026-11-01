@@ -40,6 +40,10 @@
         the host function f, of scalars, at every element of its dynamic
         arguments (the static ones passed whole), as Python memo's vmap
     {:i :inline :out s :idx k}                 the k-th #{…} form's value
+    {:i :cost :out s :name f :metric m :args [s…] :kwargs [[p s]…] :guards [s…]}
+        a measure of the memo f called with these (static) arguments,
+        m :time, :space or :size (cost reflection, memo.cost): a host
+        number, 0 where a guard is false
 
   With a budget (M3; memo.bounded):
     {:i :sample-belief :out s :arg s :evidence s? :weights [s…]? :omega d
@@ -57,7 +61,7 @@
 
 (def kinds
   #{:const :param :domain :ones :op :where :sum :max :nan-to-num :posterior-align
-    :swap-dims :alias :call-memo :ffi :inline :sample-belief :sample-weight :subsets})
+    :swap-dims :alias :call-memo :ffi :inline :sample-belief :sample-weight :subsets :cost})
 
 (defn inputs
   "The symbols an instruction reads."
@@ -70,7 +74,7 @@
     :ffi (concat (:args instr) (map second (:kwargs instr)) (:guards instr))
     (:op :where) (:args instr)
     (:sum :max :nan-to-num :posterior-align :swap-dims :alias) [(:arg instr)]
-    :call-memo (concat (:args instr) (map second (:kwargs instr)) (:guards instr))))
+    (:call-memo :cost) (concat (:args instr) (map second (:kwargs instr)) (:guards instr))))
 
 (defn check
   "The problems of a program, as strings: unknown kinds, symbols read before

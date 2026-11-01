@@ -13,6 +13,20 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.0.1"
 
 ## [Unreleased]
 
+### Added
+- **Cost reflection** (M4, DESIGN §14.1): `(cost @(f args...))` and its
+  siblings `time @`, `space @` and `size @` inside models, and
+  `memo.core/cost` on the host (Python memo's `return_cost=True`).
+  - `size` is Python memo's exactly.
+  - `time` and `space` count memo.clj's own run, a documented difference
+    from Python memo's XLA numbers (the Handbook's Differences).
+  - A host function may declare its cost per cell with `^{:memo/cost n}`.
+  - A bounded agent's budget is counted.
+
+### Changed
+- `(+ x)` is kept as Python memo's unary plus, where memo.clj dropped it.
+  On a static boolean it now gives Python's 1, where it gave `true`.
+
 ## [1.0.1] - 2026-11-01
 
 Documentation and licensing only: no change to code, results or the API.

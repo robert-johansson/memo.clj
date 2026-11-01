@@ -2449,6 +2449,17 @@ def recording_memo(models):
 
         def wrapper(*args, **kwargs):
             out = g(*args, **kwargs)
+            # cost @ g(args) in another model: Python memo's measures, recorded
+            # under :costs (memo.clj's twin of demo-takeaway's quick reads them)
+            if kwargs.get("return_cost") is True and _concrete(list(args)):
+                kw = {k: v for k, v in kwargs.items() if k not in ("return_cost", "return_aux")}
+                if _concrete(list(kw.values())):
+                    c = out[1].cost
+                    entry = {Kw("args"): [_arg(a) for a in args], Kw("kwargs"): {Kw(k): _arg(v) for k, v in kw.items()},
+                             Kw("time"): int(c.flops), Kw("space"): int(c.bytes), Kw("size"): int(c.program_size)}
+                    costs = rec.setdefault(Kw("costs"), [])
+                    if entry not in costs:
+                        costs.append(entry)
             if ("return_aux" in kwargs or "return_cost" in kwargs  # a model's call, or cost @
                     or not _concrete(list(args) + list(kwargs.values()))):
                 return out

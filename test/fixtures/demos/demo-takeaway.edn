@@ -12,7 +12,88 @@
  :models [{:name :EU
  :defined-as :EU
  :calls []
- :ncalls 0} {:name :π
+ :ncalls 0
+ :costs [{:args [0]
+ :kwargs {}
+ :time 12917
+ :space 468
+ :size 268} {:args [1]
+ :kwargs {}
+ :time 50933
+ :space 1680
+ :size 268} {:args [2]
+ :kwargs {}
+ :time 126965
+ :space 4104
+ :size 268} {:args [3]
+ :kwargs {}
+ :time 279029
+ :space 8952
+ :size 268} {:args [4]
+ :kwargs {}
+ :time 583157
+ :space 18648
+ :size 268} {:args [5]
+ :kwargs {}
+ :time 1191413
+ :space 38040
+ :size 268} {:args [6]
+ :kwargs {}
+ :time 2407925
+ :space 76824
+ :size 268} {:args [7]
+ :kwargs {}
+ :time 4840949
+ :space 154392
+ :size 268} {:args [8]
+ :kwargs {}
+ :time 9706997
+ :space 309528
+ :size 268} {:args [9]
+ :kwargs {}
+ :time 19439093
+ :space 619800
+ :size 268} {:args [10]
+ :kwargs {}
+ :time 38903285
+ :space 1240344
+ :size 268} {:args [11]
+ :kwargs {}
+ :time 77831669
+ :space 2481432
+ :size 268} {:args [12]
+ :kwargs {}
+ :time 155688437
+ :space 4963608
+ :size 268} {:args [13]
+ :kwargs {}
+ :time 311401973
+ :space 9927960
+ :size 268} {:args [14]
+ :kwargs {}
+ :time 622829045
+ :space 19856664
+ :size 268} {:args [15]
+ :kwargs {}
+ :time 1245683189
+ :space 39714072
+ :size 268} {:args [16]
+ :kwargs {}
+ :time 2491391477
+ :space 79428888
+ :size 268} {:args [17]
+ :kwargs {}
+ :time 4982808053
+ :space 158858520
+ :size 268} {:args [18]
+ :kwargs {}
+ :time 9965641205
+ :space 317717784
+ :size 268} {:args [19]
+ :kwargs {}
+ :time 19931307509
+ :space 635436312
+ :size 268}]} {:name :π
  :defined-as :π
  :calls [{:args [20]
  :kwargs {}
@@ -27,7 +108,88 @@
  :kwargs {}
  :shape [21 2]
  :value [[0.0 0.0] [1.0 0.0] [2.06115369216775e-09 1.0] [0.5 0.5] [1.0 2.06115369216775e-09] [2.06115369216775e-09 1.0] [0.5 0.5] [1.0 2.06115369216775e-09] [2.06115369216775e-09 1.0] [0.5 0.5] [1.0 2.06115369216775e-09] [2.06115369216775e-09 1.0] [0.5 0.5] [1.0 2.06115369216775e-09] [2.06115369216775e-09 1.0] [0.5 0.5] [1.0 2.06115369216775e-09] [2.06115369216775e-09 1.0] [0.5 0.5] [1.0 2.06115369216775e-09] [2.06115369216775e-09 1.0]]}]
- :ncalls 20} {:name :quick
+ :ncalls 20
+ :costs [{:args [1]
+ :kwargs {}
+ :time 25099
+ :space 744
+ :size 288} {:args [2]
+ :kwargs {}
+ :time 63115
+ :space 1956
+ :size 288} {:args [3]
+ :kwargs {}
+ :time 139147
+ :space 4380
+ :size 288} {:args [4]
+ :kwargs {}
+ :time 291211
+ :space 9228
+ :size 288} {:args [5]
+ :kwargs {}
+ :time 595339
+ :space 18924
+ :size 288} {:args [6]
+ :kwargs {}
+ :time 1203595
+ :space 38316
+ :size 288} {:args [7]
+ :kwargs {}
+ :time 2420107
+ :space 77100
+ :size 288} {:args [8]
+ :kwargs {}
+ :time 4853131
+ :space 154668
+ :size 288} {:args [9]
+ :kwargs {}
+ :time 9719179
+ :space 309804
+ :size 288} {:args [10]
+ :kwargs {}
+ :time 19451275
+ :space 620076
+ :size 288} {:args [11]
+ :kwargs {}
+ :time 38915467
+ :space 1240620
+ :size 288} {:args [12]
+ :kwargs {}
+ :time 77843851
+ :space 2481708
+ :size 288} {:args [13]
+ :kwargs {}
+ :time 155700619
+ :space 4963884
+ :size 288} {:args [14]
+ :kwargs {}
+ :time 311414155
+ :space 9928236
+ :size 288} {:args [15]
+ :kwargs {}
+ :time 622841227
+ :space 19856940
+ :size 288} {:args [16]
+ :kwargs {}
+ :time 1245695371
+ :space 39714348
+ :size 288} {:args [17]
+ :kwargs {}
+ :time 2491403659
+ :space 79429164
+ :size 288} {:args [18]
+ :kwargs {}
+ :time 4982820235
+ :space 158858796
+ :size 288} {:args [19]
+ :kwargs {}
+ :time 9965653387
+ :space 317718060
+ :size 288} {:args [20]
+ :kwargs {}
+ :time 19931319691
+ :space 635436588
+ :size 288}]} {:name :quick
  :defined-as :quick
  :calls [{:args [20]
  :kwargs {}

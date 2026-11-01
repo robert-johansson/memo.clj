@@ -1329,7 +1329,7 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
   demo-lemons relies on it). A namespace's own `Bool` comes first, by
   Clojure's scoping, where Python memo ignores the user's `Bool` inside a
   model: only labels can differ.
-- **Cost reflection's syntax** (2026-10-20; built in M4): `(cost @(f ...))`,
+- **Cost reflection's syntax** (2026-10-20; built 2026-11-01, M4 §14.1): `(cost @(f ...))`,
   which the reader reads as `(cost (clojure.core/deref (f ...)))`, and
   likewise `time`, `space` and `size`, as Python memo's `cost @ f(...)`.
   Only that shape is reserved: any other `(cost ...)` is a host function
@@ -1815,12 +1815,15 @@ its source location (1 + 4 fields).
   release notes). It is not Python memo's number: a documented divergence
   (§2.4), like `print-table`'s text. Where test.py pins values, they agree:
   `cost @ inline()` is 0.0 in both, and `time @` equals `cost @`.
-- **`space @` is the peak of live intermediate bytes** under memo.lower's
-  schedule, which drops each value after its last use (§5). It is counted
-  at the backend's dtype, and callees are added per call site, as Python
-  memo adds them. So it halves from float64 to float32 backends, a
-  documented difference (§13.8). The alternative is cells, free of dtype,
-  which Python's bytes would not resemble.
+- **`space @` is the peak bytes of the values a run computes,** not its
+  parameters: the constants' computation (every constant kept until its
+  end), then the run's live values, the constants among them, measured
+  before each value's last reader drops it (memo.lower's schedule, §5).
+  It is counted at each value's dtype, and callees are added per call site,
+  as Python memo adds them. So it halves from float64 to float32 backends,
+  a documented difference (§13.8). Built first without the constants,
+  which gave a memo without parameters a space of 0 and made space depend
+  on memo.lower's cache, as time would have.
 - **On the host,** Python memo's `f(..., return_cost=True)` becomes
   `(memo.core/cost f & args)`, returning `{:time n :space n :size n}` from
   the same counters, by running f in a cost mode passed in the call's
@@ -1944,11 +1947,43 @@ Each item needs a purpose before it can be designed.
 
 ### 14.7 Order and the release (decided 2026-11-01)
 
-1. Cost reflection:
+1. Cost reflection (built 2026-11-01, memoclj-it67):
    - `size @` first (exact parity: test.py's cases and new twins);
    - then `time @` and `cost @`, `space @`, and `memo.core/cost`;
    - test.py's seven cases come off the skipped list, and demo-takeaway's
      `quick` is ported.
+
+   *As built:*
+   - **`memo.cost/size`**, kept on each memo. The fixture generator records
+     every Python model's size (through codegen's `parse_memo`). 388 of
+     the corpus's models compared, all equal. Two Python readings
+     followed: `-2` is unary minus (an enum member never is), and
+     memo.parse keeps `(+ x)` as `:uadd`.
+   - **Cost mode in memo.lower:** `:cost` in a call's options, which a
+     budget's run and memo calls pass on, making a call return
+     `[table cost]`. The constants' count is kept with them.
+   - **The `:cost` instruction**, memo.core's cached `cost-call`, and
+     `memo.core/cost`. The cache is keyed by budget, backend and the
+     count-params: the parameters that reach a guard, or a memo call's or
+     `cost @`'s argument (all of them, when an inline form does). A
+     parameter that only weighs choices cannot change the count, so a fit
+     that moves it reuses the count (a side agent's point, the owner's
+     wish not to slow the agent). A batched argument outside the
+     count-params is measured on one particle; one inside is refused.
+   - **Refused loudly:** a host function's `:memo/cost` that is not a
+     non-negative integer, and a batched argument.
+   - **demo-takeaway's `quick`:** the generator records Python memo's
+     `cost @` measures under the measured model's `:costs`. `quick` is
+     checked with Python's count passed in (`quick-python-count`), and
+     `quick` as written with memo.clj's. Python's `cost @ π(20)` is
+     1.99·10¹⁰, memo.clj's 1.18·10¹⁰: the same doubling with t.
+   - **test.py:** its cost cases are twins. `cost_kwarg` (memo.clj 21,
+     XLA 12) and `cost_space` are memo.clj's own values
+     (`memo-clj-values`).
+   - **memo.cost-test** checks the laws: a constant is free, a recursion
+     is linear, a call site counts its callee, a host function its
+     `:memo/cost`, constants count whatever the cache holds, and a
+     budget's k raises the count. Three planted bugs caught.
 2. Tables as data.
 3. The trace.
 4. The host-table cache.

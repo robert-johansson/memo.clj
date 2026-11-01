@@ -1384,11 +1384,73 @@ higher recursion limit:
 
 ## Cost Reflection
 
-Python memo's `cost @ f(...)`, `time @`, `space @` and `size @` measure
-the cost of computing a model. memo.clj has not built them yet: they are
-milestone M4, written `(cost @(f ...))`, which the reader reads as
-`(cost (clojure.core/deref (f ...)))`. Only that shape is reserved, so a
-host function may be named `cost`, as in Python memo.
+A model can measure what computing another model costs:
+`(cost @(f args...))`, Python memo's `cost @ f(args)`. The reader reads it
+as `(cost (clojure.core/deref (f ...)))`, and only that shape is reserved,
+so a host function may still be named `cost`, as in Python memo. `f` is a
+memo, called without axes, and its arguments must be static, as a memo
+call's. Four measures:
+
+- `(time @(f ...))`, and `(cost @(f ...))`, its alias: the operations of
+  memo.clj's run of f. An elementwise operation counts once per output
+  cell, a reduction once per input cell, a host function once per cell it
+  is tabulated at; layout, gathers and literals are free. Constants count:
+  a memo without parameters costs what computing it costs, whatever
+  memo.lower has cached. The memos f calls count where they are called, so
+  a recursion's cost grows with its depth.
+- `(space @(f ...))`: the peak bytes of the values f's run computes (not
+  its parameters), at the backend's dtypes, plus the memos it calls, where
+  they are called.
+- `(size @(f ...))`: the number of nodes of f's syntax tree, counted as
+  Python memo counts them.
+
+The value is a number every agent knows, and 0 where the path conditions
+around it do not hold, which lets a recursion measure itself. The same
+measures come from outside a model with `memo.core/cost`, Python memo's
+`return_cost=True`:
+
+```clojure
+(defmemo countdown [] [n]
+  (return (if (> n 0) (countdown [] (- n 1)) 0)))
+
+(select-keys (memo/cost countdown 3) [:time :size])
+;=> {:time 16, :size 73}
+
+(defmemo how-costly [] [n]
+  (return (time @(countdown n))))
+
+(array/->clj (how-costly 3))
+;=> 16
+```
+
+Each level of `countdown` costs 4, so depth 3 costs 16. A host function
+memo.clj cannot see inside declares its own cost per cell, an expensive
+simulator or a language model's score, say:
+
+```clojure
+(def Pair [0 1])
+(defn ^{:memo/cost 1000} simulate [x] (* x x))
+(defmemo simulated [[c Pair]] [] (return (simulate c)))
+
+(:time (memo/cost simulated))
+;=> 2000
+```
+
+A count is computed once, by a run of the memo in a counting mode, and
+reused until any memo is redefined. It is reused across the values of the
+parameters it cannot depend on: those that reach no recursion's guard and
+no memo call, such as a temperature in a `:wpp`. So a model that reads
+`cost @` while it is fitted does not run the memo it measures again at
+every step.
+
+A bounded agent's budget (see [Bounded minds](#bounded-minds)) is counted
+too: `(memo/cost f args... {:memo/budget ...})`, and a `cost @` inside a
+bounded call, measure the program that runs, so an agent that imagines
+more samples costs more. The measures are memo.clj's: Python memo's `time`
+and `space` are XLA's flops and scratch bytes, which change with JAX's
+version, and memo.clj's differ from them (see
+[Differences](#differences-from-python-memo)). `size` matches Python
+memo's exactly.
 
 ## Referencing Clojure Values
 
@@ -2179,7 +2241,8 @@ limit; Monte Carlo keeps nothing.
 memo.clj 1.0 freezes what is below: after it, a release may add to it,
 and only a new major version removes or changes it.
 
-- **Vars.** `memo.core`: `defmemo`, `memo?`, `print-table`, `program`.
+- **Vars.** `memo.core`: `defmemo`, `memo?`, `print-table`, `program`, and
+  `cost` (added for 1.1; its counts are not frozen).
   `memo.domains`: `defenum`, `defdomain`, `Bool`, `domain?`, `enum?`,
   `product?`, `values`, `labels`, `members`, `field-keys`, `field`,
   `fields`, `pack`, `product-domain`. A domain's record fields are not
@@ -2216,7 +2279,7 @@ and keys.
 # Differences from Python memo
 
 memo.clj implements every statement and expression of the memo Handbook
-(1.3.3) except cost reflection. It adds two things Python memo does not
+(1.3.3). It adds two things Python memo does not
 have: minds in gen.clj models (`memo.gen`), and bounded minds
 (`memo.bounded`, experimental). The syntax:
 
@@ -2326,6 +2389,15 @@ What memo.clj computes differently, on purpose:
   E[(X − E[X])²] plus E[X]²(1 − M), M the total mass of the frame's
   weights: the same number (M is below 1 only when a branch has zero
   mass), without float32's cancellation when M is 1.
+- **Cost reflection's `time` and `space`** count memo.clj's own run (see
+  [Cost Reflection](#cost-reflection)), where Python memo's are XLA's flops
+  and scratch bytes after its compiler's fusion and buffer reuse. Both grow
+  the same way with a model's size and a recursion's depth, but they are
+  different numbers: memo.clj's `time` came within about 10% of XLA's on
+  small models with choices, its `space` is larger (no reuse, and float64
+  on the JVM backend). `size` is Python memo's exactly. A model that reads
+  `time @` (demo-takeaway's `quick`) gives a different table, unless the
+  two counts happen to agree.
 
 Where the memo Handbook and Python memo 1.3.3 disagree, memo.clj follows
 Python memo:
@@ -2341,7 +2413,6 @@ Python memo:
 
 Not built:
 
-- cost reflection (`cost @`, `time @`, `space @`, `size @`): milestone M4;
 - `return_pandas`, `return_xarray`, `save_comic` and `debug_trace`;
 - a cache of tabulated host functions per value of their static
   arguments.
