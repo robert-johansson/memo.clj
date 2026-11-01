@@ -1572,7 +1572,8 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
 7. **Git and tracking:** a repository and a beans prefix (`memoclj-`?) from
    the start, as gen.clj has. *Decided 2026-10-20:* this repository (no
    remote yet), beans with the prefix `memoclj-`, set up as gen.clj's (the
-   private remote of the beans repository is pending). *Decided 2026-10-24
+   private remote of the beans repository: robert-johansson/memo.clj-beans,
+   since 2026-11-01). *Decided 2026-10-24
    (memoclj-okbr):* published as a private GitHub repository,
    robert-johansson/memo.clj, as gen.clj, memo-clj and GenGDT are.
    *Decided 2026-11-01 (memoclj-rciq):* public under the MIT License at
