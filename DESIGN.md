@@ -1849,7 +1849,12 @@ its source location (1 + 4 fields).
   - `return_xarray=True` gives a DataArray: dims, with coords as labels,
     or a Dataset for several returns.
 - **memo.clj's core depends on Clojure and gen.clj alone (§11),** so it gets
-  no dataframe library. *Decided 2026-11-01:* `rows` only.
+  no dataframe library. *Decided 2026-11-01:* `rows` only. *Built
+  2026-11-01* (memoclj-ps9a): print-table's checks shared (its errors
+  name the function); a domain of numbers by value, an enum's members by
+  name, a product domain by its packed value (Python's `_vals`); several
+  returns as a vector under the memo's name, since Python's column names
+  `f[0]` would not read back as keywords.
   - `(memo.core/rows f result)` returns a vector of maps, one per cell:
     each axis's keyword maps to its label (an enum member's name, a number
     otherwise), and each return's name to its value. That is

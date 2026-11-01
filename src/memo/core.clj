@@ -647,30 +647,41 @@
                  {:hint "(program m), with m a defmemo's model."}))
     (ir/format-program (:memo.impl/compiled (meta m)))))
 
-(defn print-table
-  "Print a memo's result as a table, one row per cell of its axes (Python
-  memo's print_table)."
-  [m result]
+(defn- table-data
+  "A memo's result checked against its shape (print-table's and rows'
+  errors): {:name :axes :domains :domain-names :num-results :cells
+  :value}, :value a function of a return index (nil for one return) and a
+  cell (indices along the axes), read without its gradient."
+  [who m result]
   (let [m (if (var? m) @m m)
         {:memo/keys [axes domains domain-names num-results name shape]} (meta m)
         _ (when-not name
-            (err/raise "print-table takes a memo and its result"
-                       {:hint "(print-table m (m args...)), with m a defmemo's model."}))
+            (err/raise (str who " takes a memo and its result")
+                       {:hint (str "(" who " m (m args...)), with m a defmemo's model.")}))
         _ (when-not (or (number? result) (boolean? result) (array/array? result) (sequential? result))
-            (err/raise (str "print-table: the result is " (pr-str result) ", not " name "'s table")
-                       {:hint (str "Pass " name "'s own result: (print-table " name " (" name " ...)).")}))
+            (err/raise (str who ": the result is " (pr-str result) ", not " name "'s table")
+                       {:hint (str "Pass " name "'s own result: (" who " " name " (" name " ...)).")}))
         result (if (or (number? result) (boolean? result) (array/array? result))
                  result
                  (array/array result))
         want (if (= 1 num-results) shape (into [num-results] shape))
         _ (when (not= want (array/shape result))
-            (err/raise (str "print-table: the result has shape " (array/shape result)
+            (err/raise (str who ": the result has shape " (array/shape result)
                             ", but " name "'s results have shape " want)
-                       {:hint (str "Pass " name "'s own result: (print-table " name " (" name " ...)).")}))
-        data (array/->clj (array/stop-gradient result))    ; printed: no gradient to lose
+                       {:hint (str "Pass " name "'s own result: (" who " " name " (" name " ...)).")}))
+        data (array/->clj (array/stop-gradient result))    ; read: no gradient to lose
         cells (reduce (fn [acc d] (for [a acc i (range (count (domains/values d)))] (conj a i)))
-                      [[]] domains)
-        value (fn [path] (str (if (sequential? data) (get-in data path) data)))
+                      [[]] domains)]
+    {:name name :axes axes :domains domains :domain-names domain-names :num-results num-results
+     :cells cells
+     :value (fn [k cell] (let [path (if k (into [k] cell) cell)]
+                           (if (sequential? data) (get-in data path) data)))}))
+
+(defn print-table
+  "Print a memo's result as a table, one row per cell of its axes (Python
+  memo's print_table)."
+  [m result]
+  (let [{:keys [name axes domains domain-names num-results cells value]} (table-data "print-table" m result)
         header (into (mapv (fn [a d] (str a ": " d)) axes domain-names)
                      (if (= 1 num-results)
                        [(str name)]
@@ -678,8 +689,8 @@
         rows (for [cell cells]
                (into (mapv (fn [d i] (nth (domains/labels d) i)) domains cell)
                      (if (= 1 num-results)
-                       [(value cell)]
-                       (map #(value (into [%] cell)) (range num-results)))))
+                       [(str (value nil cell))]
+                       (map #(str (value % cell)) (range num-results)))))
         widths (apply map (fn [& col] (apply max (map count col))) header rows)
         line (fn [cols] (str "| " (str/join " | " (map #(format (str "%-" %2 "s") %1) cols widths)) " |"))
         rule (str "+" (str/join "+" (map #(apply str (repeat (+ 2 %) "-")) widths)) "+")]
@@ -688,3 +699,21 @@
     (println rule)
     (doseq [r rows] (println (line r)))
     (println rule)))
+
+(defn rows
+  "A memo's result as data, one map per cell of its axes, in print-table's
+  order (Python memo's return_pandas, without a dataframe library): each
+  axis's keyword to its label there (an enum member's name, a domain's value
+  otherwise), and the memo's name, as a keyword, to the cell's value, or,
+  for a memo with several returns, to the vector of its values. Any Clojure
+  data library reads it as it is. Values are read without their gradients."
+  [m result]
+  (let [{:keys [name axes domains num-results cells value]} (table-data "rows" m result)
+        k (keyword (str name))]
+    (vec (for [cell cells]
+           (assoc (zipmap (map keyword axes)
+                          (map (fn [d i] (if (domains/enum? d) (nth (domains/labels d) i) (nth (domains/values d) i)))
+                               domains cell))
+                  k (if (= 1 num-results)
+                      (value nil cell)
+                      (mapv #(value % cell) (range num-results))))))))

@@ -75,7 +75,7 @@ Every example below runs in this namespace:
             [memo.errors :as err]))
 ```
 
-`memo.core` has `defmemo`, `print-table`, `program` and `memo?`.
+`memo.core` has `defmemo`, `print-table`, `rows`, `program`, `memo?` and `cost`.
 `memo.domains` has `defenum`, `defdomain`, the predefined `Bool` and
 functions on domains. `memo.errors` recognizes memo errors (see
 [Errors](#errors)), and `memo.gen` puts minds in gen.clj models (see
@@ -1566,6 +1566,17 @@ prints
 +------------+-------+
 ```
 
+To read them as data, use `rows`, Python memo's `return_pandas`: one map
+per cell, in the same order, each axis by its label (an enum member's
+name, a domain's value otherwise) and the memo's name by the value (a
+vector of the values, for a memo with several returns). Any Clojure data
+library reads it as it is:
+
+```clojure
+(memo/rows jumps (jumps))
+;=> [{:a "WAIT", :jumps 0.0} {:a "JUMP", :jumps 1.0} {:a "RUN", :jumps 0.0}]
+```
+
 A model's metadata describes it:
 
 ```clojure
@@ -2242,7 +2253,7 @@ memo.clj 1.0 freezes what is below: after it, a release may add to it,
 and only a new major version removes or changes it.
 
 - **Vars.** `memo.core`: `defmemo`, `memo?`, `print-table`, `program`, and
-  `cost` (added for 1.1; its counts are not frozen).
+  `cost` and `rows` (added for 1.1; `cost`'s counts are not frozen).
   `memo.domains`: `defenum`, `defdomain`, `Bool`, `domain?`, `enum?`,
   `product?`, `values`, `labels`, `members`, `field-keys`, `field`,
   `fields`, `pack`, `product-domain`. A domain's record fields are not
@@ -2313,6 +2324,7 @@ have: minds in gen.clj models (`memo.gen`), and bounded minds
 | `@jax.jit def g(x)` | any Clojure function; `^:memo/vectorized` for gen.array ones |
 | `@memo(cache=True)`, `variant=Variant.CHILD` | `^:cache`, `^{:variant :child}` |
 | `f(a, print_table=True)` | `(memo/print-table f (f a))` |
+| `f(a, return_pandas=True)` | `(memo/rows f (f a))` |
 | `debug_print_compiled=True` | `(memo/program f)` |
 | `jax.value_and_grad(f)(a, b)` | `((gen.array/value-and-grad f) a b)` |
 
@@ -2413,7 +2425,8 @@ Python memo:
 
 Not built:
 
-- `return_pandas`, `return_xarray`, `save_comic` and `debug_trace`;
+- `return_xarray` (`rows` gives the table as data), `save_comic` and
+  `debug_trace`;
 - a cache of tabulated host functions per value of their static
   arguments.
 

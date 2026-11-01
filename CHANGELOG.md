@@ -22,6 +22,8 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.0.1"
     from Python memo's XLA numbers (the Handbook's Differences).
   - A host function may declare its cost per cell with `^{:memo/cost n}`.
   - A bounded agent's budget is counted.
+- **`memo.core/rows`** (M4, DESIGN §14.2): a result as data, one map per
+  cell, Python memo's `return_pandas` without a dataframe library.
 
 ### Changed
 - `(+ x)` is kept as Python memo's unary plus, where memo.clj dropped it.
