@@ -13,13 +13,23 @@ same models in Clojure, compiles them to gen.clj's array programs, and gives
 Python memo's numbers. It is an independent port, not affiliated with
 memo's authors.
 
-**Status: 1.0.1.** 1.0.0 shipped on 2026-10-26. 1.0.1 adds the license and
-these documents, and changes no code.
-- **Parity.** Every statement and expression of Python memo 1.3.3 except
-  cost reflection. Parity tests against memo's test suite, its Handbook,
-  and the demos that run without torch or JAX physics (33 of 36). Compile
-  errors give memo's messages, and differential fuzzing runs against
-  Python memo.
+**Status: 1.1.0.** 1.0.0 shipped on 2026-10-26. 1.1.0 (2026-11-01) adds
+the rest of Python memo's tooling:
+- cost reflection: `cost @`, `time @`, `space @`, `size @`, and memo.clj's
+  own `work @`;
+- results as data (`memo.core/rows`);
+- a call trace (`memo.core/*trace*`);
+- kept tables for expensive host functions (`^:memo/cache-table`);
+- Python memo source from a namespace's models (`memo.pygen/source`,
+  experimental).
+
+What it offers:
+- **Parity.** Every statement and expression of Python memo 1.3.3. Parity
+  tests against memo's test suite, its Handbook, and the demos that run
+  without torch or JAX physics (33 of 36). Compile errors give memo's
+  messages, and differential fuzzing runs against Python memo. Cost
+  reflection's `size` is Python memo's exactly, while `time` and `space`
+  count memo.clj's own run where Python memo's are XLA's.
 - **Backends.** Runs on gen.clj's backends: the JVM by default, needing
   nothing but a JDK, and MLX on Metal and on MLX's CPU (float32 and
   float64). CUDA was tested before 1.0.

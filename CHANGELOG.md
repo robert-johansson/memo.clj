@@ -13,6 +13,12 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.0.1"
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-01
+
+M4's parity half: the rest of Python memo's tooling, and memo.clj's
+`work @`. Additions only, and fixes: nothing 1.0 froze changes. On gen.clj
+v1.0.0.
+
 ### Added
 - **Cost reflection** (M4, DESIGN §14.1): `(cost @(f args...))` and its
   siblings `time @`, `space @` and `size @` inside models, and
