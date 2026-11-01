@@ -241,6 +241,44 @@
          (when budget
            {:budget budget :limit limit :key (:memo/key mine) :check-agents true})))]))
 
+(def ^:dynamic *trace*
+  "When true, every memo call prints a trace, Python memo's debug_trace:
+  --> f(args) as it starts; <-- f(args) has shape [..] as it ends, with
+  its cost when it runs in cost mode (memo.core/cost, cost @) and the time
+  it took (on MLX, the time to build its lazy arrays). Lines are indented
+  by call depth, so a memo's calls show inside it. A ^:cache memo's call
+  answered from its cache prints nothing, as in Python memo. Arguments
+  print as numbers, or as an array's shape (never read from the array).
+  (binding [memo.core/*trace* true] (f ...))."
+  false)
+
+(def ^:private ^:dynamic *trace-depth* 0)
+
+(defn- trace-arg [x]
+  (cond (or (number? x) (boolean? x)) (pr-str x)
+        (array/array? x) (str "#array" (array/shape x))
+        :else (pr-str x)))
+
+(defn- traced
+  "call, printing a trace around it while *trace* is true."
+  [name call]
+  (fn [args kwargs opts]
+    (if-not *trace*
+      (call args kwargs opts)
+      (let [pad (apply str (repeat *trace-depth* "  "))
+            shown (str name "(" (str/join ", " (concat (map trace-arg args)
+                                                       (map (fn [[k v]] (str k " " (trace-arg v))) kwargs)))
+                       ")")
+            t0 (System/nanoTime)]
+        (println (str pad " --> " shown))
+        (let [out (binding [*trace-depth* (inc *trace-depth*)] (call args kwargs opts))
+              ;; cost mode and masses return [table more]
+              [table c] (cond (:cost opts) out (:mass opts) [(first out) nil] :else [out nil])]
+          (println (str pad "<--  " shown " has shape " (array/shape table)))
+          (when c (println (str pad "     cost = " (pr-str c))))
+          (println (str pad (format "     time = %.6f sec" (/ (- (System/nanoTime) t0) 1e9))))
+          out)))))
+
 (defn- make-memo
   "Analyze and lower a parsed memo; the callable model. Called by defmemo's
   expansion, through its var (it is private).
@@ -305,13 +343,15 @@
                                 (swap! programs assoc k p)
                                 p))))
         ;; in cost mode (:cost in the options) a call returns [table cost]
-        call (cond-> (fn [args kwargs {:keys [budget limit mass cost] :as call-opts}]
-                       (let [env (bind-params name params defaults args kwargs)]
-                         (cond
-                           budget ((:run (other-program budget limit false (boolean mass))) env call-opts)
-                           mass ((:run (other-program nil nil false true)) env)
-                           cost (run env {:cost true})
-                           :else (run env))))
+        ;; traced inside the cache, so a cached answer prints nothing (*trace*)
+        call (cond-> (traced name
+                             (fn [args kwargs {:keys [budget limit mass cost] :as call-opts}]
+                               (let [env (bind-params name params defaults args kwargs)]
+                                 (cond
+                                   budget ((:run (other-program budget limit false (boolean mass))) env call-opts)
+                                   mass ((:run (other-program nil nil false true)) env)
+                                   cost (run env {:cost true})
+                                   :else (run env)))))
                (:cache opts) cached)
         size (cost/size parsed)
         ;; the parameters a count can depend on: those that reach a guard (a

@@ -17,8 +17,8 @@
             [memo.gen]))
 
 (def frozen
-  ;; added for 1.1 (M4, DESIGN.md §14): cost (§14.1), rows (§14.2)
-  {'memo.core #{'defmemo 'memo? 'print-table 'program 'cost 'rows}
+  ;; added for 1.1 (M4, DESIGN.md §14): cost (§14.1), rows (§14.2), *trace* (§14.3)
+  {'memo.core #{'defmemo 'memo? 'print-table 'program 'cost 'rows '*trace*}
    'memo.domains #{'Bool 'defdomain 'defenum 'domain? 'enum? 'field 'field-keys 'fields 'labels
                    'members 'pack 'product-domain 'product? 'values}
    'memo.errors #{'*warnings?* 'format-error 'memo-error? 'root-memo-error}

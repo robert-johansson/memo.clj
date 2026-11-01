@@ -1874,7 +1874,11 @@ its source location (1 + 4 fields).
   then `<-- f(params) has shape ...`, the cost when it was computed, and
   the time taken. Built as: a dynamic var, `memo.core/*trace*`, that prints
   the same lines, indented by call depth. A var rather than a call option,
-  so a trace follows calls into callees.
+  so a trace follows calls into callees. *Built 2026-11-01* (memoclj-joqu):
+  traced inside a `^:cache` memo's cache, so a cached answer prints nothing
+  (Python's `@cache` wraps its traced function too); arguments print as
+  numbers or an array's shape, never read from a differentiated value; in
+  cost mode the cost prints too.
 - **`save_comic`:** Python memo writes a Graphviz `.dot` of the frames (each
   frame a cluster, its choices as nodes, an observation's conditions as
   dashed edges), and a `.png` when `dot` is installed. Not built; if it

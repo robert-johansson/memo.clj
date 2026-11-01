@@ -75,7 +75,8 @@ Every example below runs in this namespace:
             [memo.errors :as err]))
 ```
 
-`memo.core` has `defmemo`, `print-table`, `rows`, `program`, `memo?` and `cost`.
+`memo.core` has `defmemo`, `print-table`, `rows`, `program`, `memo?`, `cost`
+and `*trace*`.
 `memo.domains` has `defenum`, `defdomain`, the predefined `Bool` and
 functions on domains. `memo.errors` recognizes memo errors (see
 [Errors](#errors)), and `memo.gen` puts minds in gen.clj models (see
@@ -1577,6 +1578,24 @@ library reads it as it is:
 ;=> [{:a "WAIT", :jumps 0.0} {:a "JUMP", :jumps 1.0} {:a "RUN", :jumps 0.0}]
 ```
 
+To see a model's calls as they run, bind `memo.core/*trace*`, Python
+memo's `debug_trace`. Each call prints `-->` with its arguments as it
+starts, then `<--` with its result's shape and the time it took, indented
+by call depth, so a memo's own calls show inside it. A `^:cache` memo's
+call answered from its cache prints nothing:
+
+```clojure
+(binding [memo/*trace* true] (jumps))
+```
+
+prints, with its own times:
+
+```text
+ --> jumps()
+<--  jumps() has shape [3]
+     time = 0.000412 sec
+```
+
 A model's metadata describes it:
 
 ```clojure
@@ -2253,7 +2272,8 @@ memo.clj 1.0 freezes what is below: after it, a release may add to it,
 and only a new major version removes or changes it.
 
 - **Vars.** `memo.core`: `defmemo`, `memo?`, `print-table`, `program`, and
-  `cost` and `rows` (added for 1.1; `cost`'s counts are not frozen).
+  `cost`, `rows` and `*trace*` (added for 1.1; `cost`'s counts and the
+  trace's text are not frozen).
   `memo.domains`: `defenum`, `defdomain`, `Bool`, `domain?`, `enum?`,
   `product?`, `values`, `labels`, `members`, `field-keys`, `field`,
   `fields`, `pack`, `product-domain`. A domain's record fields are not
@@ -2325,6 +2345,7 @@ have: minds in gen.clj models (`memo.gen`), and bounded minds
 | `@memo(cache=True)`, `variant=Variant.CHILD` | `^:cache`, `^{:variant :child}` |
 | `f(a, print_table=True)` | `(memo/print-table f (f a))` |
 | `f(a, return_pandas=True)` | `(memo/rows f (f a))` |
+| `@memo(debug_trace=True)` | `(binding [memo/*trace* true] (f a))` |
 | `debug_print_compiled=True` | `(memo/program f)` |
 | `jax.value_and_grad(f)(a, b)` | `((gen.array/value-and-grad f) a b)` |
 
@@ -2425,8 +2446,7 @@ Python memo:
 
 Not built:
 
-- `return_xarray` (`rows` gives the table as data), `save_comic` and
-  `debug_trace`;
+- `return_xarray` (`rows` gives the table as data) and `save_comic`;
 - a cache of tabulated host functions per value of their static
   arguments.
 

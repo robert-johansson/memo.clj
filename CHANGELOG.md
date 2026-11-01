@@ -24,6 +24,8 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.0.1"
   - A bounded agent's budget is counted.
 - **`memo.core/rows`** (M4, DESIGN §14.2): a result as data, one map per
   cell, Python memo's `return_pandas` without a dataframe library.
+- **`memo.core/*trace*`** (M4, DESIGN §14.3): a trace of every memo call,
+  Python memo's `debug_trace`.
 
 ### Changed
 - `(+ x)` is kept as Python memo's unary plus, where memo.clj dropped it.
