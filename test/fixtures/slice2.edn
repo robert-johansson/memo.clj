@@ -80,4 +80,36 @@
  :no-knows-err "Unknown syntactic construct `knows`"}
  :runtime-errors {}
  :grads []
- :ledger []}
+ :ledger []
+ :sizes {:observes-other 85
+ :observes-that-const 97
+ :observes-event-float 97
+ :observes-event-own 74
+ :observes-event-void 32
+ :post-diag-1 87
+ :post-diag-2 121
+ :post-diag-3 95
+ :jianlin 121
+ :var-redundant-known 84
+ :child-thinks-ok 65
+ :child-toplevel 42
+ :knows-copy 87
+ :via-knows 136
+ :via-observes 162
+ :impossible-obs 126
+ :impossible-obs-ll 166
+ :scramble-unread 166
+ :monty-hall 202
+ :polarization 509
+ :sally-anne 479
+ :obs-unmodeled 23
+ :obs-known 58
+ :obs-unknown-source 43
+ :obs-domain-mismatch 47
+ :knows-unknown 17
+ :uncertain-wpp 57
+ :ask-unknown 48
+ :child-thinks-err 47
+ :child-toplevel-err 32
+ :no-thinks-err 32
+ :no-knows-err 21}}

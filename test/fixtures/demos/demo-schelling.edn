@@ -5,7 +5,13 @@
  :dtype "float32"}
  :demo "demo-schelling.ipynb"
  :outcome "ran"
- :seconds 0.2
+ :seconds 0.3
+ :sizes {:alice 169
+ :bob 193
+ :alice-confidence 182
+ :obs-confidence 103
+ "alice-2" 169
+ "bob-2" 193}
  :models [{:name :alice
  :defined-as :alice
  :calls [{:args [1]

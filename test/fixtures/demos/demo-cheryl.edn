@@ -6,6 +6,12 @@
  :demo "demo-cheryl.ipynb"
  :outcome "ran"
  :seconds 0.7
+ :sizes {:a-u1 148
+ :a-u2 277
+ :b-u3 148
+ :b-u4 328
+ :a-u5 388
+ :puzzle 395}
  :models [{:name :a-u1
  :defined-as :a-u1
  :calls []

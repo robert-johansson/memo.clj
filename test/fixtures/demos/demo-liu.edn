@@ -8,4 +8,5 @@
  :error "ModuleNotFoundError: No module named 'jax2d'"
  :line 8
  :seconds 0.0
+ :sizes {}
  :models []}

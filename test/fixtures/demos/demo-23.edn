@@ -5,7 +5,8 @@
  :dtype "float32"}
  :demo "demo-23.ipynb"
  :outcome "ran"
- :seconds 6.7
+ :seconds 5.5
+ :sizes {:player 265}
  :models [{:name :player
  :defined-as :player
  :calls [{:args [10 1.0]

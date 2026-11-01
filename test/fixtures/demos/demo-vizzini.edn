@@ -6,6 +6,7 @@
  :demo "demo-vizzini.py"
  :outcome "ran"
  :seconds 0.1
+ :sizes {:vizzini-pick 286}
  :models [{:name :vizzini-pick
  :defined-as :vizzini-pick
  :calls [{:args [0]

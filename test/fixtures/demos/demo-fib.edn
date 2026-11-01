@@ -6,6 +6,7 @@
  :demo "demo-fib.py"
  :outcome "ran"
  :seconds 0.0
+ :sizes {:fib 120}
  :models [{:name :fib
  :defined-as :fib
  :calls [{:args [0]

@@ -5,7 +5,9 @@
  :dtype "float32"}
  :demo "demo-mdp.ipynb"
  :outcome "ran"
- :seconds 2.5
+ :seconds 2.1
+ :sizes {:Q 346
+ :invplan 199}
  :models [{:name :Q
  :defined-as :Q
  :calls [{:args [0]

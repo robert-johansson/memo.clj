@@ -69,4 +69,23 @@
  :weights 1.0
  :python 0.0
  :correct 1.2752292156219482
- :why "a memo without axes can only be called as a host function, so the call's gradient is 0"}]}
+ :why "a memo without axes can only be called as a host function, so the call's gradient is 0"}]
+ :sizes {:inline-const 8
+ :inline-call 16
+ :inline-memo 22
+ :inline-param 24
+ :ffi-ok 66
+ :ffi-ok-no-arg 24
+ :ffi-static 66
+ :ffi-kwargs 68
+ :ffi-kwargs-only 60
+ :L-ffi 289
+ :sally-anne-ffi 439
+ :ffi-param-grad 58
+ :g-static-ffi 90
+ :g-static-ref 98
+ :h 66
+ :calls-h 32
+ :calls-h-ref 82
+ :ffi-scalar0 8
+ :ffi-scalar1 16}}

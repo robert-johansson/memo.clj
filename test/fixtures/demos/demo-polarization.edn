@@ -6,6 +6,8 @@
  :demo "demo-polarization.ipynb"
  :outcome "ran"
  :seconds 0.1
+ :sizes {:prior 494
+ :posterior 509}
  :models [{:name :prior
  :defined-as :prior
  :calls [{:args []

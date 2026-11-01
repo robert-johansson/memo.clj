@@ -28,6 +28,7 @@
             [memo.analyze :as analyze]
             [memo.ast :as ast]
             [memo.bounded :as bounded]
+            [memo.cost :as cost]
             [memo.domains :as domains]
             [memo.errors :as err]
             [memo.ir :as ir]
@@ -355,6 +356,8 @@
            ;; returns weigh by (memo.analyze's :mass), for memo.gen/deterministic
            :memo.impl/call-with-masses (fn [& args] (invoke args {:mass true}))
            :memo.impl/compiled compiled
+           ;; size @'s measure (memo.cost): a property of the text alone
+           :memo.impl/size (cost/size parsed)
            :memo.impl/ns ns
            :memo.impl/agents agents
            :memo.impl/compile (fn [budget limit report-only]

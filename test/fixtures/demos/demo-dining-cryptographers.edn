@@ -6,6 +6,7 @@
  :demo "demo-dining-cryptographers.ipynb"
  :outcome "ran"
  :seconds 0.1
+ :sizes {:model 472}
  :models [{:name :model
  :defined-as :model
  :calls [{:args []

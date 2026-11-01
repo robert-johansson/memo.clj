@@ -6,6 +6,7 @@
  :demo "demo-eig.ipynb"
  :outcome "ran"
  :seconds 0.1
+ :sizes {:eig 218}
  :models [{:name :eig
  :defined-as :eig
  :calls [{:args []

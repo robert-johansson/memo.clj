@@ -5,7 +5,11 @@
  :dtype "float32"}
  :demo "demo-empowerment.py"
  :outcome "ran"
- :seconds 29.0
+ :seconds 28.1
+ :sizes {:q 290
+ :Q 198
+ :C 147
+ :empowerment 22}
  :models [{:name :q
  :defined-as :q
  :calls []

@@ -5,7 +5,10 @@
  :dtype "float32"}
  :demo "demo-i-pomdp.ipynb"
  :outcome "ran"
- :seconds 0.6
+ :seconds 0.5
+ :sizes {:hist 424
+ :investor 878
+ :trustee 1058}
  :models [{:name :hist
  :defined-as :hist
  :calls []

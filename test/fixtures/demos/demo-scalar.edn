@@ -6,6 +6,7 @@
  :demo "demo-scalar.py"
  :outcome "ran"
  :seconds 0.1
+ :sizes {:scalar 240}
  :models [{:name :scalar
  :defined-as :scalar
  :calls [{:args []

@@ -5,7 +5,8 @@
  :dtype "float32"}
  :demo "demo-politeness.ipynb"
  :outcome "ran"
- :seconds 0.3
+ :seconds 0.1
+ :sizes {:S1 358}
  :models [{:name :S1
  :defined-as :S1
  :calls [{:args []

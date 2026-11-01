@@ -6,6 +6,8 @@
  :demo "demo-smith.ipynb"
  :outcome "ran"
  :seconds 0.1
+ :sizes {:interpretation-1 194
+ :interpretation-2 274}
  :models [{:name :interpretation-1
  :defined-as :interpretation-1
  :calls [{:args []

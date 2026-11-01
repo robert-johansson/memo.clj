@@ -5,7 +5,8 @@
  :dtype "float32"}
  :demo "demo-pomdp.ipynb"
  :outcome "ran"
- :seconds 0.3
+ :seconds 0.2
+ :sizes {:Q 545}
  :models [{:name :Q
  :defined-as :Q
  :calls [{:args [100]

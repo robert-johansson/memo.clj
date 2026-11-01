@@ -5,7 +5,11 @@
  :dtype "float32"}
  :demo "demo-trucks.ipynb"
  :outcome "ran"
- :seconds 4.1
+ :seconds 3.5
+ :sizes {:Q-mdp 385
+ :BeliefUpdate 295
+ :Q 579
+ :invplan 504}
  :models [{:name :Q-mdp
  :defined-as :Q-mdp
  :calls [{:args [100]

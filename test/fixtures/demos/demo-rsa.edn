@@ -5,7 +5,8 @@
  :dtype "float32"}
  :demo "demo-rsa.py"
  :outcome "ran"
- :seconds 0.4
+ :seconds 0.3
+ :sizes {:L 289}
  :models [{:name :L
  :defined-as :L
  :calls [{:args [1.0 0]

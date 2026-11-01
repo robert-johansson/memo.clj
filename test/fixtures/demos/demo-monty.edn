@@ -6,6 +6,7 @@
  :demo "demo-monty.ipynb"
  :outcome "ran"
  :seconds 0.0
+ :sizes {:monty 202}
  :models [{:name :monty
  :defined-as :monty
  :calls [{:args []

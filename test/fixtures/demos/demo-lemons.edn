@@ -6,6 +6,7 @@
  :demo "demo-lemons.ipynb"
  :outcome "ran"
  :seconds 0.2
+ :sizes {:buyer 226}
  :models [{:name :buyer
  :defined-as :buyer
  :calls [{:args []

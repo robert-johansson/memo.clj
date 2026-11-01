@@ -6,6 +6,8 @@
  :demo "demo-risk-aversion.ipynb"
  :outcome "ran"
  :seconds 0.1
+ :sizes {:model 200
+ "model-2" 257}
  :models [{:name :model
  :defined-as :model
  :calls [{:args []

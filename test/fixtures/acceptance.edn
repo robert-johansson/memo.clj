@@ -149,5 +149,47 @@
  :weights 1.0
  :value 0.0}]
  :ledger []
- :inspect {:t24-insp1 "** Tracing bob from generate.py, line 1991, in @memo t24_insp1\n-> bob is tracking the following choices:\n   - x: X (known)\n   - carol.y: X (known)\n     | (observed to be alice's bob.x)\n-> bob is currently tracking the following agents:\n   + carol\n-> bob is being modeled by alice.\n-> alice is being modeled by observer.\n\n** Tracing alice from generate.py, line 1994, in @memo t24_insp1\n-> alice is tracking the following choices:\n   - q: X (known)\n     | (observed to be observer's self.q)\n   - bob.x: X (known)\n     | (observed to be observer's self.q)\n-> alice is currently tracking the following agents:\n   + bob\n-> alice is being modeled by observer.\n\n** Tracing carol from generate.py, line 1995, in @memo t24_insp1\n-> From observer's perspective, there is not yet any model of carol. The current agents currently modeled by observer are: alice.\n\n"
- :t24-insp2 "** Tracing child from generate.py, line 2002, in @memo t24_insp2\n-> child is using the variant CHILD\n-> child is tracking the following choices:\n   - sally.x: X (uncertain)\n-> child is currently tracking the following agents:\n   + sally\n-> child is being modeled by observer.\n\n"}}
+ :sizes {:t1-lit-neg 32
+ :t1-lit-pos 24
+ :t1-param-neg 32
+ :t1-param-exp 24
+ :t1-float-exp 36
+ :t1-int-pos 28
+ :t1-zero-neg 32
+ :t2-abs 16
+ :t2-near 82
+ :t2-abs-int 20
+ :t3-dupe-mean 42
+ :t3-dupe-to-be 94
+ :t4-host-ratio 20
+ :t4-static-ratio 16
+ :t4-inline-ratio 8
+ :t4-host-bigint 20
+ :t5-pr-two 83
+ :t5-and-table 32
+ :t5-or-table 32
+ :t5-xor-table 32
+ :t5-not-table 20
+ :t5-and-sum 64
+ :t5-and-literal-sum 92
+ :t5-xor-mixed 48
+ :t6-cast-inner 32
+ :t6-cast-imagine 57
+ :t7-knows-none 42
+ :t8-retag-alice-only 121
+ :t8-retag-no-read 96
+ :t8-retag-knows 96
+ :t9-forget-known-unread 58
+ :t9-forget-observed-unread 84
+ :t9-forget-alone 115
+ :s2-bool-sum 56
+ :s2-bool-neg 32
+ :s2-bool-expect 106
+ :s3-pow0 74
+ :s4-mixed 62
+ :e8-xor3 52
+ :d2-div0 24
+ :d2-mod0 24
+ :t10-lookup 70}
+ :inspect {:t24-insp1 "** Tracing bob from generate.py, line 2029, in @memo t24_insp1\n-> bob is tracking the following choices:\n   - x: X (known)\n   - carol.y: X (known)\n     | (observed to be alice's bob.x)\n-> bob is currently tracking the following agents:\n   + carol\n-> bob is being modeled by alice.\n-> alice is being modeled by observer.\n\n** Tracing alice from generate.py, line 2032, in @memo t24_insp1\n-> alice is tracking the following choices:\n   - q: X (known)\n     | (observed to be observer's self.q)\n   - bob.x: X (known)\n     | (observed to be observer's self.q)\n-> alice is currently tracking the following agents:\n   + bob\n-> alice is being modeled by observer.\n\n** Tracing carol from generate.py, line 2033, in @memo t24_insp1\n-> From observer's perspective, there is not yet any model of carol. The current agents currently modeled by observer are: alice.\n\n"
+ :t24-insp2 "** Tracing child from generate.py, line 2040, in @memo t24_insp2\n-> child is using the variant CHILD\n-> child is tracking the following choices:\n   - sally.x: X (uncertain)\n-> child is currently tracking the following agents:\n   + sally\n-> child is being modeled by observer.\n\n"}}

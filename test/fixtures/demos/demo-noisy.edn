@@ -5,7 +5,10 @@
  :dtype "float32"}
  :demo "demo-noisy.ipynb"
  :outcome "ran"
- :seconds 0.3
+ :seconds 0.2
+ :sizes {:O 91
+ :S 361
+ :L 308}
  :models [{:name :O
  :defined-as :O
  :calls [{:args []

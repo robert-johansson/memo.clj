@@ -5,7 +5,9 @@
  :dtype "float32"}
  :demo "demo-chimp-belief-revision.ipynb"
  :outcome "ran"
- :seconds 0.3
+ :seconds 0.2
+ :sizes {:first-choice 347
+ :second-choice 472}
  :models [{:name :first-choice
  :defined-as :first-choice
  :calls [{:args []

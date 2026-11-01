@@ -6,6 +6,8 @@
  :demo "demo-mouths-of-babes.ipynb"
  :outcome "ran"
  :seconds 0.2
+ :sizes {:novel-event-inform 520
+ :novel-event-connect 561}
  :models [{:name :novel-event-inform
  :defined-as :novel-event-inform
  :calls [{:args [2.0]

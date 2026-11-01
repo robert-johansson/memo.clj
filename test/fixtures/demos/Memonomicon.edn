@@ -5,7 +5,13 @@
  :dtype "float32"}
  :demo "Memonomicon.ipynb"
  :outcome "ran"
- :seconds 1.1
+ :seconds 0.9
+ :sizes {:alice-chooses-card 42
+ "alice-chooses-card-2" 62
+ "alice-chooses-card-3" 86
+ :bob-chooses-card 137
+ :all-outcomes 135
+ :scalar 264}
  :models [{:name :alice-chooses-card
  :defined-as :alice-chooses-card
  :calls [{:args []

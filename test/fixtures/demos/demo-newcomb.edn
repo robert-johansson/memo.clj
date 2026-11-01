@@ -6,6 +6,10 @@
  :demo "demo-newcomb.ipynb"
  :outcome "ran"
  :seconds 0.1
+ :sizes {:fearful 144
+ :realist 119
+ :should-fail-to-compile 175
+ :should-also-fail-to-compile 110}
  :models [{:name :fearful
  :defined-as :fearful
  :calls [{:args []

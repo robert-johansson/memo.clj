@@ -6,6 +6,8 @@
  :demo "demo-persuasion.ipynb"
  :outcome "ran"
  :seconds 0.4
+ :sizes {:prosecutor 96
+ :judge 450}
  :models [{:name :prosecutor
  :defined-as :prosecutor
  :calls [{:args [2]

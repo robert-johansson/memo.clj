@@ -6,6 +6,7 @@
  :demo "demo-sally-anne.ipynb"
  :outcome "ran"
  :seconds 0.1
+ :sizes {:model 439}
  :models [{:name :model
  :defined-as :model
  :calls [{:args []

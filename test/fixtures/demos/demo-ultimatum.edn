@@ -5,7 +5,9 @@
  :dtype "float32"}
  :demo "demo-ultimatum.ipynb"
  :outcome "ran"
- :seconds 0.2
+ :seconds 0.1
+ :sizes {:receiver 115
+ :offerer 155}
  :models [{:name :receiver
  :defined-as :receiver
  :calls [{:args []

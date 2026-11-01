@@ -5,7 +5,9 @@
  :dtype "float32"}
  :demo "demo-penelope.ipynb"
  :outcome "ran"
- :seconds 1.1
+ :seconds 0.8
+ :sizes {:day-model 489
+ :night-model 702}
  :models [{:name :day-model
  :defined-as :day-model
  :calls [{:args []

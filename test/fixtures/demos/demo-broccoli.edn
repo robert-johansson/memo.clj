@@ -6,6 +6,7 @@
  :demo "demo-broccoli.ipynb"
  :outcome "ran"
  :seconds 0.1
+ :sizes {:main 238}
  :models [{:name :main
  :defined-as :main
  :calls [{:args []

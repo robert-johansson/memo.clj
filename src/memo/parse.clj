@@ -185,7 +185,10 @@
                    (first (dotted-parts form)) (second (dotted-parts form)))))
       {:node :lit
        :value ((:resolve-member pctxt) (first (dotted-parts form)) (second (dotted-parts form)))
-       :loc loc :static true}
+       :loc loc :static true
+       ;; an enum member, which Python memo writes {Utt.SOME} (an EInline),
+       ;; never as unary minus, whatever its value (memo.cost's size)
+       :member true}
 
       (dotted-parts form)
       (let [[who & ids] (dotted-parts form)]
@@ -254,6 +257,11 @@
 
               (and (= head '-) (= 1 (count parsed)))
               (op-node :neg parsed loc)
+
+              ;; Python memo's unary plus, +x: kept as its own node (Python's
+              ;; EOp UADD), not dropped, so the tree and size @ match Python's
+              (and (= head '+) (= 1 (count parsed)))
+              (op-node :uadd parsed loc)
 
               (and (= head '/) (= 1 (count parsed)))
               (op-node :div [{:node :lit :value 1 :loc loc :static true} (first parsed)] loc)

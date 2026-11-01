@@ -77,4 +77,28 @@
  :other-agent-unknown "Unknown choice bob.m"}
  :runtime-errors {}
  :grads []
- :ledger []}
+ :ledger []
+ :sizes {:coin-flip 118
+ :mean-roll 66
+ :roll-table 111
+ :roll-stats 156
+ :argmax-pick 94
+ :argmin-pick 102
+ :two-choices 195
+ :two-agents 139
+ :zero-mass 123
+ :const-return 16
+ :axis-return 48
+ :such-that-pick 58
+ :uniform-pick 42
+ :to-be-pick 74
+ :bool-sum 106
+ :default-param 66
+ :exp-overflow 131
+ :static-ite 114
+ :ops-pick 230
+ :return-uncertain 33
+ :unknown-choice 25
+ :repeated-choice 42
+ :name-conflict 25
+ :other-agent-unknown 50}}

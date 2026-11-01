@@ -6,6 +6,8 @@
  :demo "demo-pc.ipynb"
  :outcome "ran"
  :seconds 0.1
+ :sizes {:model 127
+ :model- 110}
  :models [{:name :model
  :defined-as :model
  :calls [{:args []

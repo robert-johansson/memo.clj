@@ -67,4 +67,27 @@
  :args [0.4]
  :weights 1.0
  :value ##NaN}]
- :ledger []}
+ :ledger []
+ :sizes {:kl 93
+ :kl-victor 71
+ :entropy-uniform 40
+ :entropy-joint 105
+ :entropy-marginal 80
+ :eig 218
+ :forgets-about-1 83
+ :forgets-about-multiple 85
+ :with-cast 59
+ :exotic-param 48
+ :exotic-param-kwarg 68
+ :exotic-kwarg-recursive 131
+ :exotic-kwarg 54
+ :day-model 489
+ :night-model 702
+ :kl-fail-unknown 45
+ :kl-fail-known 41
+ :kl-fail-dom 45
+ :entropy-unknown 16
+ :entropy-known 42
+ :forgets-scope-parent 50
+ :forgets-scope-self 50
+ :forgets-not-own 29}}

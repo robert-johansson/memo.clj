@@ -6,6 +6,9 @@
  :demo "demo-takeaway.ipynb"
  :outcome "ran"
  :seconds 0.3
+ :sizes {:EU 268
+ :π 288
+ :quick 294}
  :models [{:name :EU
  :defined-as :EU
  :calls []
