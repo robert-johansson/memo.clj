@@ -3,7 +3,7 @@
 What changed in memo.clj that code built on it (GenGDT, say) must know
 about. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). memo.clj is a git
-dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.0.1"
+dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.1.0"
 :git/sha …}` (the Handbook's Setting Up gives the coordinate).
 
 - **What 1.x promises:** the Handbook's [Stability](HANDBOOK.md#stability)
