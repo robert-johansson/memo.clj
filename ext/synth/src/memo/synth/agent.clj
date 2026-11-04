@@ -176,8 +176,11 @@
         host (process/start (str/split (prop "host" "clojure -M:host -m memo.synth.tools") #" ")
                             {:log (str (io/file out "host.log"))})
         done (done-episodes results (:seed opts))
-        record! (fn [entry] (spit results (str (pr-str (assoc entry :model model :seed (:seed opts))) "\n") :append true))]
-    (println "tool host ready; model" model "tasks" (mapv :id ts) "opts" (dissoc opts :sampling))
+        ;; the llama.cpp build each episode ran on (a run resumed on another device mixes them)
+        lib (System/getProperty "gen.llama.lib")
+        record! (fn [entry] (spit results (str (pr-str (assoc entry :model model :seed (:seed opts) :llama-lib lib)) "\n")
+                                  :append true))]
+    (println "tool host ready; model" model "llama.cpp" lib "tasks" (mapv :id ts) "opts" (dissoc opts :sampling))
     (when (seq done)
       (println "resuming:" (count done) "episodes of this seed already in" (str results) "are skipped:" (sort done)))
     (flush)
