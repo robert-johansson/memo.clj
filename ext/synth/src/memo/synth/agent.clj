@@ -25,7 +25,7 @@
 
 (def tool-specs
   (array-map
-   "eval" {:description "Evaluate Clojure forms in your namespace: def, defn, defenum, defmemo, or a call to see its value. Returns the last value, what was printed (e.g. by (alice :inspect) in a defmemo), memo's warnings, or the error with memo's hint."
+   "eval" {:description "Evaluate Clojure forms in your namespace: def, defn, defenum, defmemo, or a call to see its value. Returns each form's value, what was printed (e.g. by (alice :inspect) in a defmemo), memo's warnings, or the error with memo's hint."
            :params [{:name "code" :description "One or more Clojure forms." :required? true}]}
    "table" {:description "Call a memo you defined and see its table, its axes labeled."
             :params [{:name "call" :description "One call of a memo, such as (forecast 0.8 1.0 0.5)." :required? true}]}

@@ -1,7 +1,7 @@
 ;; memo.synth: an LLM writing memo.clj models (memoclj-pcw0), a module
 ;; outside memo.clj's core (DESIGN §13.12: memo.clj has no LLM API and does
 ;; not depend on gen.llm). gen.clj at the commit with codegen as a library
-;; (genclj-uw7w): gen.llm.sample, chat and agent from its core, and
+;; (genclj-uw7w) and :each? (genclj-rman): gen.llm.sample, chat and agent from its core, and
 ;; ext/codegen's session and process.
 ;;
 ;;   clojure -M:host -m memo.synth.tools     the tool host (the driver starts it)
@@ -9,9 +9,9 @@
 {:paths ["src"]
  :deps {memo.clj/memo.clj {:local/root "../.."}
         gen.clj/gen.clj {:git/url "https://github.com/robert-johansson/gen.clj.git"
-                         :git/sha "2b5b26e7ea65d272dfa5fdde7a74945de4c131a1"}
+                         :git/sha "3b45c5228542a247ae32b70dc34ff549ffccd6a2"}
         gen.clj/codegen {:git/url "https://github.com/robert-johansson/gen.clj.git"
-                         :git/sha "2b5b26e7ea65d272dfa5fdde7a74945de4c131a1"
+                         :git/sha "3b45c5228542a247ae32b70dc34ff549ffccd6a2"
                          :deps/root "ext/codegen"}}
  :aliases {:host {:jvm-opts ["-Xmx4g"]}
            :driver {:jvm-opts ["--enable-native-access=ALL-UNNAMED" "-Xmx6g"]}}}

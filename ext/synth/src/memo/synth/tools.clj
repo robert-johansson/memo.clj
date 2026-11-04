@@ -43,9 +43,12 @@
 
 (defn show
   "A value as the LLM sees it: numbers to 4 significant digits, arrays as
-  their values (or their shape when large), a memo by its signature."
+  their values (or their shape when large), a memo by its signature, a var
+  (what def, defn, defenum and defmemo return) by its name and value."
   [v]
-  (cond (memo/memo? v) (let [m (meta v)]
+  (cond (var? v) (str "defined " (.sym ^clojure.lang.Var v) ": " (show @v))
+        (domains/enum? v) (str "an enum: " (str/join ", " (map #(str %1 "=" %2) (domains/members v) (:values v))))
+        (memo/memo? v) (let [m (meta v)]
                          (str "<memo " (:memo/name m) ", axes " (:memo/axes m) ", params " (:memo/params m) ">"))
         (array/backend-array? v) (let [x (r4 (array/->clj (array/stop-gradient v)))]
                                    (if (and (sequential? x) (> (count (flatten [x])) 60))
@@ -91,6 +94,7 @@
                              "Use def, defn, defenum, defmemo and calls of pure functions; no IO, interop, eval or require."))))
    :explain explain
    :show show
+   :each? true
    :timeout-ms 60000})
 
 (defn- entry [id] (or (@sessions id) (throw (ex-info (str "no session " id) {}))))
@@ -98,7 +102,7 @@
 (defn- kind [{:keys [ok? text timeout?]}]
   (cond ok? :ok
         timeout? :timeout
-        (re-find #"^(error: )?refused" (str text)) :refused
+        (re-find #"(?m)^(error: )?refused" (str text)) :refused
         (re-find #"memo error" (str text)) :memo
         (re-find #"the code does not read|EOF while reading|Unmatched delimiter" (str text)) :read
         :else :clojure))
