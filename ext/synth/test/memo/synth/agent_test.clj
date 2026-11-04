@@ -22,7 +22,12 @@
       (is (zero? @asked)))
     (testing "the countdown in the last five turns"
       (is (= "5 turns left: submit your model soon." (agent/notes 30 5 (missing ['alarm]))))
-      (is (= "1 turn left: submit your model now." (agent/notes 30 1 (missing [])))))))
+      (is (= "1 turn left: submit your model now." (agent/notes 30 1 (missing [])))))
+    (testing "a capped episode (3 turns): the budget submits, so no call to submit"
+      (is (= "2 turns left; when they run out, the model you have defined is submitted."
+             (agent/notes 3 2 (missing ['alarm]))))
+      (is (= "1 turn left; when they run out, the model you have defined is submitted."
+             (agent/notes 3 1 (missing [])))))))
 
 (deftest status-names-the-missing-memos
   (let [{id :session} (tools/open! :sally)]

@@ -7,7 +7,8 @@
   :reasoning: :as-asked or :shortcut), its program and its log.
 
   Properties (synth.*): model (a GGUF), out (a directory), tasks (ids,
-  comma-separated; all by default), episodes (2), turns (30), turn-tokens
+  comma-separated; all by default), episodes (2), turns (30; 3 for the
+  ablation's arm (b): the budget submits what is defined), turn-tokens
   (1536; 8192 with thinking), thinking (false), n-ctx (32768), seed (1),
   host (the tool host's command)."
   (:require [clojure.java.io :as io]
@@ -71,9 +72,13 @@
                      (str turns-left " turns left, and " (str/join " and " ms) " "
                           (if (next ms) "are" "is") " not defined yet. Write the defmemo now and look at it "
                           "with table; test host functions through it.")))
+        left (str turns-left " turn" (when (not= 1 turns-left) "s") " left")
         countdown (when (<= turns-left 5)
-                    (str turns-left " turn" (when (not= 1 turns-left) "s") " left: submit your model "
-                         (if (<= turns-left 2) "now." "soon.")))]
+                    (if (<= turns 5)
+                      ;; a capped episode (the ablation's arm (b), memoclj-pcw0): every turn is in
+                      ;; the countdown, and the budget submits; "submit now" would spend a turn
+                      (str left "; when they run out, the model you have defined is submitted.")
+                      (str left ": submit your model " (if (<= turns-left 2) "now." "soon."))))]
     (or progress countdown)))
 
 (defn run-task
