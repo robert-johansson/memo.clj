@@ -219,6 +219,33 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
     (bob :observes alice.s :is voice.s))
   (return (as alice (E (as bob (Pr (= alice.skill Skill.HIGH)))))))"}])
 
+(def heldout
+  "Tasks kept out of the nine (memoclj-pcw0): no prompt, hint or check was
+  written from them. Run by naming them (synth.tasks)."
+  [{:id :depression :level 4 :heldout true
+    :beliefs '{engage 1 therapist 2}
+    :prompt "A model of hopelessness in depression (learned helplessness). `(def Control [0.1 0.3 0.5 0.7 0.9])` is how likely engaging in an activity is to turn out well, `(def Hope [0 1 2 4])` are levels of hopelessness, and `(defenum Act REST ENGAGE)`. Sam does not know the control c: his prior weight on each c is (1 - c)^h, where h is his hopelessness (h = 0: no bias). If Sam engages, the activity turns out well with probability c; if he rests, the day turns out well with probability 0.2, whatever c is. A good outcome is worth 1, a bad one 0, and engaging costs `effort`. Sam picks an act with probability proportional to exp(beta * his expected value of the act). Define `(defmemo engage [[a Act]] [h effort beta] ...)` returning the probability that Sam picks a, for a given hopelessness h. A therapist does not know Sam's hopelessness: in her model it is one of Hope, each equally likely, and Sam reasons and chooses as above. She sees which act Sam picks. Define `(defmemo therapist [[a Act] [g Hope]] [effort beta] ...)` returning the therapist's posterior probability that Sam's hopelessness is g, given that Sam picked a."
+    :calls [{:memo 'engage :args [0 0.2 3.0]} {:memo 'engage :args [2 0.2 3.0]} {:memo 'engage :args [4 0.5 2.0]}
+            {:memo 'therapist :args [0.2 3.0]} {:memo 'therapist :args [0.4 5.0]}]
+    :reference "(def Control [0.1 0.3 0.5 0.7 0.9])
+(def Hope [0 1 2 4])
+(defenum Act REST ENGAGE)
+(defmemo engage [[a Act]] [h effort beta]
+  (sam :thinks (world :chooses [c Control] :wpp (** (- 1 c) h)))
+  (sam :chooses [a Act] :wpp (exp (* beta (E (if (= a Act.ENGAGE) (- world.c effort) 0.2)))))
+  (return (Pr (= sam.a a))))
+(defmemo therapist [[a Act] [g Hope]] [effort beta]
+  (doc :thinks
+    (sam :chooses [h Hope] :uniformly)
+    (sam :thinks (world :knows h)
+                 (world :chooses [c Control] :wpp (** (- 1 c) h)))
+    (sam :chooses [act Act] :wpp (exp (* beta (E (if (= act Act.ENGAGE) (- world.c effort) 0.2))))))
+  (doc :observes sam.act :is a)
+  (doc :knows g)
+  (return (as doc (Pr (= sam.h g)))))"}])
+
+(def all-tasks "The nine and the held-out ones." (into tasks heldout))
+
 (defn with-expected
   "The tasks, each call with :expected from the reference solution, and
   :signatures, each memo the calls name as the reference defines it

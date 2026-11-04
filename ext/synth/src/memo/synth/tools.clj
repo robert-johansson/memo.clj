@@ -32,7 +32,7 @@
             [memo.synth.check :as check]
             [memo.synth.tasks :as tasks]))
 
-(def ^:private by-id (delay (into {} (map (juxt :id identity)) (tasks/with-expected tasks/tasks))))
+(def ^:private by-id (delay (into {} (map (juxt :id identity)) (tasks/with-expected tasks/all-tasks))))
 (defonce ^:private sessions (atom {}))
 
 (def prelude

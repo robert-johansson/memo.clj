@@ -10,7 +10,9 @@
   comma-separated; all by default), episodes (2), turns (30; 3 for the
   ablation's arm (b): the budget submits what is defined), turn-tokens
   (1536; 8192 with thinking), thinking (false), n-ctx (32768), seed (1),
-  host (the tool host's command).
+  clip (4000: the characters of a turn's reasoning kept in the log),
+  host (the tool host's command). Named tasks may be held-out ones
+  (tasks/heldout); by default the nine run.
 
   A run resumes: started again with the same out and seed, it skips the
   episodes episodes.edn already holds (done-episodes)."
@@ -111,7 +113,7 @@
 (defn run-task
   "episodes of the REPL agent on task, but those in done ([task episode]
   pairs); record! takes each episode's entry."
-  [m task {:keys [episodes turns turn-tokens thinking? sampling seed n-ctx]} call record! done]
+  [m task {:keys [episodes turns turn-tokens thinking? sampling seed n-ctx clip-chars] :or {clip-chars 4000}} call record! done]
   (doseq [ep (range episodes) :when (not (done [(:id task) ep]))]
     (let [t0 (System/nanoTime)
           episode (atom nil)
@@ -159,8 +161,8 @@
                  :tools-used (frequencies (map :tool calls))
                  :eval-kinds (frequencies (keep :kind (filter #(= "eval" (:tool %)) calls)))
                  :log (mapv (fn [e] (-> e
-                                        (update :reply clip 2000)
-                                        (update :reasoning clip 4000)
+                                        (update :reply clip (max 2000 clip-chars))
+                                        (update :reasoning clip clip-chars)
                                         (update :calls (partial mapv (fn [c] (-> c (update :params update-vals #(clip % 1500))
                                                                                  (update :text clip 1500)))))))
                             (:log r))}]
@@ -182,9 +184,11 @@
               :thinking? thinking?
               :sampling (if thinking? {:temp 1.0 :top-k 20 :top-p 0.95} sample/default-sampling)
               :seed (parse-long (prop "seed" "1"))
-              :n-ctx n-ctx}
+              :n-ctx n-ctx
+              :clip-chars (parse-long (prop "clip" "4000"))}
         ids (set (map keyword (some-> (prop "tasks" nil) (str/split #","))))
-        ts (cond->> tasks/tasks (seq ids) (filter #(ids (:id %))))
+        ;; the nine by default; named tasks from the nine and the held-out ones
+        ts (if (seq ids) (filter #(ids (:id %)) tasks/all-tasks) tasks/tasks)
         _ (.mkdirs out)
         results (io/file out "episodes.edn")
         host (process/start (str/split (prop "host" "clojure -M:host -m memo.synth.tools") #" ")
