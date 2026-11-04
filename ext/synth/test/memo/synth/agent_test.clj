@@ -57,3 +57,27 @@
         (spit f (str (pr-str {:task :coin :episode 0 :seed 2}) "\n{:task :act :epis") :append true)
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"line 6 does not read" (agent/done-episodes f 2))))
       (finally (.delete f)))))
+
+(deftest a-failed-episode-is-graded-and-the-run-goes-on
+  (let [calls (atom []) entries (atom [])
+        call (fn [req] (swap! calls conj (:op req))
+               (case (:op req)
+                 :open {:session "s"}
+                 :submit {:text "Submitted: missing" :grading {:task :coin :outcome :missing :reasoning :no-model}
+                          :program "(def x 1)"}
+                 {:text "ok"}))
+        ;; agent/run as it fails on a turn cut inside its think block: open, throw, close in finally
+        fake-run (fn [_ spec _]
+                   (let [st ((:open spec))]
+                     (try (throw (ex-info "cut inside its think block"
+                                          {:reason :cut-in-thinking :log [{:turn 1 :reply "" :calls []}]}))
+                          (finally ((:close spec) st)))))]
+    (with-redefs [gen.llm.agent/run fake-run]
+      (agent/run-task nil (first (filter #(= :coin (:id %)) memo.synth.tasks/tasks))
+                      {:episodes 2 :turns 30 :turn-tokens 8192 :thinking? true :seed 2 :n-ctx 131072}
+                      call #(swap! entries conj %) #{}))
+    (is (= 2 (count @entries)) "the second episode ran after the first failed")
+    (is (every? #(= :cut-in-thinking (:stop %)) @entries))
+    (is (every? #(= :missing (:outcome %)) @entries) "graded on what was defined")
+    (is (= "(def x 1)" (:program (first @entries))))
+    (is (= [:open :submit :open :submit] @calls) "each failed episode submitted once, in close")))

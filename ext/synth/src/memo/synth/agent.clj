@@ -120,23 +120,37 @@
                      (let [r (call {:op :submit :session (:session @state)})]
                        (swap! state assoc :ended true)
                        r)))
-          r (agent/run m {:system tasks/repl-system-prompt
+          spec {:system tasks/repl-system-prompt
                           :task (str (:prompt task) "\n\nBuild it at the REPL with the tools, and call check before you submit.")
                           :tools (tools call)
                           :open #(reset! episode (atom {:session (:session (call {:op :open :task (:id task)}))}))
-                          :close #(when-not (:ended @%) (call {:op :close :session (:session @%)}))
+                          ;; an episode that ends any other way (a throw) is graded on what it defined
+                          :close (fn [state]
+                                   (when-not (:ended @state)
+                                     (let [r (call {:op :submit :session (:session @state)})]
+                                       (swap! state assoc :ended true :closing-result r))))
                           :on-budget submit
                           :notes (fn [_ left]
                                    (notes turns left
                                           #(when-not (:ended @@episode)
                                              (:missing (call {:op :status :session (:session @@episode)})))))}
-                       {:turns turns :turn-tokens turn-tokens :thinking? thinking? :sampling sampling
-                        :context n-ctx
-                        :key (rng/fold-in (rng/key seed) (+ (* 100 (mod (hash (:id task)) 100000)) ep))})
+          r (try
+              (agent/run m spec
+                         {:turns turns :turn-tokens turn-tokens :thinking? thinking? :sampling sampling
+                          :context n-ctx
+                          :key (rng/fold-in (rng/key seed) (+ (* 100 (mod (hash (:id task)) 100000)) ep))})
+              ;; a turn cut inside its think block (:cut-in-thinking), or any other
+              ;; failure, ends this episode, not the run: recorded, graded, and on
+              (catch Throwable e
+                (let [d (ex-data e)]
+                  {:result (some-> @episode deref :closing-result)
+                   :stop (or (:reason d) :error) :error (str (.getSimpleName (class e)) ": " (ex-message e))
+                   :turns (count (:log d)) :log (vec (:log d)) :tokens nil :seconds nil})))
           result (:result r)
           stop (cond (:lost result) :session-lost (= :done (:stop r)) :submitted :else (:stop r))
           calls (mapcat :calls (:log r))
           entry {:task (:id task) :level (:level task) :episode ep :thinking? thinking? :stop stop
+                 :error (:error r)
                  :turns (:turns r) :tokens (:tokens r) :seconds (:llm (:seconds r))
                  :tool-seconds (:tools (:seconds r)) :wall-seconds (seconds t0)
                  :outcome (get-in result [:grading :outcome] (if (:lost result) :lost :not-submitted))
