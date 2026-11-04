@@ -152,6 +152,18 @@
 
 (deftest held-out-references-pass-their-own-spec
   (let [ts (tasks/with-expected tasks/heldout)]
-    (is (= [:depression :rumination] (mapv :id ts)))
+    (is (= [:depression :rumination :meet :panic-spiral :guess :interview :smile :food-truck :effort :persuasion]
+           (mapv :id ts)))
     (is (= 2 (get-in (first ts) [:signatures 'therapist :beliefs])))
     (is (= 9 (count tasks/tasks)) "the held-out tasks are not among the nine")))
+
+(deftest structure-is-graded-from-the-program
+  (testing "a self-call"
+    (is (= :as-intended (check/structure "(defmemo f [[x X]] [k] (a :chooses [y X] :wpp (if (= k 1) 1 (f [y] (- k 1)))) (return 1))" 'f {:self-call true})))
+    (is (= :not-built (check/structure "(defn g [k] k) (defmemo f [[x X]] [k] (a :chooses [y X] :wpp (g k)) (return 1))" 'f {:self-call true})))
+    (is (= :missing (check/structure "(def X [0 1])" 'f {:self-call true}))))
+  (testing ":thinks nested n deep"
+    (is (= :as-intended (check/structure "(defmemo g [] [] (d :thinks (c :thinks (b :thinks (a :chooses [x X] :uniformly)))) (return 1))" 'g {:thinks-depth 3})))
+    (is (= :not-built (check/structure "(defmemo g [] [] (d :thinks (c :thinks (a :chooses [x X] :uniformly))) (return 1))" 'g {:thinks-depth 3}))))
+  (testing "the last definition counts"
+    (is (= :as-intended (check/structure "(defmemo f [] [] (return 1)) (defmemo f [] [k] (a :chooses [y X] :wpp (f)) (return 1))" 'f {:self-call true})))))

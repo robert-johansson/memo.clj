@@ -239,6 +239,38 @@
              :text (str "whether " sym "'s agents read their beliefs could not be checked: "
                         (str/join "; " (map (fn [[a msg]] (str a ": " msg)) unknown)))}))))
 
+;; -----------------------------------------------------------------------------
+;; Structure: did the model build the structure the task's intent requires?
+;; Graded only, never shown to the model (it would give the solution away).
+
+(defn- thinks-depth
+  "The deepest nesting of (agent :thinks ...) statements in forms."
+  [forms]
+  (reduce max 0 (for [f forms :when (seq? f)]
+                  (if (and (symbol? (first f)) (= :thinks (second f)))
+                    (inc (thinks-depth (drop 2 f)))
+                    (thinks-depth f)))))
+
+(defn memo-form
+  "The last (defmemo sym ...) in program (the text of a session's
+  definitions), or nil."
+  [program sym]
+  (let [forms (try (binding [*read-eval* false] (read-string (str "[" program "]"))) (catch Exception _ []))]
+    (last (filter #(and (seq? %) (= 'defmemo (first %)) (= sym (second %))) forms))))
+
+(defn structure
+  "How the memo sym in program meets the structure its task requires,
+  spec {:self-call true} (sym calls itself) or {:thinks-depth n} (:thinks
+  nested n deep): :as-intended, :not-built, or :missing (no such memo)."
+  [program sym spec]
+  (if-let [form (memo-form program sym)]
+    (let [body (drop 4 form)]
+      (if (and (or (not (:self-call spec)) (some #{sym} (flatten (map #(if (coll? %) (seq %) %) body))))
+               (or (not (:thinks-depth spec)) (>= (thinks-depth body) (:thinks-depth spec))))
+        :as-intended
+        :not-built))
+    :missing))
+
 (defn close?
   [a b tol]
   (cond (and (number? a) (number? b)) (<= (Math/abs (- (double a) (double b))) tol)

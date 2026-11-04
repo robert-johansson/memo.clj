@@ -245,7 +245,7 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
   (return (as doc (Pr (= sam.h g)))))"}
 
    {:id :rumination :level 5 :heldout true
-    :beliefs '{ruminate 1}
+    :beliefs '{ruminate 1} :structure '{ruminate {:self-call true}}
     :prompt "Rumination in depression, with asymmetric updating. `(def Worth [0 1 2 3])` is Sam's self-worth, and `(defenum Reading NEUTRAL CRITICAL)` is how he reads a friend's ambiguous remark: if his worth is v, the remark reads as CRITICAL with probability (4 - v)/5, and as NEUTRAL otherwise. Sam ruminates: he replays the remark again and again. Before the first replay, his belief about his worth is uniform. In each replay he reads the remark afresh: the reading is CRITICAL with the probability his current belief gives it. He then updates his belief on that reading, but asymmetrically: after a CRITICAL reading by Bayes' rule, and after a NEUTRAL reading with the likelihood raised to the power a (0 <= a <= 1; a = 1 is Bayes' rule, a = 0 ignores good news). His belief after a replay is the average of the two updated beliefs, weighted by the probabilities of the two readings, and it is his prior for the next replay. Define `(defmemo ruminate [[w Worth]] [k a] ...)` returning Sam's belief that his worth is w after k replays (k >= 1)."
     :calls [{:memo 'ruminate :args [1 1.0]} {:memo 'ruminate :args [1 0.3]}
             {:memo 'ruminate :args [3 0.3]} {:memo 'ruminate :args [5 0.0]}]
@@ -259,7 +259,136 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
   (sam :chooses [x Reading] :wpp (E (p-reading x me.v)))
   (sam :observes-event :wpp (evidence x me.v a))
   (sam :knows w)
-  (return (E (as sam (Pr (= me.v w))))))"}])
+  (return (E (as sam (Pr (= me.v w))))))"}
+   {:id :meet :level 5 :heldout true
+    :beliefs '{meet 1} :structure '{meet {:self-call true}}
+    :prompt "Two friends want to meet at one of three cafes, `(def Place [0 1 2])`, without talking. The cafes' salience is 3, 2 and 1. A level-0 friend picks a cafe with probability proportional to its salience. A level-k friend (k >= 1) imagines the other friend as a level-(k - 1) friend, and picks cafe x with probability proportional to exp(beta * the probability that the other friend picks x). Define `(defmemo meet [[x Place]] [k beta] ...)` returning the probability that a level-k friend picks x (k >= 0)."
+    :calls [{:memo 'meet :args [0 2.0]} {:memo 'meet :args [1 2.0]} {:memo 'meet :args [3 2.0]} {:memo 'meet :args [4 5.0]}]
+    :reference "(def Place [0 1 2])
+(defn salience [y] (nth [3.0 2.0 1.0] y))
+(defmemo meet [[x Place]] [k beta]
+  (me :thinks (other :chooses [y Place] :wpp (if (<= k 1) (salience y) (meet [y] (- k 1) beta))))
+  (me :chooses [x Place] :wpp (if (= k 0) (salience x) (exp (* beta (Pr (= other.y x))))))
+  (return (Pr (= me.x x))))"}
+
+   {:id :panic-spiral :level 5 :heldout true
+    :beliefs '{panic 1} :structure '{panic {:self-call true}}
+    :prompt "Panic as a vicious circle (Clark 1986). `(def Fear [0 1 2 3])` is Sam's fear level, `(defenum Sensation CALM POUNDING)` is what he feels, and `(defenum Heart SOUND WEAK)`. In each cycle, Sam's heart pounds with probability (1 + g)/5, where g is his fear at the start of the cycle, and feels CALM otherwise. Sam does not see that his fear makes his heart pound. In his model his heart is WEAK with prior probability p-weak, a WEAK heart pounds with probability 0.8, and a SOUND one with probability 0.3. He feels his heart and infers from what he feels the probability w that his heart is WEAK; his fear for the next cycle is then f with probability proportional to exp(-2 (f - 3w)^2). Before the first cycle his fear is 0. Define `(defmemo panic [[f Fear]] [k p-weak] ...)` returning the probability that his fear is f after k cycles (k >= 1)."
+    :calls [{:memo 'panic :args [1 0.3]} {:memo 'panic :args [2 0.3]} {:memo 'panic :args [4 0.3]} {:memo 'panic :args [4 0.05]}]
+    :reference "(def Fear [0 1 2 3])
+(defenum Sensation CALM POUNDING)
+(defenum Heart SOUND WEAK)
+(defn pound [g s] (let [p (/ (+ 1.0 g) 5.0)] (if (== s 1) p (- 1.0 p))))
+(defn feel [h s] (let [p (if (== h 1) 0.8 0.3)] (if (== s 1) p (- 1.0 p))))
+(defmemo panic [[f Fear]] [k p-weak]
+  (body :chooses [g Fear] :wpp (if (<= k 1) (= g 0) (panic [g] (- k 1) p-weak)))
+  (body :chooses [s Sensation] :wpp (pound g s))
+  (sam :thinks (heart :chooses [h Heart] :wpp (if (= h Heart.WEAK) p-weak (- 1 p-weak)))
+               (heart :chooses [s Sensation] :wpp (feel h s)))
+  (sam :observes heart.s :is body.s)
+  (sam :chooses [f Fear] :wpp (exp (* -2 (** (- f (* 3 (Pr (= heart.h Heart.WEAK)))) 2))))
+  (return (Pr (= sam.f f))))"}
+
+   {:id :guess :level 5 :heldout true
+    :beliefs '{guess 3} :structure '{guess {:thinks-depth 3}}
+    :prompt "A guessing game four deep. `(def N [0 1 2 3 4])`. Ann picks a number with probability proportional to 1, 2, 4, 2, 1 (she likes the middle). Bob guesses Ann's number: he picks y with probability proportional to exp(beta * the probability that Ann picked y). Cleo, who knows all this, guesses Bob's guess the same way, and Dan guesses Cleo's guess the same way. Define `(defmemo guess [[z N]] [beta] ...)` returning the probability that Dan's guess is z."
+    :calls [{:memo 'guess :args [1.0]} {:memo 'guess :args [4.0]}]
+    :reference "(def N [0 1 2 3 4])
+(defn taste [x] (nth [1.0 2.0 4.0 2.0 1.0] x))
+(defmemo guess [[z N]] [beta]
+  (dan :thinks
+    (cleo :thinks
+      (bob :thinks (ann :chooses [x N] :wpp (taste x)))
+      (bob :chooses [y N] :wpp (exp (* beta (Pr (= ann.x y))))))
+    (cleo :chooses [w N] :wpp (exp (* beta (Pr (= bob.y w))))))
+  (dan :chooses [z N] :wpp (exp (* beta (Pr (= cleo.w z)))))
+  (return (Pr (= dan.z z))))"}
+
+   {:id :interview :level 5 :heldout true
+    :beliefs '{interview 1}
+    :prompt "Planning over one's own later choice. `(defenum Act ATTEND SKIP)`. Today Sam decides whether to prepare for tomorrow's job interview (`Bool`: YES or NO); preparing costs c. Tomorrow he decides whether to ATTEND or SKIP. If he attends, he succeeds with probability 0.8 if he prepared and 0.4 if not; success is worth 1, failure 0. Skipping is worth 0.3 for sure. Tomorrow he picks an act with probability proportional to exp(beta * its expected value, given whether he prepared). Today he picks whether to prepare with probability proportional to exp(beta * (the expected value of tomorrow, over his own choice tomorrow and its outcome, minus c if he prepares)). Define `(defmemo interview [[p Bool]] [c beta] ...)` returning the probability that Sam's choice today is p."
+    :calls [{:memo 'interview :args [0.1 3.0]} {:memo 'interview :args [0.2 10.0]} {:memo 'interview :args [0.05 1.0]}]
+    :reference "(defenum Act ATTEND SKIP)
+(defn p-ok [prep] (if (== prep 1) 0.8 0.4))
+(defmemo interview [[p Bool]] [c beta]
+  (sam :wants value (if (= act Act.ATTEND) (= ok Bool.YES) 0.3))
+  (sam :chooses [prep Bool] :wpp (exp (* beta (- (EU value) (* c prep)))))
+  (sam :chooses [act Act] :wpp (exp (* beta (if (= act Act.ATTEND) (p-ok prep) 0.3))))
+  (sam :given [ok Bool] :wpp (if (= act Act.ATTEND) (if (= ok Bool.YES) (p-ok prep) (- 1 (p-ok prep))) (if (= ok Bool.YES) 0 1)))
+  (return (Pr (= sam.prep p))))"}
+
+   {:id :smile :level 4 :heldout true
+    :beliefs '{smile 2}
+    :prompt "Social anxiety and discounted praise (Clark and Wells 1995). `(defenum Skill LOW HIGH)`, `(defenum Sound STEADY SHAKY)` and `(defenum Face BLANK SMILE)`. Alice gives a talk and Bob listens. In Alice's mind: her voice sounds SHAKY with probability leak, and STEADY otherwise. Bob, as she imagines him, has a prior P(HIGH) = p0 about her skill, and in his model a speaker of HIGH skill sounds SHAKY with probability 0.25 - 0.2 * harsh, one of LOW skill with probability 0.4 + 0.2 * harsh. Bob hears her voice and forms his posterior P that her skill is HIGH. Then he smiles (SMILE) with probability (1 - d) * P + d * 0.9, where d is how much Alice thinks his smiles are mere politeness, and keeps a BLANK face otherwise. Alice sees Bob's face. Define `(defmemo smile [[face Face]] [leak harsh p0 d] ...)` returning Alice's expectation of Bob's posterior that her skill is HIGH, after she sees face."
+    :calls [{:memo 'smile :args [0.8 1.0 0.5 0.0]} {:memo 'smile :args [0.8 1.0 0.5 0.9]} {:memo 'smile :args [0.2 0.0 0.7 0.5]}]
+    :reference "(defenum Skill LOW HIGH)
+(defenum Sound STEADY SHAKY)
+(defenum Face BLANK SMILE)
+(defn shaky [skill harsh] (if (== skill 1) (- 0.25 (* 0.2 harsh)) (+ 0.4 (* 0.2 harsh))))
+(defmemo smile [[face Face]] [leak harsh p0 d]
+  (alice :knows face)
+  (alice :thinks
+    (voice :chooses [s Sound] :wpp (if (= s Sound.SHAKY) leak (- 1 leak)))
+    (bob :thinks
+      (alice :given [skill Skill] :wpp (if (= skill Skill.HIGH) p0 (- 1 p0)))
+      (alice :given [s Sound] :wpp (if (= s Sound.SHAKY) (shaky skill harsh) (- 1 (shaky skill harsh)))))
+    (bob :observes alice.s :is voice.s)
+    (bob :chooses [f Face] :wpp (if (= f Face.SMILE)
+                                  (+ (* (- 1 d) (Pr (= alice.skill Skill.HIGH))) (* d 0.9))
+                                  (- 1 (+ (* (- 1 d) (Pr (= alice.skill Skill.HIGH))) (* d 0.9))))))
+  (alice :observes bob.f :is face)
+  (return (as alice (E (as bob (Pr (= alice.skill Skill.HIGH)))))))"}
+
+   {:id :food-truck :level 4 :heldout true
+    :beliefs '{food-truck 2}
+    :prompt "Inferring what someone wants and what they believe (Baker et al. 2017). `(defenum Truck KOREAN MEXICAN)`, `(defenum Way NEAR FAR)` and `(def Bel [0.2 0.5 0.8])`. Two food trucks are parked, one at a near spot and one at a far spot. A student prefers one of the trucks, and believes the KOREAN truck is at the near spot with probability b (the MEXICAN one is then at the far spot). She walks NEAR or FAR with probability proportional to exp(beta * (the probability, by her belief, that her preferred truck is at that spot, minus 0.2 if she walks FAR)). An observer knows all this but neither her preference nor her belief b: in his model each truck is equally likely to be her preference, and b is each of Bel with equal probability. He sees which way she walks. Define `(defmemo food-truck [[way Way] [pref Truck] [b Bel]] [beta] ...)` returning the observer's posterior probability that she prefers pref and believes b, given that she walked way."
+    :calls [{:memo 'food-truck :args [2.0]} {:memo 'food-truck :args [5.0]}]
+    :reference "(defenum Truck KOREAN MEXICAN)
+(defenum Way NEAR FAR)
+(def Bel [0.2 0.5 0.8])
+(defmemo food-truck [[way Way] [pref Truck] [b Bel]] [beta]
+  (obs :thinks
+    (st :chooses [pref Truck] :uniformly)
+    (st :chooses [b Bel] :uniformly)
+    (st :thinks (lot :knows b)
+                (lot :chooses [kn Bool] :wpp (if (= kn Bool.YES) b (- 1 b))))
+    (st :chooses [w Way] :wpp (exp (* beta (- (E (if (= w Way.NEAR)
+                                                   (= (if lot.kn Truck.KOREAN Truck.MEXICAN) pref)
+                                                   (= (if lot.kn Truck.MEXICAN Truck.KOREAN) pref)))
+                                              (if (= w Way.FAR) 0.2 0))))))
+  (obs :observes st.w :is way)
+  (obs :knows pref b)
+  (return (as obs (Pr (and (= st.pref pref) (= st.b b))))))"}
+
+   {:id :effort :level 3 :heldout true
+    :beliefs '{effort 1}
+    :prompt "Inferring how much a reward is worth from the effort spent. `(def Reward [1 2 3])` and `(defenum Move CLIMB STAY)`. A child wants a toy whose worth v to her is one of Reward, each equally likely to an observer. She faces two hills, of costs 1.5 and 2.5. For each hill, independently, she climbs with probability proportional to exp(beta * (v - cost)) and stays with probability proportional to 1. The observer sees her climb the first hill and stay at the second. Define `(defmemo effort [[r Reward]] [beta] ...)` returning the observer's posterior probability that the toy's worth to her is r."
+    :calls [{:memo 'effort :args [1.0]} {:memo 'effort :args [3.0]}]
+    :reference "(def Reward [1 2 3])
+(defenum Move CLIMB STAY)
+(defmemo effort [[r Reward]] [beta]
+  (obs :thinks
+    (kid :chooses [v Reward] :uniformly)
+    (kid :chooses [a Move] :wpp (exp (* beta (if (= a Move.CLIMB) (- v 1.5) 0))))
+    (kid :chooses [b Move] :wpp (exp (* beta (if (= b Move.CLIMB) (- v 2.5) 0)))))
+  (obs :observes-that (and (= kid.a Move.CLIMB) (= kid.b Move.STAY)))
+  (obs :knows r)
+  (return (as obs (Pr (= kid.v r)))))"}
+
+   {:id :persuasion :level 3 :heldout true
+    :prompt "A seller who wants to be thought well of. `(def Q [0 1 2 3])` is a product's quality, and `(defenum Says NOTHING SOLID EXCELLENT)` is what the seller says about it. NOTHING is true of every quality, SOLID of quality 1 and above, and EXCELLENT only of quality 3. A literal buyer who hears an utterance believes each quality it is true of equally likely. The seller knows the quality, says only true things, and picks an utterance with probability proportional to exp(beta * the literal buyer's expected quality after hearing it). Define `(defmemo persuade [[q Q] [u Says]] [beta] ...)` returning the probability that the seller says u when the quality is q."
+    :calls [{:memo 'persuade :args [1.0]} {:memo 'persuade :args [3.0]}]
+    :reference "(def Q [0 1 2 3])
+(defenum Says NOTHING SOLID EXCELLENT)
+(defn holds? [u q] (cond (== u 0) true (== u 1) (>= q 1) :else (>= q 3)))
+(defmemo heard [[u Says]] []
+  (lis :knows u)
+  (lis :chooses [q Q] :wpp (holds? u q))
+  (return (E lis.q)))
+(defmemo persuade [[q Q] [u Says]] [beta]
+  (seller :knows q)
+  (seller :chooses [u Says] :wpp (if (holds? u q) (exp (* beta (heard [u]))) 0))
+  (return (Pr (= seller.u u))))"}])
 
 (def all-tasks "The nine and the held-out ones." (into tasks heldout))
 
@@ -271,7 +400,7 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
   0 unless the task names it). An error if a reference fails, or departs
   from its own spec: the suite is wrong, not the model."
   [tasks]
-  (mapv (fn [{:keys [id reference calls beliefs] :as t}]
+  (mapv (fn [{:keys [id reference calls beliefs structure] :as t}]
           (let [n (check/fresh-ns)
                 forms (check/read-forms reference n)
                 ev (check/evaluate n forms)]
@@ -289,7 +418,12 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
                                           (do (when (seq problems)
                                                 (throw (ex-info (str "reference of " id " fails its shape check")
                                                                 {:memo s :problems problems})))
+                                              (when-let [st (get structure s)]
+                                                (when (not= :as-intended (check/structure reference s st))
+                                                  (throw (ex-info (str "reference of " id " fails its structure check")
+                                                                  {:memo s :structure st}))))
                                               [s (merge {:params (:memo/params (meta m)) :axes (:memo/axes (meta m))
                                                          :shape (:memo/shape (meta m))}
-                                                        spec)]))))))
+                                                        spec
+                                                        (when-let [st (get structure s)] {:structure st}))]))))))
         tasks))

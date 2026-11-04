@@ -224,12 +224,18 @@
                           :else {:call [(:memo c) (:args c)] :outcome :wrong :value (r4 (:value r))})))
         outcome (or (some #(when (not= :correct (:outcome %)) (:outcome %)) results) :correct)
         shape (shape-of s task)
-        program (session/program s)]
+        program (session/program s)
+        ;; graded only: the structure the task's intent requires (never shown to the model)
+        structure (into {} (for [[sym sig] (:signatures task) :when (:structure sig)]
+                             [sym (check/structure program sym (:structure sig))]))]
     (session/close! s)
     (swap! sessions dissoc id)
     {:text (str "Submitted: " (name outcome))
      :grading {:task (:id task) :outcome outcome :results (vec results)
-               :reasoning (reasoning shape) :shape (mapv #(select-keys % [:memo :kind :reading]) shape)}
+               :reasoning (reasoning shape) :shape (mapv #(select-keys % [:memo :kind :reading]) shape)
+               :structure (when (seq structure)
+                            (if (every? #{:as-intended} (vals structure)) :as-intended :not-built))
+               :structure-by-memo structure}
      :program program}))
 
 (defn status!
