@@ -40,3 +40,20 @@
     (tools/eval! id "(def sally 3)")
     (is (= ['sally] (:missing (tools/status! id))) "a var that is not a memo is missing")
     (tools/close! id)))
+
+(deftest resume-skips-what-is-done
+  (let [f (java.io.File/createTempFile "episodes" ".edn")]
+    (try
+      (testing "no file: nothing done"
+        (.delete f)
+        (is (= #{} (agent/done-episodes f 2))))
+      (testing "this seed's entries, and entries without a seed, count; another seed's do not"
+        (spit f (str (pr-str {:task :coin :episode 0}) "\n"
+                     (pr-str {:task :coin :episode 1 :seed 2}) "\n\n"
+                     (pr-str {:task :act :episode 0 :seed 3}) "\n"))
+        (is (= #{[:coin 0] [:coin 1]} (agent/done-episodes f 2)))
+        (is (= #{[:coin 0] [:act 0]} (agent/done-episodes f 3))))
+      (testing "a line cut short is a loud error naming it"
+        (spit f (str (pr-str {:task :coin :episode 0 :seed 2}) "\n{:task :act :epis") :append true)
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"line 6 does not read" (agent/done-episodes f 2))))
+      (finally (.delete f)))))

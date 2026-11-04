@@ -10,8 +10,12 @@
   comma-separated; all by default), episodes (2), turns (30; 3 for the
   ablation's arm (b): the budget submits what is defined), turn-tokens
   (1536; 8192 with thinking), thinking (false), n-ctx (32768), seed (1),
-  host (the tool host's command)."
-  (:require [clojure.java.io :as io]
+  host (the tool host's command).
+
+  A run resumes: started again with the same out and seed, it skips the
+  episodes episodes.edn already holds (done-episodes)."
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [gen.codegen.process :as process]
             [gen.llm.agent :as agent]
@@ -81,10 +85,34 @@
                       (str left ": submit your model " (if (<= turns-left 2) "now." "soon."))))]
     (or progress countdown)))
 
+(defn done-episodes
+  "The [task episode] pairs results (an episodes.edn) already holds for
+  seed, so that a run resumed in the same directory skips them; their keys
+  depend on the seed, the task and the episode only, so the episodes left
+  draw what they would have. An entry without :seed (written before
+  entries recorded it) counts as seed's. A line that does not read (a run
+  killed while writing it) is a loud error: remove it, and that episode
+  runs again."
+  [results seed]
+  (if-not (.exists (io/file results))
+    #{}
+    (into #{}
+          (keep-indexed
+           (fn [i line]
+             (when-not (str/blank? line)
+               (let [e (try (edn/read-string line)
+                            (catch Exception x
+                              (throw (ex-info (str results " line " (inc i) " does not read (" (ex-message x)
+                                                   "): remove it, and that episode runs again")
+                                              {:line (inc i)}))))]
+                 (when (= seed (get e :seed seed)) [(:task e) (:episode e)])))))
+          (str/split-lines (slurp results)))))
+
 (defn run-task
-  "episodes of the REPL agent on task; record! takes each episode's entry."
-  [m task {:keys [episodes turns turn-tokens thinking? sampling seed n-ctx]} call record!]
-  (doseq [ep (range episodes)]
+  "episodes of the REPL agent on task, but those in done ([task episode]
+  pairs); record! takes each episode's entry."
+  [m task {:keys [episodes turns turn-tokens thinking? sampling seed n-ctx]} call record! done]
+  (doseq [ep (range episodes) :when (not (done [(:id task) ep]))]
     (let [t0 (System/nanoTime)
           episode (atom nil)
           submit (fn [state]
@@ -147,13 +175,16 @@
         results (io/file out "episodes.edn")
         host (process/start (str/split (prop "host" "clojure -M:host -m memo.synth.tools") #" ")
                             {:log (str (io/file out "host.log"))})
-        record! (fn [entry] (spit results (str (pr-str (assoc entry :model model)) "\n") :append true))]
+        done (done-episodes results (:seed opts))
+        record! (fn [entry] (spit results (str (pr-str (assoc entry :model model :seed (:seed opts))) "\n") :append true))]
     (println "tool host ready; model" model "tasks" (mapv :id ts) "opts" (dissoc opts :sampling))
+    (when (seq done)
+      (println "resuming:" (count done) "episodes of this seed already in" (str results) "are skipped:" (sort done)))
     (flush)
     (try
       (with-open [e (llama/engine {:model model :n-ctx n-ctx :max-branches 4})
                   m (lm/lm e (llama/tokenizer e) {:max-branches 4})]
-        (doseq [t ts] (run-task m t opts #(process/call host % 600000) record!)))
+        (doseq [t ts] (run-task m t opts #(process/call host % 600000) record! done)))
       (finally (process/stop host)))
     (println "done:" (str results))
     (shutdown-agents)
