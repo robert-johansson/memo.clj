@@ -545,6 +545,20 @@ observation, use `:observes-that` or `:observes-event` (below).
   (return 0))
 ```
 
+An enum member is a value too. memo reads `Coin.TAILS` after `:is` as agent
+`Coin`'s choice `TAILS`, as Python memo does, so the error is "Observation
+of unknown choice". memo.clj's hint names the member and gives the
+statement to write instead, `(bob :observes-that (= alice.c Coin.TAILS))`.
+A parameter after `:is` gets the same hint.
+
+```clojure
+;; error: Observation of unknown choice
+(defmemo hears-tails [] []
+  (bob :thinks (alice :chooses [c Coin] :wpp 1))
+  (bob :observes alice.c :is Coin.TAILS)
+  (return 0))
+```
+
 ### Advanced observation constructs
 
 To condition on a boolean expression, use `:observes-that`. It is

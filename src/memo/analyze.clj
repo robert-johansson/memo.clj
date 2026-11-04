@@ -1230,12 +1230,28 @@
                                    " :thinks (" target-who " :chooses [" target-id
                                    " ...])) somewhere earlier in " (:name frm) "'s memo?"))))
     (when-not (get-in frm [:choices source])
-      (err/raise "Observation of unknown choice"
-                 (assoc (frame-err-opts state loc)
-                        :hint (str (:name frm) " does not yet think that " source-who
-                                   " has chosen " source-id ", so cannot model " who
-                                   " observing that value. Perhaps you misspelled "
-                                   source-id "?"))))
+      ;; Python memo's message, always. Its hint suggests a misspelling; when
+      ;; the value is plainly a value (an enum member, which memo reads as
+      ;; agent.choice, or a parameter), memo.clj's hint names the fix
+      (let [value (cond
+                    (contains? (get-in state [:members source-who]) source-id)
+                    (str source-who "." source-id " is a member of the domain " source-who)
+                    (and (= 'self source-who)
+                         (some #{source-id} (get-in state [:pctxt :static-parameters])))
+                    (str source-id " is a parameter of the model"))
+            written (if (= 'self source-who) source-id (str source-who "." source-id))]
+        (err/raise "Observation of unknown choice"
+                   (assoc (frame-err-opts state loc)
+                          :hint (if value
+                                  (str value ", a value, not a choice: what is observed must be "
+                                       "a choice, such as an axis or another agent's (carol.y). "
+                                       "To condition on a fixed value, write (" who
+                                       " :observes-that (= " target-who "." target-id " " written
+                                       ")).")
+                                  (str (:name frm) " does not yet think that " source-who
+                                       " has chosen " source-id ", so cannot model " who
+                                       " observing that value. Perhaps you misspelled "
+                                       source-id "?"))))))
     (let [state (eval-stmt state {:node :with-stmt :who who :loc loc
                                   :stmt {:node :observe :who target-who :id target-id :loc loc}})
           frm (fr/get-frame state)
@@ -1586,12 +1602,14 @@
   or a choice (:options k reaches a choice of k or fewer options too). With
   :mass (memo.gen/deterministic's check), the program also has :masses, the
   totals of the beliefs its returns weigh by (record-mass), each {:tag
-  :frame :what :loc :cells :return}."
-  [{:keys [pctxt stmts retvals]} domains {:keys [variant callee bounded limit report-only mass]}]
+  :frame :what :loc :cells :return}. :members maps an enum domain's symbol
+  to its members' names, for hints."
+  [{:keys [pctxt stmts retvals]} domains {:keys [variant callee bounded limit report-only mass members]}]
   (let [state (reduce (fn [st [i s]]
                         (eval-stmt (assoc st :continuation (subvec stmts (inc i))) s))
                       (assoc (initial-state pctxt domains variant)
-                             :callee callee :bounded bounded :limit limit :report-only report-only)
+                             :callee callee :bounded bounded :limit limit :report-only report-only
+                             :members members)
                       (map-indexed vector stmts))
         [state vals] (reduce (fn [[st acc] [i retval]]
                                (let [[st val] (eval-expr (cond-> st mass (assoc :check-mass i)) retval)

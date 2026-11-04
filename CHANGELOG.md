@@ -13,6 +13,14 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.1.0"
 
 ## [Unreleased]
 
+### Changed
+
+- "Observation of unknown choice" has a hint that names the fix when the
+  value observed is an enum member (`(bob :observes alice.c :is
+  Coin.TAILS)`, which memo reads as agent `Coin`'s choice `TAILS`) or a
+  parameter: write `(bob :observes-that (= alice.c Coin.TAILS))`. The
+  message is still Python memo's; other cases keep its hint.
+
 ## [1.1.0] - 2026-11-01
 
 M4's parity half: the rest of Python memo's tooling, and memo.clj's

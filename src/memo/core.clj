@@ -359,6 +359,10 @@
                                                        "(Pr (= alice.x 1)) can disagree."))
                                         [k vs])))
                             domains)
+        ;; each enum's members, for a hint: a member observed as though it
+        ;; were a choice (memo.analyze's eval-show)
+        members (into {} (keep (fn [[k d]] (when (domains/enum? d) [k (set (domains/members d))])))
+                      domains)
         callee (fn [callee]
                  (when (not= callee name)
                    (let [m (some-> (ns-resolve (the-ns ns) callee) deref meta)]
@@ -372,7 +376,8 @@
         compile-for (fn [budget limit report-only mass]
                       (let [compiled (analyze/analyze parsed domain-values
                                                       (assoc opts :callee callee :bounded budget :limit limit
-                                                             :report-only report-only :mass mass))
+                                                             :report-only report-only :mass mass
+                                                             :members members))
                             problems (ir/check compiled)]
                         (when (seq problems)
                           (err/raise (str "memo.clj built an ill-formed program for " name)

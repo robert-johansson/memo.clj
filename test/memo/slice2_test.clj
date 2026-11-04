@@ -2,7 +2,8 @@
   "M1, slice 2: thinks, observes, observes-that and observes-event, knows,
   has-theory. Every model here has a twin of the same name in
   test/fixtures/generate.py, and slice2.edn holds Python memo's results."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [gen.array :as array]
             [memo.core :refer [defmemo]]
             [memo.domains :refer [defenum]]
@@ -231,6 +232,37 @@
   (doseq [[k message] (:errors fixture)]
     (testing (name k)
       (is (= message (some-> (ts/compile-error 'memo.slice2-test (error-forms k)) ex-message))))))
+
+(deftest observing-a-value-hints-observes-that
+  ;; Python memo's message stays; memo.clj's hint names the fix when the value
+  ;; observed is an enum member (read as agent.choice) or a parameter
+  (let [hint (fn [form] (let [e (ts/compile-error 'memo.slice2-test form)]
+                          [(ex-message e) (:memo/hint (ex-data e))]))
+        [m h] (hint '(defmemo obs-member [] []
+                       (alice :thinks (bob :chooses [c Coin] :wpp 1))
+                       (alice :observes bob.c :is Coin.TAILS)
+                       (return 1)))]
+    (is (= "Observation of unknown choice" m))
+    (is (str/includes? h "Coin.TAILS is a member of the domain Coin"))
+    (is (str/includes? h "(alice :observes-that (= bob.c Coin.TAILS))"))
+    (let [[m h] (hint '(defmemo obs-param [] [k]
+                         (alice :thinks (bob :chooses [x X] :wpp 1))
+                         (alice :observes bob.x :is k)
+                         (return 1)))]
+      (is (= "Observation of unknown choice" m))
+      (is (str/includes? h "k is a parameter"))
+      (is (str/includes? h "(alice :observes-that (= bob.x k))")))
+    (testing "inside a mind, the statement suggested is the one written there"
+      (let [[_ h] (hint '(defmemo obs-member-nested [] []
+                           (carol :thinks
+                             (alice :thinks (bob :chooses [c Coin] :wpp 1))
+                             (alice :observes bob.c :is Coin.HEADS))
+                           (return 1)))]
+        (is (str/includes? h "(alice :observes-that (= bob.c Coin.HEADS))"))))
+    (testing "a choice that does not exist keeps Python memo's hint"
+      (let [[m h] (hint (error-forms :obs-unknown-source))]
+        (is (= "Observation of unknown choice" m))
+        (is (str/includes? h "Perhaps you misspelled z?"))))))
 
 (deftest scrambled-beliefs-are-a-compile-error
   ;; Python memo answers scramble-unread (above), and crashes with a shape
