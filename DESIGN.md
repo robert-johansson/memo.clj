@@ -478,6 +478,14 @@ disagree, memo.clj follows Python memo:
      `:is`, which memo reads as an agent's choice. Python memo asks
      whether the choice is misspelled; memo.clj's hint gives the
      `:observes-that` statement to write.
+   - A second, from the LLM runs (memoclj-uhkq, 2026-11-04): a memo with an
+     agent named `observer`, which Python memo accepts and whose errors then
+     read as the top level's, gets a note on every error, after Python
+     memo's hint. A third, return-wrapping (`bob.y` where bob only models
+     `alice.y`: the return rewritten in bob's frame), is parked on the
+     branch `park/return-wrapping-hint`: it fired only on the data it was
+     written from, and a repair search (memoclj-pimj) would produce it as
+     one edit among others.
    - Every other case keeps Python memo's hint.
    - A hint changes no AST, so `size @` keeps parity.
    - Hints are not frozen, any more than messages are.

@@ -17,6 +17,7 @@
   constructs built so far (M1, slice 1); the others are errors that say so."
   (:require [clojure.set :as set]
             [clojure.string :as str]
+            [memo.ast :as ast]
             [memo.bounded :as b]
             [memo.errors :as err]
             [memo.frames :as fr]))
@@ -1588,22 +1589,14 @@
    :exact false
    :report []})
 
-(defn analyze
-  "The IR program of a parsed memo:
-  {:instrs [...] :results [sym ...] :forall [[dim id domain] ...]
-   :axes [id ...] :domains [domain ...] :shape [n ...] :n-dims n}.
-  domains maps each domain symbol to its values; opts has :variant and
-  :callee, from the name of a memo defined before to {:axes n :params [..]
-  :defaults #{..} :num-results n}; with a budget (M3), :bounded, a normalized
-  budget (memo.bounded/normalize-budget), and :limit, the call's (with
-  :report-only, sizes above it are reported, not errors). A bounded program
-  also has :bounded-report, its choices' sizes, and :bounded-parts, [agent
-  part] for each part of the budget (:samples, :options) that reaches a query
-  or a choice (:options k reaches a choice of k or fewer options too). With
-  :mass (memo.gen/deterministic's check), the program also has :masses, the
-  totals of the beliefs its returns weigh by (record-mass), each {:tag
-  :frame :what :loc :cells :return}. :members maps an enum domain's symbol
-  to its members' names, for hints."
+(def ^:private observer-note
+  (str "This memo has an agent named observer, which is also memo's name for the top level: an "
+       "error in that agent's frame reads as though it were the top level's, and that agent knows "
+       "only what it is told, so an axis it reads needs (observer :knows x). Renaming the agent "
+       "(obs, say) keeps the two apart."))
+
+(defn- analyze*
+  "analyze's work; see analyze."
   [{:keys [pctxt stmts retvals]} domains {:keys [variant callee bounded limit report-only mass members]}]
   (let [state (reduce (fn [st [i s]]
                         (eval-stmt (assoc st :continuation (subvec stmts (inc i))) s))
@@ -1636,3 +1629,32 @@
                                   (for [{:keys [agent sources]} (:report state), {:keys [kind]} sources]
                                     [agent kind]))}
       mass (assoc :masses (vec (:masses state))))))
+
+(defn analyze
+  "The IR program of a parsed memo:
+  {:instrs [...] :results [sym ...] :forall [[dim id domain] ...]
+   :axes [id ...] :domains [domain ...] :shape [n ...] :n-dims n}.
+  domains maps each domain symbol to its values; opts has :variant and
+  :callee, from the name of a memo defined before to {:axes n :params [..]
+  :defaults #{..} :num-results n}; with a budget (M3), :bounded, a normalized
+  budget (memo.bounded/normalize-budget), and :limit, the call's (with
+  :report-only, sizes above it are reported, not errors). A bounded program
+  also has :bounded-report, its choices' sizes, and :bounded-parts, [agent
+  part] for each part of the budget (:samples, :options) that reaches a query
+  or a choice (:options k reaches a choice of k or fewer options too). With
+  :mass (memo.gen/deterministic's check), the program also has :masses, the
+  totals of the beliefs its returns weigh by (record-mass), each {:tag
+  :frame :what :loc :cells :return}. :members maps an enum domain's symbol
+  to its members' names, for hints."
+  [parsed domains opts]
+  ;; Python memo accepts an agent named observer, as memo.clj does; its
+  ;; errors read as the top level's, so each memo error gets a note
+  ;; (DESIGN principle 6: Python memo's message, memo.clj's hint)
+  (try
+    (analyze* parsed domains opts)
+    (catch clojure.lang.ExceptionInfo e
+      (if (and (err/memo-error? e) (contains? (:agents (ast/agents parsed)) 'observer))
+        (throw (ex-info (ex-message e)
+                        (update (ex-data e) :memo/hint #(str (when % (str % " ")) observer-note))
+                        (ex-cause e)))
+        (throw e)))))

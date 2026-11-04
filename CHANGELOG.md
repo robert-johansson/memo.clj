@@ -20,6 +20,11 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.1.0"
   Coin.TAILS)`, which memo reads as agent `Coin`'s choice `TAILS`) or a
   parameter: write `(bob :observes-that (= alice.c Coin.TAILS))`. The
   message is still Python memo's; other cases keep its hint.
+- Every error in a memo with an agent named `observer` (memo's name for
+  the top level too, so the agent's errors read as the top level's) adds a
+  note to its hint: that agent is told an axis like any other, and naming
+  it `obs` keeps the two apart. Python memo accepts the name, and so does
+  memo.clj.
 
 ## [1.1.0] - 2026-11-01
 

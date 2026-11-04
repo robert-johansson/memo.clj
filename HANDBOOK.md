@@ -639,6 +639,20 @@ told:
 ;=> [0.0 1.0 2.0]
 ```
 
+The observer is also memo's name for the top level. An agent may be named
+`observer`, as in Python memo, but it is an agent like any other, and is
+told an axis like any other. Its errors read as though they were the top
+level's ("the frame of observer"), so memo.clj adds a note to the hint of
+every error in a memo with an agent named `observer`. Naming the agent
+`obs` keeps the two apart.
+
+```clojure
+;; error: Unknown choice observer.x
+(defmemo named-observer [[x X]] []
+  (observer :thinks (bob :chooses [y X] :wpp 1))
+  (return (as observer (Pr (= bob.y x)))))
+```
+
 ## `:snapshots-self-as`
 
 `:snapshots-self-as` lets an agent remember a snapshot of its past self.
