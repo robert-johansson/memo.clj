@@ -242,7 +242,24 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
     (sam :chooses [act Act] :wpp (exp (* beta (E (if (= act Act.ENGAGE) (- world.c effort) 0.2))))))
   (doc :observes sam.act :is a)
   (doc :knows g)
-  (return (as doc (Pr (= sam.h g)))))"}])
+  (return (as doc (Pr (= sam.h g)))))"}
+
+   {:id :rumination :level 5 :heldout true
+    :beliefs '{ruminate 1}
+    :prompt "Rumination in depression, with asymmetric updating. `(def Worth [0 1 2 3])` is Sam's self-worth, and `(defenum Reading NEUTRAL CRITICAL)` is how he reads a friend's ambiguous remark: if his worth is v, the remark reads as CRITICAL with probability (4 - v)/5, and as NEUTRAL otherwise. Sam ruminates: he replays the remark again and again. Before the first replay, his belief about his worth is uniform. In each replay he reads the remark afresh: the reading is CRITICAL with the probability his current belief gives it. He then updates his belief on that reading, but asymmetrically: after a CRITICAL reading by Bayes' rule, and after a NEUTRAL reading with the likelihood raised to the power a (0 <= a <= 1; a = 1 is Bayes' rule, a = 0 ignores good news). His belief after a replay is the average of the two updated beliefs, weighted by the probabilities of the two readings, and it is his prior for the next replay. Define `(defmemo ruminate [[w Worth]] [k a] ...)` returning Sam's belief that his worth is w after k replays (k >= 1)."
+    :calls [{:memo 'ruminate :args [1 1.0]} {:memo 'ruminate :args [1 0.3]}
+            {:memo 'ruminate :args [3 0.3]} {:memo 'ruminate :args [5 0.0]}]
+    :reference "(def Worth [0 1 2 3])
+(defenum Reading NEUTRAL CRITICAL)
+(defn p-critical [v] (/ (- 4.0 v) 5.0))
+(defn p-reading [x v] (if (== x 1) (p-critical v) (- 1.0 (p-critical v))))
+(defn evidence [x v a] (if (== x 1) (p-critical v) (Math/pow (- 1.0 (p-critical v)) a)))
+(defmemo ruminate [[w Worth]] [k a]
+  (sam :thinks (me :chooses [v Worth] :wpp (if (= k 1) 1 (ruminate [v] (- k 1) a))))
+  (sam :chooses [x Reading] :wpp (E (p-reading x me.v)))
+  (sam :observes-event :wpp (evidence x me.v a))
+  (sam :knows w)
+  (return (E (as sam (Pr (= me.v w))))))"}])
 
 (def all-tasks "The nine and the held-out ones." (into tasks heldout))
 

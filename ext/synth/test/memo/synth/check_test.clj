@@ -152,6 +152,6 @@
 
 (deftest held-out-references-pass-their-own-spec
   (let [ts (tasks/with-expected tasks/heldout)]
-    (is (= [:depression] (mapv :id ts)))
+    (is (= [:depression :rumination] (mapv :id ts)))
     (is (= 2 (get-in (first ts) [:signatures 'therapist :beliefs])))
     (is (= 9 (count tasks/tasks)) "the held-out tasks are not among the nine")))
