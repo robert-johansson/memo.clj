@@ -9,6 +9,13 @@ syntax, dependencies and conventions (§3, §4, §8, §11, §12); the choices
 made while building M1 (§2.4, §5, §8); and §13.7 and §13.10. Everything
 marked (proposed) still awaits confirmation.*
 
+*Where it stands, 2026-11-04: M1, M2 and M3 are built, and so is M4's
+parity half. Released as 1.0.0 (tagged 2026-10-26), 1.0.1 (2026-11-01) and
+1.1.0 (2026-11-02). The research half has begun with
+synthesis, which lives outside the core (§13.12, §14.6). Where a (proposed)
+remains in the text, its section records the later decision; the open
+questions are in §13.*
+
 ## 1. Goal
 
 memo (Chandra, Chen, Tenenbaum & Ragan-Kelley, "A Domain-Specific
@@ -127,6 +134,12 @@ In order:
      as memo.clj 1.1;
    - *the research half* (certification, synthesis, the static graph),
      which waits for the owner to give each item a purpose.
+
+   *The parity half was built on 2026-11-01 and released as 1.1.0 (tagged
+   2026-11-02 at 430aaeb; §14.7). Synthesis got its purpose on 2026-11-04:
+   excellent memo.clj models written with a local LLM. It is built outside
+   the core (§13.12, §14.6). Certification and the static graph still
+   wait.*
 
 Its first client is GenGDT, which writes minds in memo.clj and cycles, data
 and fitting in gen.clj. memo.clj is general: theory-of-mind, pragmatics,
@@ -456,6 +469,20 @@ disagree, memo.clj follows Python memo:
 6. **Loud errors with memo's hints.** Illegal models are compile errors that
    name the frame, the choice and the fix. Silent wrong numbers are the
    failure this project exists to prevent.
+
+   *Decided 2026-11-04 (memoclj-nnlj, recorded with the owner's approval):*
+   - An error's message is Python memo's, and §9 compares them.
+   - Its hint may be memo.clj's own when two things hold: Python memo's
+     hint points away from the fix, and the case is plainly recognized.
+     The first such case is observing an enum member or a parameter after
+     `:is`, which memo reads as an agent's choice. Python memo asks
+     whether the choice is misspelled; memo.clj's hint gives the
+     `:observes-that` statement to write.
+   - Every other case keeps Python memo's hint.
+   - A hint changes no AST, so `size @` keeps parity.
+   - Hints are not frozen, any more than messages are.
+   - Long, example-rich explanations aimed at machine-written code belong
+     to synthesis's explainer, outside the core (§13.12).
 7. **Verification as in gen.clj.**
    - Every emitter has an oracle (§9): Python memo for the exact core,
      gen.clj's laws for the bridge, convergence to the exact core for bounded
@@ -468,8 +495,8 @@ disagree, memo.clj follows Python memo:
 ## 4. Architecture
 
 ```
-L4  tooling           inspect, explain, print-table; transpile (test oracle from M1)
-L3  GFI bridge        memo.gen: dist, deterministic (M2, proposed) · bounded generative functions (M3)
+L4  tooling           inspect, explain, print-table, rows, *trace*, cost; transpile (test oracle from M1, users' since 1.1)
+L3  GFI bridge        memo.gen: dist, deterministic (M2) · bounded generative functions (M3)
 L2  runtime           calls, sub-memo calls under path-condition guards, caching,
                       several returns, results as tables over named axes
 L1  compiler          read → parse → AST → epistemic analysis (frames, known/deps,
@@ -493,6 +520,9 @@ Namespaces (decided, 2026-10-20; root `memo`):
   program is compiled without one.
 - `memo.pygen`, the transpiler: under `test` until M4; in `src` since
   2026-11-01 (§14.5), experimental, with `source` for users.
+- Outside the core, `ext/synth` (`memo.synth.*`, since 2026-11-04): an LLM
+  writing memo.clj models at a REPL (§13.12). It has its own `deps.edn`
+  and is not part of what a memo.clj dependency brings.
 
 memo-clj's single `compile` namespace (1.3k lines) is split along the
 analysis/IR seam. M3 needs the analysis without the exact lowering.
@@ -530,8 +560,9 @@ analysis/IR seam. M3 needs the analysis without the exact lowering.
   - **By default it is tabulated:** called on host numbers at every element
     of its dynamic arguments (its static ones passed whole), which is
     Python memo's vmap. Any Clojure function works, `bit-and` and `if`
-    included. Caching the table per value of the static arguments, as
-    memo-clj did, is not built yet.
+    included. Caching its tables, as memo-clj did per value of the static
+    arguments, is opt-in since 1.1: `^:memo/cache-table` on a pure
+    function, keyed by every argument (§14.4).
   - **A function marked `^:memo/vectorized`** (written with gen.array's
     operators, elementwise, branching with `where`; or a `custom-vjp`) is
     called once on whole arrays, and so differentiated. An `if` on a value
@@ -1301,8 +1332,8 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
 - **Statements and expressions** are those of Python memo 1.3.3, the same
   as 1.3.2's. memo-clj's README has the table as of 1.2.26; 1.3.2 adds
   `time @`, `space @` and `size @`, and rejects `is` in expressions. It is
-  to be re-checked against the Handbook. All are built (M1, slices 1-6)
-  except cost reflection (`time @`, `space @`, `size @`), which is M4.
+  to be re-checked against the Handbook. All are built: M1's slices 1-6,
+  and cost reflection (`time @`, `space @`, `size @`) in M4 (1.1.0, §14.1).
 - **Options and parameters** (slice 6): metadata on the memo's name,
   `^{:cache true}` (Python's `cache=True`: calls memoized by their host
   number arguments, never for values being differentiated, and every cache
@@ -1342,7 +1373,7 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
   of `kach/memo`, not the copy inside memo-clj. A script dumps goldens from:
   - its Handbook;
   - its test suite, including the 30 compile-error cases, whose messages must
-    be matched in content;
+    be matched in content (the hints may be memo.clj's: principle 6);
   - its demos.
 
   Parity tolerances follow the dtypes.
@@ -1718,10 +1749,77 @@ memo-clj's agent-first syntax, unchanged where the JVM allows:
       - A table of 12 cells took 1.66 s on the 35B. Tabulated at every
         call of a memo, that is the cost §14.4's cache removes.
 
+    *Synthesis, from 2026-11-04 (memoclj-24bl, memoclj-pcw0).* The owner's
+    aim is excellent memo.clj models written with a local LLM (the Qwen
+    above). In the long run that means the clinical models (social anxiety;
+    panic after Clark), and an agent that writes memo.clj as a REPL
+    programmer does, so it need not understand memo perfectly. This is
+    the second place above ("around a mind"), and the decision of 2026-11-01
+    stands: memo.clj's core has no LLM API and does not depend on `gen.llm`.
+    - *Decided by the owner, 2026-11-04 (gen.clj's genclj-uw7w; gen.clj
+      DESIGN §9: gen.clj's core evaluates no code).* gen.clj builds the
+      codegen library:
+      - in `gen.llm`, its core, experimental: `gen.llm.sample` (sampling
+        with temperature, top-k, top-p), `gen.llm.chat` (Qwen's template,
+        thinking, tool calls) and `gen.llm.agent` (the episode loop, its
+        tools supplied by the caller);
+      - in a module, `ext/codegen` (`gen.clj/codegen`): what evaluates
+        LLM-written code, that is, the namespace session, the eval tool
+        with its `:read`, `:repair`, `:vet` and `:explain` hooks, and a
+        tool host in a JVM of its own.
+    - *memo.clj's side is `ext/synth`* (§4), a module with its own
+      `deps.edn`:
+      - It depends on memo.clj by local root, and on gen.clj and
+        `gen.clj/codegen` at a commit past v1.0.0. That pin overrides the
+        root's v1.0.0 inside `ext/synth` only.
+      - `memo.synth.tasks`: nine tasks with reference solutions.
+      - `memo.synth.check`: vetting (definitions and calls of pure
+        functions; no IO, interop or eval) and grading.
+      - `memo.synth.tools`: the tool host, with memo's hooks plugged into
+        the session (memo's errors as `memo.errors` prints them). Its tools
+        are eval, table, check and submit.
+      - `memo.synth.agent`: the driver.
+      - Its tests need no LLM: `clojure -X:test` in `ext/synth`.
+    - *First results, 2026-11-04,* all with Qwen3.6-35B-A3B Q4_K_M,
+      thinking off, on a Linux machine's CPU:
+      - *One shot* (memoclj-iou6): 1 of 72 first attempts correct, 3 of 72
+        after two repairs fed memo's errors. The failures are surface
+        syntax first (enum members outside a defmemo, a literal after
+        `:is`, `case` inside a defmemo), then memo's frames (who owns a
+        choice, who may read it).
+      - *A hint that names the fix moves the model* (principle 6): the
+        observes hint cleared its error in 8 of 8 repairs, Python memo's
+        hint in 3 of 8, from the same first attempts.
+      - *The REPL agent* (repl1: 30 turns, one episode a task): 6 of 9
+        correct by their tables, but only 3 of 9 reason through memo as
+        the task asks. When memo's frames resist, the model escapes into
+        plain Clojure: Bayes' rule at the top level, a formula in place of
+        an agent's belief, or no agents at all.
+      - *Not yet the REPL's effect:* repl1 against one shot changes the
+        turns, the hints, the prompt and the sample counts at once. An
+        ablation separates them (memoclj-pcw0).
+    - *The grader checks the reasoning as well as the tables*
+      (memoclj-k7a6):
+      - The memo needs agents.
+      - It needs as many agents reading their beliefs as the task asks.
+        memo's own analysis decides this, through a one-sample budget
+        (`memo.bounded/report`, which computes nothing). "The :samples of
+        sally's budget bound nothing" is exactly sally's choice made
+        without her beliefs.
+      - The count is an upper bound. Any agent counts, not only the one
+        the task names, and the answer need not come from that belief.
+        Checking that would need the IR to record whose query each
+        instruction is, which it does not.
+    - *Next, in beans:* memoclj-24bl's children, among them hints
+      (memoclj-uhkq), misconception detectors (memoclj-9lsq), retrieved
+      examples (memoclj-0473) and laws per task (memoclj-60s4); token SMC
+      steered by memo's checks as potentials (memoclj-iou6, a draft).
+
 ## 14. M4: the rest (planned 2026-10-31)
 
-*Planned 2026-10-31 at the owner's request (memoclj-7tc0); nothing here is
-built yet. Decided 2026-11-01 (memoclj-drj3): the owner kept every
+*Planned 2026-10-31 at the owner's request (memoclj-7tc0). The parity half
+has since been built and released as 1.1.0 (§14.7); of the research half,
+synthesis began on 2026-11-04 (§14.6). Decided 2026-11-01 (memoclj-drj3): the owner kept every
 recommendation of the parity half and of §13.12, with one exception: §14.3
 builds the trace only, and the frame comic stays not built. §14.1 is
 revised by a prototype of 2026-10-31 (memoclj-it67). M4 has two halves.*
@@ -1733,7 +1831,7 @@ revised by a prototype of 2026-10-31 (memoclj-it67). M4 has two halves.*
   minor release (§13.4), so this half ships as memo.clj 1.1.
 - *The research half* (§14.6) continues memo-clj's research program and
   reaches gen.clj's static language. Each item waits for the owner to give
-  it a purpose.
+  it a purpose (synthesis has one since 2026-11-04).
 
 ### 14.1 Cost reflection
 
@@ -2007,13 +2105,25 @@ Each item needs a purpose before it can be designed.
   paper's line). In memo.clj the parser and memo.analyze already refuse
   ill-formed programs with Python memo's messages. Certification would add
   a statement of which checks a program passed, for programs a machine
-  wrote. It waits on synthesis, or on another client that writes programs.
+  wrote. It waited on synthesis, which now exists. Synthesis's grader (its
+  tables, and the reasoning checks of §13.12) is an informal first version
+  of such a statement.
 - **Model synthesis.** memo-clj's LLM proposer turned evidence into program
-  edits, which were then certified. §10 lists it as not lifted, while §1
-  put it in M4; this plan reads §1 as "deferred". With gen.clj's `gen.llm`
-  (experimental), synthesis would be gen.clj code that proposes memo.clj
-  forms, constrained by a grammar (`gen.llm.grammar`) and scored by
-  memo.clj: a module outside the core (§13.12).
+  edits, which were then certified; §10 lists it as not lifted. This plan
+  first read §1 as "deferred", and proposed gen.clj code that writes
+  memo.clj forms, constrained by a grammar (`gen.llm.grammar`) and scored
+  by memo.clj.
+  *Given its purpose by the owner on 2026-11-04:* excellent memo.clj models
+  written with a local LLM, the clinical models in the long run. *As
+  built:* not the grammar-constrained proposer, but a REPL agent in
+  `ext/synth`, outside the core (§13.12). It builds a task's model in
+  small steps with memo's tools, and is graded on its tables and its
+  reasoning. Two designs wait as beans:
+  - token SMC steered by potentials (memoclj-iou6): syntax by a grammar,
+    epistemics by memo.analyze at each closed statement, laws on finished
+    models;
+  - a theory's sketch compiled to a skeleton of statements, with the LLM
+    filling only the holes (memoclj-24bl).
 - **The static graph.** gen.clj's static modeling language updates a trace
   incrementally. A memo inside a static gen.clj model would let an update
   skip a mind whose arguments did not change. That needs a client whose
@@ -2058,11 +2168,17 @@ Each item needs a purpose before it can be designed.
      is linear, a call site counts its callee, a host function its
      `:memo/cost`, constants count whatever the cache holds, and a
      budget's k raises the count. Three planted bugs caught.
-2. Tables as data.
-3. The trace.
-4. The host-table cache.
-5. The transpiler in `src`.
-6. An acceptance pass (§9: before each milestone closes).
+2. Tables as data (built 2026-11-01, memoclj-ps9a: `memo.core/rows`,
+   §14.2).
+3. The trace (built 2026-11-01, memoclj-joqu: `memo.core/*trace*`, §14.3).
+4. The host-table cache (built 2026-11-01, memoclj-c69h:
+   `^:memo/cache-table`, §14.4).
+5. The transpiler in `src` (built 2026-11-01, memoclj-4ylz: `memo.pygen`,
+   §14.5).
+6. An acceptance pass (§9: before each milestone closes). *Done
+   2026-11-01* (memoclj-4ahc); its findings were fixed in 7ef4042.
 7. memo.clj 1.1.0. The Handbook's Stability adds cost reflection's syntax
    and the new vars; the counts themselves are not frozen, any more than
-   error messages are. Release notes, and a tag.
+   error messages are. Release notes, and a tag. *Released:* v1.1.0 was
+   tagged on 2026-11-02 at 430aaeb (memoclj-vtfa), with the CHANGELOG's
+   [1.1.0], on gen.clj v1.0.0.

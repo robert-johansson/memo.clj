@@ -1,9 +1,9 @@
 #!/bin/bash
-# The memo REPL agent on fenrir: run-agent.sh NAME MODEL [extra -J options...].
-# CPU llama.cpp v0.7.0 (the GPU needs a reset), niced, under guard.sh. The
-# tool host is a second JVM the driver starts (memo.synth.tools).
+# The memo REPL agent on a Linux machine's CPU: run-agent.sh NAME MODEL [extra -J options...].
+# CPU llama.cpp v0.7.0, niced, under guard.sh. The tool host is a second JVM
+# the driver starts (memo.synth.tools). Run from a deployed copy of memo.clj.
 source ~/mlx/gen-clj-tools/env.sh
-cd ~/mlx/memo.clj-hint/ext/synth
+cd "$(dirname "$0")"
 L=~/mlx/gen-clj-logs/memo-synth
 NAME=$1; MODEL=$2; shift 2
 echo "== $NAME $(date) load: $(cut -d' ' -f1-3 /proc/loadavg)" > $L/$NAME.txt
