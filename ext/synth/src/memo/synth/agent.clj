@@ -3,7 +3,8 @@
   gen.llm.agent, builds a task's model in small steps with memo's tools
   (memo.synth.tools), which run in a JVM of their own (gen.codegen.process).
   Each episode is one EDN line in the output file: its stop, turns, tokens,
-  seconds, the grading of what it submitted, its program and its log.
+  seconds, the grading of what it submitted (its tables' :outcome, its
+  :reasoning: :as-asked or :shortcut), its program and its log.
 
   Properties (synth.*): model (a GGUF), out (a directory), tasks (ids,
   comma-separated; all by default), episodes (2), turns (30), turn-tokens
@@ -29,7 +30,7 @@
            :params [{:name "code" :description "One or more Clojure forms." :required? true}]}
    "table" {:description "Call a memo you defined and see its table, its axes labeled."
             :params [{:name "call" :description "One call of a memo, such as (forecast 0.8 1.0 0.5)." :required? true}]}
-   "check" {:description "Check the task's memos: their names, axes and parameters, and that their tables are finite and in [0, 1]. It does not tell you the answer."
+   "check" {:description "Check the task's memos: their names, axes and parameters, that their tables are finite and in [0, 1], and that their agents reason as the task asks (agents present, beliefs read where the task asks for an agent's belief). It does not tell you the answer."
             :params []}
    "submit" {:description "Submit the model you have defined. The episode ends."
              :params []}))
@@ -58,11 +59,29 @@
                                              (:repaired? r) (assoc :repaired? true)
                                              (contains? r :passed?) (assoc :passed? (:passed? r)))))))]))))
 
+(defn notes
+  "The note added to a turn's tool responses, turns-left after it, or nil:
+  the countdown in the last five turns; at half the turns, and at ten left,
+  the task's memos not defined yet, if any (missing, a thunk asking the
+  tool host). repl1 ran out of turns twice, once testing host functions
+  for 30 turns without a defmemo (alarm)."
+  [turns turns-left missing]
+  (let [progress (when (and (> turns-left 5) (#{(quot turns 2) 10} turns-left))
+                   (when-let [ms (seq (missing))]
+                     (str turns-left " turns left, and " (str/join " and " ms) " "
+                          (if (next ms) "are" "is") " not defined yet. Write the defmemo now and look at it "
+                          "with table; test host functions through it.")))
+        countdown (when (<= turns-left 5)
+                    (str turns-left " turn" (when (not= 1 turns-left) "s") " left: submit your model "
+                         (if (<= turns-left 2) "now." "soon.")))]
+    (or progress countdown)))
+
 (defn run-task
   "episodes of the REPL agent on task; record! takes each episode's entry."
   [m task {:keys [episodes turns turn-tokens thinking? sampling seed n-ctx]} call record!]
   (doseq [ep (range episodes)]
     (let [t0 (System/nanoTime)
+          episode (atom nil)
           submit (fn [state]
                    (when-not (:ended @state)
                      (let [r (call {:op :submit :session (:session @state)})]
@@ -71,13 +90,13 @@
           r (agent/run m {:system tasks/repl-system-prompt
                           :task (str (:prompt task) "\n\nBuild it at the REPL with the tools, and call check before you submit.")
                           :tools (tools call)
-                          :open #(atom {:session (:session (call {:op :open :task (:id task)}))})
+                          :open #(reset! episode (atom {:session (:session (call {:op :open :task (:id task)}))}))
                           :close #(when-not (:ended @%) (call {:op :close :session (:session @%)}))
                           :on-budget submit
                           :notes (fn [_ left]
-                                   (when (<= left 5)
-                                     (str left " turn" (when (not= 1 left) "s") " left: submit your model "
-                                          (if (<= left 2) "now." "soon."))))}
+                                   (notes turns left
+                                          #(when-not (:ended @@episode)
+                                             (:missing (call {:op :status :session (:session @@episode)})))))}
                        {:turns turns :turn-tokens turn-tokens :thinking? thinking? :sampling sampling
                         :context n-ctx
                         :key (rng/fold-in (rng/key seed) (+ (* 100 (mod (hash (:id task)) 100000)) ep))})
@@ -88,6 +107,7 @@
                  :turns (:turns r) :tokens (:tokens r) :seconds (:llm (:seconds r))
                  :tool-seconds (:tools (:seconds r)) :wall-seconds (seconds t0)
                  :outcome (get-in result [:grading :outcome] (if (:lost result) :lost :not-submitted))
+                 :reasoning (get-in result [:grading :reasoning])
                  :grading (:grading result) :program (:program result)
                  :tools-used (frequencies (map :tool calls))
                  :eval-kinds (frequencies (keep :kind (filter #(= "eval" (:tool %)) calls)))
@@ -98,8 +118,9 @@
                                                                                  (update :text clip 1500)))))))
                             (:log r))}]
       (record! entry)
-      (println (format "%-12s episode %d: %s, %s after %d turns, %d tokens, %.0f s; evals %s"
-                       (name (:id task)) ep (name stop) (name (:outcome entry)) (:turns r) (:tokens r)
+      (println (format "%-12s episode %d: %s, %s%s after %d turns, %d tokens, %.0f s; evals %s"
+                       (name (:id task)) ep (name stop) (name (:outcome entry))
+                       (if-let [rs (:reasoning entry)] (str " (" (name rs) ")") "") (:turns r) (:tokens r)
                        (double (:wall-seconds entry)) (:eval-kinds entry)))
       (flush))))
 

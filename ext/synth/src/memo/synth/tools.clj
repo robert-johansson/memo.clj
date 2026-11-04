@@ -9,8 +9,16 @@
                                    :read, :refused or :timeout
     :table {:session :call}     → {:text}: a memo call's table, axes labeled
     :check {:session}           → {:text :passed?}: the task's memos'
-                                   signatures and ranges, no answers
-    :submit {:session}          → {:text :grading :program}; the session closed
+                                   signatures, ranges and reasoning (agents
+                                   present, beliefs read: check/shape), no
+                                   answers
+    :submit {:session}          → {:text :grading :program}; the session
+                                   closed. The grading's :outcome is its
+                                   tables' (:correct, :wrong, ...), its
+                                   :reasoning shape's (:as-asked, :shortcut,
+                                   :unchecked)
+    :status {:session}          → {:missing}: the task's memos not defined
+                                   yet (the driver's notes; not a tool)
     :close {:session}
 
   Run it as clojure -M:host -m memo.synth.tools (the driver starts it)."
@@ -149,35 +157,63 @@
                                            (when (seq axes) " → ") (pr-str (r4 (get row k))))))
                :kind :ok})))))))
 
+(defn- shape-of
+  "check/shape's problems for each of the task's memos, {:kind :missing}
+  for one not defined (or not a memo)."
+  [s task]
+  (vec (for [[sym sig] (:signatures task)
+             :let [m (session/lookup s sym)]
+             p (if (memo/memo? m)
+                 (check/shape sym m (select-keys sig [:beliefs]))
+                 [{:kind :missing}])]
+         (assoc p :memo sym))))
+
+(defn reasoning
+  "A model's reasoning against its task's spec, from shape's problems:
+  :no-model (a memo the task asks for is missing), :shortcut (no agents, or
+  fewer agents reading beliefs than asked), :unchecked (the belief check
+  refused), or :as-asked."
+  [problems]
+  (let [kinds (set (map :kind problems))]
+    (cond (kinds :missing) :no-model
+          (some kinds [:no-agents :beliefs-unused]) :shortcut
+          (kinds :unchecked) :unchecked
+          :else :as-asked)))
+
 (defn check! [id]
   (let [{s :session task :task} (entry id)
-        lines (for [[sym {:keys [params axes shape]}] (:signatures task)
-                    :let [m (session/lookup s sym)]]
-                (cond
-                  (nil? m) (str sym ": not defined yet")
-                  (not (memo/memo? m)) (str sym ": not a memo")
-                  :else
-                  (let [mm (meta m)
-                        problems (cond-> []
-                                   (not= (mapv str params) (mapv str (:memo/params mm)))
-                                   (conj (str "its parameters are " (:memo/params mm) ", the task asks for " params))
-                                   (not= (count axes) (count (:memo/axes mm)))
-                                   (conj (str "it has " (count (:memo/axes mm)) " axes, the task asks for " (count axes)))
-                                   (and (= (count axes) (count (:memo/axes mm))) (not= shape (:memo/shape mm)))
-                                   (conj (str "its table's shape is " (:memo/shape mm) ", the task's domains give " shape)))
-                        tests (for [c (:calls task) :when (= sym (:memo c))]
-                                (let [r (check/call-memo (:ns s) sym (:args c) 60000)]
-                                  (cond (:kind r) (str "calling (" sym " " (str/join " " (:args c)) ") fails: " (:message r))
-                                        (not-every? #(Double/isFinite %) (flatten [(:value r)]))
-                                        (str "(" sym " " (str/join " " (:args c)) ") has values that are not finite")
-                                        (some #(or (< % -1e-9) (> % (+ 1 1e-9))) (flatten [(:value r)]))
-                                        (str "(" sym " " (str/join " " (:args c)) ") has values outside [0, 1]: a probability?"))))
-                        problems (into problems (remove nil? tests))]
-                    (if (empty? problems)
-                      (str sym ": signature as asked; runs at the task's test parameters; values finite and in [0, 1]")
-                      (str sym ": " (str/join "; " problems))))))]
-    {:text (str/join "\n" lines)
-     :passed? (every? #(str/includes? % "signature as asked") lines)}))
+        by-memo (group-by :memo (shape-of s task))
+        results (for [[sym {:keys [params axes shape]}] (:signatures task)
+                      :let [m (session/lookup s sym)]]
+                  (cond
+                    (nil? m) {:text (str sym ": not defined yet")}
+                    (not (memo/memo? m)) {:text (str sym ": not a memo")}
+                    :else
+                    (let [mm (meta m)
+                          problems (cond-> []
+                                     (not= (mapv str params) (mapv str (:memo/params mm)))
+                                     (conj (str "its parameters are " (:memo/params mm) ", the task asks for " params))
+                                     (not= (count axes) (count (:memo/axes mm)))
+                                     (conj (str "it has " (count (:memo/axes mm)) " axes, the task asks for " (count axes)))
+                                     (and (= (count axes) (count (:memo/axes mm))) (not= shape (:memo/shape mm)))
+                                     (conj (str "its table's shape is " (:memo/shape mm) ", the task's domains give " shape)))
+                          tests (for [c (:calls task) :when (= sym (:memo c))]
+                                  (let [r (check/call-memo (:ns s) sym (:args c) 60000)]
+                                    (cond (:kind r) (str "calling (" sym " " (str/join " " (:args c)) ") fails: " (:message r))
+                                          (not-every? #(Double/isFinite %) (flatten [(:value r)]))
+                                          (str "(" sym " " (str/join " " (:args c)) ") has values that are not finite")
+                                          (some #(or (< % -1e-9) (> % (+ 1 1e-9))) (flatten [(:value r)]))
+                                          (str "(" sym " " (str/join " " (:args c)) ") has values outside [0, 1]: a probability?"))))
+                          problems (into problems (remove nil? tests))
+                          reasons (by-memo sym)]
+                      {:passed? (and (empty? problems) (every? #(= :unchecked (:kind %)) reasons))
+                       :text (str (if (empty? problems)
+                                    (str sym ": signature as asked; runs at the task's test parameters; values finite and in [0, 1]")
+                                    (str sym ": " (str/join "; " problems)))
+                                  ;; :unchecked is the grader's (a budget memo refused), not the LLM's
+                                  (apply str (map #(str "\n" (:text %)) (remove #(= :unchecked (:kind %)) reasons))))})))]
+    {:text (str/join "\n" (map :text results))
+     :passed? (every? :passed? results)}))
 
 (defn submit! [id]
   (let [{s :session task :task} (entry id)
@@ -187,11 +223,21 @@
                           (check/close? (:value r) (:expected c) 1e-3) {:call [(:memo c) (:args c)] :outcome :correct}
                           :else {:call [(:memo c) (:args c)] :outcome :wrong :value (r4 (:value r))})))
         outcome (or (some #(when (not= :correct (:outcome %)) (:outcome %)) results) :correct)
+        shape (shape-of s task)
         program (session/program s)]
     (session/close! s)
     (swap! sessions dissoc id)
-    {:text (str "Submitted: " (name outcome)) :grading {:task (:id task) :outcome outcome :results (vec results)}
+    {:text (str "Submitted: " (name outcome))
+     :grading {:task (:id task) :outcome outcome :results (vec results)
+               :reasoning (reasoning shape) :shape (mapv #(select-keys % [:memo :kind :reading]) shape)}
      :program program}))
+
+(defn status!
+  "Which of the task's memos are not defined yet (as memos), for the
+  driver's notes: {:missing [sym ...]}."
+  [id]
+  (let [{s :session task :task} (entry id)]
+    {:missing (vec (remove #(memo/memo? (session/lookup s %)) (keys (:signatures task))))}))
 
 (defn close! [id]
   (when-let [{s :session} (@sessions id)] (session/close! s) (swap! sessions dissoc id))
@@ -205,6 +251,7 @@
                      :table (table! session call)
                      :check (check! session)
                      :submit (submit! session)
+                     :status (status! session)
                      :close (close! session))))
 
 (defn -main [& _]

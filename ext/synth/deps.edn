@@ -13,5 +13,10 @@
         gen.clj/codegen {:git/url "https://github.com/robert-johansson/gen.clj.git"
                          :git/sha "3b45c5228542a247ae32b70dc34ff549ffccd6a2"
                          :deps/root "ext/codegen"}}
- :aliases {:host {:jvm-opts ["-Xmx4g"]}
+ :aliases {;; clojure -X:test   the grader and the tools, no LLM
+           :test {:extra-paths ["test"]
+                  :jvm-opts ["-Xmx4g"]
+                  :extra-deps {io.github.cognitect-labs/test-runner {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                  :exec-fn cognitect.test-runner.api/test}
+           :host {:jvm-opts ["-Xmx4g"]}
            :driver {:jvm-opts ["--enable-native-access=ALL-UNNAMED" "-Xmx6g"]}}}

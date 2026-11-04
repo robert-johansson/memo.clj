@@ -77,13 +77,14 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
        "- eval: evaluate Clojure forms (def, defn, defenum, defmemo, or a call to see its value). Define one thing at a time and test it: call a host function on a few values before using it in a defmemo. An error comes back with memo's message and a hint: read the hint, it usually names the fix.\n"
        "- table: call a memo, e.g. (forecast 0.8 1.0 0.5), and see its table with labeled axes. A memo is called with its parameters only: its axes are not arguments, the call returns the whole table over them.\n"
        "- To see what an agent knows at a point of a model, put (alice :inspect) there in the defmemo and eval it: what it prints comes back.\n"
-       "- check: checks your memo's name, axes, parameters and that its table is finite and in range, without telling you the answer.\n"
+       "- check: checks your memo's name, axes, parameters, that its table is finite and in range, and that its agents reason as the task asks (an agent's belief is read by a query in that agent's frame, not computed outside it), without telling you the answer.\n"
        "- submit: submits the model you have defined; the episode ends. Submit when the table is right.\n"
        "Use exactly the names and signatures the task asks for. Call one tool a turn.\n\n"
        reference))
 
 (def tasks
   [{:id :coin :level 1
+    :beliefs '{coin 1}
     :prompt "A coin's bias (its probability of heads) is one of 0.1, 0.3, 0.5, 0.7 and 0.9, each equally likely a priori. Bob flips the coin once and sees heads. Define `(def Bias [0.1 0.3 0.5 0.7 0.9])` and `(defmemo coin [] [] ...)` returning Bob's expected value of the bias after seeing heads."
     :calls [{:memo 'coin :args []}]
     :reference "(def Bias [0.1 0.3 0.5 0.7 0.9])
@@ -102,6 +103,7 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
   (return (Pr (= bob.a a))))"}
 
    {:id :monty :level 2
+    :beliefs '{monty 1}
     :prompt "Monty Hall. `(def Door [0 1 2])`. A prize is behind one of the three doors, each equally likely. The contestant picks door 0. Monty knows where the prize is and opens a door that is neither the contestant's door nor the prize's, uniformly among the doors allowed. The contestant sees Monty open door 2. Define `(defmemo monty [[d Door]] [] ...)` returning the contestant's posterior probability that the prize is behind door d."
     :calls [{:memo 'monty :args []}]
     :reference "(def Door [0 1 2])
@@ -114,6 +116,7 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
   (return (as alice (Pr (= host.prize d)))))"}
 
    {:id :taste :level 2
+    :beliefs '{taste 1}
     :prompt "Inverse planning. `(defenum Taste SWEET SOUR)` and `(defenum Fruit APPLE BANANA CHERRY)`. A child has a taste, SWEET or SOUR, equally likely a priori. The utility of each fruit: for SWEET, APPLE 1, BANANA 2, CHERRY 0; for SOUR, APPLE 2, BANANA 0, CHERRY 1. The child picks a fruit with probability proportional to exp(beta * utility). An observer, who knows all this, sees which fruit the child picks. Define `(defmemo taste [[f Fruit] [t Taste]] [beta] ...)` returning the observer's posterior probability that the child's taste is t, given that the child picked f."
     :calls [{:memo 'taste :args [1.0]} {:memo 'taste :args [2.0]}]
     :reference "(defenum Taste SWEET SOUR)
@@ -128,6 +131,7 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
   (return (as obs (Pr (= kid.tt t)))))"}
 
    {:id :sally :level 2
+    :beliefs '{sally 1}
     :prompt "False belief. `(defenum Loc BASKET BOX)`. Sally puts a marble in the BASKET and leaves. While she is away, Anne moves it to the BOX with probability p (otherwise it stays). Sally does not see what Anne does, but knows that Anne moves it with probability p. When Sally returns she looks in the location she believes more likely to hold the marble (if both are equally likely, either one with probability 1/2). Define `(defmemo sally [[l Loc]] [p] ...)` returning the probability that Sally looks in l, and `(defmemo marble [[l Loc]] [p] ...)` returning the probability that the marble is in l."
     :calls [{:memo 'sally :args [0.3]} {:memo 'sally :args [0.8]} {:memo 'sally :args [0.5]}
             {:memo 'marble :args [0.3]} {:memo 'marble :args [0.8]}]
@@ -141,6 +145,7 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
   (return (Pr (= sally.look l))))"}
 
    {:id :compete :level 3
+    :beliefs '{compete 1}
     :prompt "Planning with an uncertain outcome. `(def A [0 1 2])` and `(def N [0 1 2 3])`. Bob's score is uniform over N. Alice picks a number a in A; after she picks, her own score s in N is drawn with probability proportional to exp(-(s - a - 1)^2). Alice wins if her score is strictly greater than Bob's. She picks the a that maximizes her probability of winning (ties split evenly). Define `(defmemo compete [[a A]] [] ...)` returning the probability that Alice picks a."
     :calls [{:memo 'compete :args []}]
     :reference "(def A [0 1 2])
@@ -153,6 +158,7 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
   (return (Pr (= alice.a a))))"}
 
    {:id :implicature :level 3
+    :beliefs '{listener 1}
     :prompt "Scalar implicature (the Rational Speech Acts model). `(defenum Utt NONE SOME ALL)` and `(def Count [0 1 2 3])`, the number of apples eaten, uniform a priori. NONE is true of 0; SOME is true of 1, 2 and 3; ALL is true of 3. A literal listener L0(n | u) is proportional to prior(n) if u is true of n, else 0. A speaker who knows n says u with probability S1(u | n) proportional to L0(n | u)^alpha. A pragmatic listener L1(n | u) is proportional to prior(n) * S1(u | n). Define `(defmemo listener [[u Utt] [n Count]] [alpha] ...)` returning L1(n | u)."
     :calls [{:memo 'listener :args [1.0]} {:memo 'listener :args [3.0]}]
     :reference "(defenum Utt NONE SOME ALL)
@@ -171,6 +177,7 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
   (return (Pr (= l1.n n))))"}
 
    {:id :alarm :level 3
+    :beliefs '{alarm 1}
     :prompt "A panic model. `(def Suds (vec (range 11)))` is fear from 0 to 10, `(defenum Sensation STILL RACING POUNDING)` and `(defenum Heart SOUND WEAK)`. Sam's prior probability that his heart is WEAK is p-weak. A WEAK heart feels STILL, RACING, POUNDING with probabilities 0.02, 0.13, 0.85 whatever his fear. A SOUND heart at fear level f feels a mixture: with x = insight * f / 10, the probabilities are (1 - x) * [0.80 0.15 0.05] + x * [0.05 0.25 0.70]. Sam knows his fear level and feels his heart. Define `(defmemo alarm [[felt Sensation] [fear Suds]] [p-weak insight] ...)` returning Sam's posterior probability that his heart is WEAK when it feels like felt at fear level fear."
     :calls [{:memo 'alarm :args [0.2 0.0]} {:memo 'alarm :args [0.01 1.0]} {:memo 'alarm :args [0.2 1.0]}]
     :reference "(def Suds (vec (range 11)))
@@ -191,6 +198,7 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
   (return (as sam (Pr (= heart.state Heart.WEAK)))))"}
 
    {:id :forecast :level 4
+    :beliefs '{forecast 2}
     :prompt "A second-order belief. `(defenum Act QUIET SPEAK)`, `(defenum Skill LOW HIGH)`, `(defenum Sound SILENT STEADY SHAKY)`. At a meeting Alice either stays QUIET or SPEAKs, and Bob listens. If she is quiet she sounds SILENT; if she speaks she sounds SHAKY with probability leak and STEADY otherwise. Bob judges her skill from how she sounds: his prior is P(HIGH) = p0, and in his model a person's sound has weights SILENT 1, STEADY 1 - s, SHAKY s (normalized for each skill), where s = 0.25 - 0.2 * harsh if the skill is HIGH and s = 0.4 + 0.2 * harsh if it is LOW. Alice knows this whole story but not how she will sound. Define `(defmemo forecast [[a Act]] [leak harsh p0] ...)` returning, for each act a, Alice's expectation of Bob's posterior probability that her skill is HIGH after he hears her."
     :calls [{:memo 'forecast :args [0.8 1.0 0.5]} {:memo 'forecast :args [0.2 0.0 0.7]}]
     :reference "(defenum Act QUIET SPEAK)
@@ -214,10 +222,12 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
 (defn with-expected
   "The tasks, each call with :expected from the reference solution, and
   :signatures, each memo the calls name as the reference defines it
-  ({:params :axes :shape}). An error if a reference fails: the suite is
-  wrong, not the model."
+  ({:params :axes :shape}) with the reasoning the task asks of it ({:beliefs
+  n}, check/shape's spec: :beliefs, the agents that must read their beliefs,
+  0 unless the task names it). An error if a reference fails, or departs
+  from its own spec: the suite is wrong, not the model."
   [tasks]
-  (mapv (fn [{:keys [id reference calls] :as t}]
+  (mapv (fn [{:keys [id reference calls beliefs] :as t}]
           (let [n (check/fresh-ns)
                 forms (check/read-forms reference n)
                 ev (check/evaluate n forms)]
@@ -229,7 +239,13 @@ EXAMPLE 3. carol learns the weather is not dry, and guesses the most likely weat
                                     (assoc c :expected (:value r))))
                                 calls)
                    :signatures (into {} (for [s (distinct (map :memo calls))
-                                              :let [m (meta @(ns-resolve n s))]]
-                                          [s {:params (:memo/params m) :axes (:memo/axes m)
-                                              :shape (:memo/shape m)}])))))
+                                              :let [m @(ns-resolve n s)
+                                                    spec {:beliefs (get beliefs s 0)}
+                                                    problems (check/shape s m spec)]]
+                                          (do (when (seq problems)
+                                                (throw (ex-info (str "reference of " id " fails its shape check")
+                                                                {:memo s :problems problems})))
+                                              [s (merge {:params (:memo/params (meta m)) :axes (:memo/axes (meta m))
+                                                         :shape (:memo/shape (meta m))}
+                                                        spec)]))))))
         tasks))

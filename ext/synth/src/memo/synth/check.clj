@@ -11,9 +11,13 @@
     :missing      the memo the task asks for was not defined
     :too-large    its arrays would exceed the cell limit
     :runtime      calling it threw (or timed out)
-    :wrong        it ran, but a table differs from the reference"
+    :wrong        it ran, but a table differs from the reference
+
+  shape checks the reasoning as well as the tables: agents present, and as
+  many of them reading their beliefs as the task asks (memoclj-k7a6)."
   (:require [clojure.string :as str]
             [gen.array :as array]
+            [memo.bounded :as bounded]
             [memo.core :as memo]
             [memo.errors :as err]))
 
@@ -165,6 +169,75 @@
         (if (= r ::timeout)
           (do (future-cancel f) {:kind :runtime :message (str "timed out after " timeout " ms")})
           r)))))
+
+;; -----------------------------------------------------------------------------
+;; Shape: does a model reason the way the task means, not only give its tables?
+
+(defn agents
+  "The agents of memo m and of the memos it calls, transitively."
+  [m]
+  (loop [todo [m] seen #{} acc #{}]
+    (if-let [f (peek todo)]
+      (if (seen f)
+        (recur (pop todo) seen acc)
+        (recur (into (pop todo) ((:memo.impl/callees (meta f)))) (conj seen f)
+               (into acc (:agents (:memo.impl/agents (meta f))))))
+      acc)))
+
+(defn belief-use
+  "How agent a uses its beliefs in memo m, by memo's own analysis of a's
+  budget of one sample (memo.bounded/report: nothing is computed):
+  :choice      a query about what a is uncertain of weighs a's own choice;
+  :outside     such a query is returned or read by another agent ((as a …));
+  :none        a evaluates no such query, so its choices and what it reports
+               come from values it knows ('the :samples bound nothing');
+  [:unknown s] the analysis refused the budget for another reason, s."
+  [m a]
+  (try (bounded/report m {a {:samples 1}})
+       :choice
+       (catch Throwable e
+         (let [msg (str (ex-message (or (err/root-memo-error e) e)))]
+           (cond (re-find #"bounded estimate is used outside" msg) :outside
+                 (re-find #":samples of .* bound nothing" msg) :none
+                 :else [:unknown msg])))))
+
+(defn shape
+  "The ways memo m, named sym, departs from the shape its task asks for, each
+  {:kind :text}; [] when there are none. Every memo needs agents; with
+  :beliefs n, at least n of them must read their beliefs (belief-use :choice
+  or :outside). An agent named observer is reported: memo's name for the top
+  level, where an agent's statements are the top level's own."
+  [sym m {:keys [beliefs] :or {beliefs 0}}]
+  (let [as (sort-by str (agents m))
+        uses (into (sorted-map-by #(compare (str %1) (str %2))) (map (juxt identity #(belief-use m %))) as)
+        reading (filter #(#{:choice :outside} (uses %)) as)
+        unknown (keep (fn [[a u]] (when (vector? u) [a (second u)])) uses)]
+    (cond-> []
+      (empty? as)
+      (conj {:kind :no-agents
+             :text (str sym " has no agents: its table is computed by host functions or formulas, not by "
+                        "agents choosing, thinking and observing. Model the task's agents with memo's statements.")})
+      (some #{'observer} as)
+      (conj {:kind :observer-name
+             :text (str "an agent of " sym " is named observer, memo's name for the top level: its statements "
+                        "are the top level's own. Give that agent another name (obs, say).")})
+      (and (seq as) (< (count reading) beliefs) (empty? unknown))
+      (conj {:kind :beliefs-unused
+             :text (str sym ": " (if (empty? reading)
+                                   "no agent reads its beliefs"
+                                   (str "only " (str/join ", " reading) " read" (when (= 1 (count reading)) "s")
+                                        " its beliefs; the task asks for " beliefs " agents' beliefs"))
+                        ": no query (Pr, E, EU) is evaluated in an agent's frame, so the answer is computed "
+                        "at the top level or from values the agents know, not reasoned by an agent. The task "
+                        "asks for an agent's belief: "
+                        "model what the agent is unsure of in (agent :thinks …), and read it with a query in "
+                        "the agent's frame: (Pr …) or (E …) in its choice's weights, (EU g) after (agent :wants "
+                        "g …), or (as agent (Pr …)) in the return.")
+             :reading (vec reading)})
+      (and (seq as) (< (count reading) beliefs) (seq unknown))
+      (conj {:kind :unchecked
+             :text (str "whether " sym "'s agents read their beliefs could not be checked: "
+                        (str/join "; " (map (fn [[a msg]] (str a ": " msg)) unknown)))}))))
 
 (defn close?
   [a b tol]
