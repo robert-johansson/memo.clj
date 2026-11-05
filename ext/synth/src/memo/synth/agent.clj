@@ -11,8 +11,8 @@
   ablation's arm (b): the budget submits what is defined), turn-tokens
   (1536; 8192 with thinking), thinking (false), n-ctx (32768), seed (1),
   clip (4000: the characters of a turn's reasoning kept in the log),
-  repair (indent: how the tool host treats unbalanced code; indent-show,
-  refuse; memo.synth.tools/*repair-policy*),
+  repair (refuse: how the tool host treats unbalanced code; indent-show,
+  indent, the policy before 2026-11-05; memo.synth.tools/*repair-policy*),
   host (the tool host's command). Named tasks may be held-out ones
   (tasks/heldout); by default the nine run.
 
@@ -194,7 +194,7 @@
         _ (.mkdirs out)
         results (io/file out "episodes.edn")
         ;; the tool host is a JVM of its own: the repair policy goes to it as a property
-        repair (prop "repair" "indent")
+        repair (prop "repair" "refuse")
         host (process/start (str/split (prop "host" (str "clojure -J-Dsynth.repair=" repair " -M:host -m memo.synth.tools")) #" ")
                             {:log (str (io/file out "host.log"))})
         done (done-episodes results (:seed opts))

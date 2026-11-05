@@ -39,3 +39,11 @@
           :refused (do (is (not (:repaired? r))) (is (= :read (:kind r)))
                        (is (str/includes? (:text r) "the delimiters do not balance: the ( at line"))))
         (tools/close! id)))))
+
+(deftest refuse-is-the-default
+  (is (= :refuse tools/repair-policy) "memoclj-vako's A/B: refuse, unless synth.repair says otherwise")
+  (let [{id :session} (tools/open! :coin)
+        r (tools/eval! id unbalanced)]
+    (is (= :read (:kind r)))
+    (is (not (:repaired? r)))
+    (tools/close! id)))

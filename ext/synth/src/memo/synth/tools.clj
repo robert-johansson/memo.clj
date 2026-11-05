@@ -100,6 +100,9 @@
 ;;   :indent       rebuild from the indentation (parinferish), as before
 ;;   :indent-show  the same, and the reply shows the code as it ran
 ;;   :refuse       no repair: the reply says where the delimiters break
+;; The A/B (2026-11-05): refuse at least as good as indent in both setups
+;; (next eval ok, thinking on: 6 of 18 against 2; thinking off: 4 of 74
+;; against 3), never measurably worse; the default since then.
 
 (def ^:private closer-of {\( \) \[ \] \{ \}})
 
@@ -158,9 +161,10 @@
            (throw e)))))
 
 (def repair-policy
-  "The tool host's policy for unbalanced code (synth.repair: indent, the
-  default; indent-show; refuse)."
-  (keyword (or (System/getProperty "synth.repair") "indent")))
+  "The tool host's policy for unbalanced code (synth.repair: refuse, the
+  default since memoclj-vako's A/B; indent-show; indent, the policy
+  before 2026-11-05)."
+  (keyword (or (System/getProperty "synth.repair") "refuse")))
 
 (def ^:dynamic *repair-policy* repair-policy)
 
