@@ -11,6 +11,8 @@
   ablation's arm (b): the budget submits what is defined), turn-tokens
   (1536; 8192 with thinking), thinking (false), n-ctx (32768), seed (1),
   clip (4000: the characters of a turn's reasoning kept in the log),
+  repair (indent: how the tool host treats unbalanced code; indent-show,
+  refuse; memo.synth.tools/*repair-policy*),
   host (the tool host's command). Named tasks may be held-out ones
   (tasks/heldout); by default the nine run.
 
@@ -191,12 +193,15 @@
         ts (if (seq ids) (filter #(ids (:id %)) tasks/all-tasks) tasks/tasks)
         _ (.mkdirs out)
         results (io/file out "episodes.edn")
-        host (process/start (str/split (prop "host" "clojure -M:host -m memo.synth.tools") #" ")
+        ;; the tool host is a JVM of its own: the repair policy goes to it as a property
+        repair (prop "repair" "indent")
+        host (process/start (str/split (prop "host" (str "clojure -J-Dsynth.repair=" repair " -M:host -m memo.synth.tools")) #" ")
                             {:log (str (io/file out "host.log"))})
         done (done-episodes results (:seed opts))
         ;; the llama.cpp build each episode ran on (a run resumed on another device mixes them)
         lib (System/getProperty "gen.llama.lib")
-        record! (fn [entry] (spit results (str (pr-str (assoc entry :model model :seed (:seed opts) :llama-lib lib)) "\n")
+        record! (fn [entry] (spit results (str (pr-str (assoc entry :model model :seed (:seed opts) :llama-lib lib
+                                                               :repair-policy (keyword repair))) "\n")
                                   :append true))]
     (println "tool host ready; model" model "llama.cpp" lib "tasks" (mapv :id ts) "opts" (dissoc opts :sampling))
     (when (seq done)

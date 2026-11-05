@@ -91,8 +91,82 @@
 (defn- repair [code]
   ((requiring-resolve 'parinferish.core/flatten) ((requiring-resolve 'parinferish.core/parse) code {:mode :indent})))
 
+;; -----------------------------------------------------------------------------
+;; Unbalanced delimiters (memoclj-vako). heldout1's mined half: 26 evals
+;; had their delimiters rebuilt from the indentation, and 21 of them failed
+;; (81%, against 49% of the others), mostly with frame errors: an
+;; indentation-guided repair can put a statement in the wrong mind. Which
+;; policy helps is an A/B's question, so the tool host takes one:
+;;   :indent       rebuild from the indentation (parinferish), as before
+;;   :indent-show  the same, and the reply shows the code as it ran
+;;   :refuse       no repair: the reply says where the delimiters break
+
+(def ^:private closer-of {\( \) \[ \] \{ \}})
+
+(defn delimiter-problem
+  "Where code's delimiters break, as {:kind :line :column :text}, or nil
+  when they balance. Strings, comments and character literals are
+  skipped. :kind is :unmatched (a closer that closes nothing), :mismatch
+  (a closer of the wrong kind), or :unclosed (openers still open at the
+  end; the innermost is reported, with :open, how many)."
+  [code]
+  (let [n (count code)]
+    (loop [i 0, line 1, col 1, stack []]
+      (if (>= i n)
+        (when (seq stack)
+          (let [[ch l c] (peek stack)]
+            {:kind :unclosed :open (count stack) :line l :column c
+             :text (str "the " ch " at line " l ", column " c " is never closed"
+                        (when (> (count stack) 1)
+                          (str "; " (count stack) " openers are still open at the end, the outermost "
+                               (let [[ch0 l0 c0] (first stack)] (str ch0 " at line " l0 ", column " c0)))))}))
+        (let [ch (.charAt ^String code i)
+              nl? (= ch \newline)
+              next-pos (fn [j] (if nl? [(inc line) 1] [line (inc col)]))
+              [l' c'] (next-pos i)]
+          (cond
+            (= ch \;) (let [j (or (str/index-of code "\n" i) n)] (recur j line (+ col (- j i)) stack))
+            (= ch \\) (recur (min n (+ i 2)) line (+ col 2) stack)
+            (= ch \") (let [j (loop [j (inc i)]
+                                 (cond (>= j n) n
+                                       (= (.charAt ^String code j) \\) (recur (+ j 2))
+                                       (= (.charAt ^String code j) \") (inc j)
+                                       :else (recur (inc j))))
+                             seg (subs code i (min j n))
+                             nls (count (filter #(= \newline %) seg))]
+                         (recur j (+ line nls) (if (pos? nls) (- (count seg) (str/last-index-of seg "\n")) (+ col (count seg))) stack))
+            (contains? closer-of ch) (recur (inc i) l' c' (conj stack [ch line col]))
+            (contains? (set (vals closer-of)) ch)
+            (if-let [[open l c] (peek stack)]
+              (if (= ch (closer-of open))
+                (recur (inc i) l' c' (pop stack))
+                {:kind :mismatch :line line :column col
+                 :text (str "the " ch " at line " line ", column " col " closes the " open
+                            " opened at line " l ", column " c)})
+              {:kind :unmatched :line line :column col
+               :text (str "the " ch " at line " line ", column " col " closes nothing (one closer too many)")})
+            :else (recur (inc i) l' c' stack)))))))
+
+(defn- read-with-place
+  "session/read-forms; when the delimiters do not balance, the error says
+  where (delimiter-problem)."
+  [code]
+  (try (session/read-forms code)
+       (catch Exception e
+         (if-let [{:keys [text]} (delimiter-problem code)]
+           (throw (ex-info (str "the delimiters do not balance: " text) {} e))
+           (throw e)))))
+
+(def repair-policy
+  "The tool host's policy for unbalanced code (synth.repair: indent, the
+  default; indent-show; refuse)."
+  (keyword (or (System/getProperty "synth.repair") "indent")))
+
+(def ^:dynamic *repair-policy* repair-policy)
+
 (def hooks
-  {:repair repair
+  {:read read-with-place
+   :repair repair
    :vet (fn [forms] (when-let [bad (check/unsafe forms)]
                       (str "refused: " bad " is not allowed here. "
                            (if (and (namespace bad) (re-matches #"[A-Z][\\w-]*" (namespace bad)))
@@ -112,7 +186,7 @@
         timeout? :timeout
         (re-find #"(?m)^(error: )?refused" (str text)) :refused
         (re-find #"memo error" (str text)) :memo
-        (re-find #"the code does not read|EOF while reading|Unmatched delimiter" (str text)) :read
+        (re-find #"the code does not read|EOF while reading|Unmatched delimiter|delimiters do not balance" (str text)) :read
         :else :clojure))
 
 (defn open! [task-id]
@@ -122,16 +196,28 @@
     (swap! sessions assoc id {:session s :task task})
     {:text "Session open: defmemo, defenum, defdomain, array, memo and domains are available." :session id}))
 
+(defn- hooks-for
+  "The eval hooks under a repair policy (*repair-policy*)."
+  [policy]
+  (case policy
+    :refuse (dissoc hooks :repair)
+    (:indent :indent-show) hooks
+    (throw (ex-info (str "unknown repair policy " policy ": indent, indent-show or refuse") {}))))
+
 (defn eval!
-  "code evaluated in the session; memo's warnings (printed to *err* when a
-  defmemo compiles) come back with the result."
+  "code evaluated in the session, under *repair-policy*; memo's warnings
+  (printed to *err* when a defmemo compiles) come back with the result.
+  Under :indent-show, a repaired eval's reply shows the code as it ran."
   [id code]
   (let [{s :session} (entry id)
         w (java.io.StringWriter.)
-        r (binding [*err* w] (session/eval! s code hooks))
-        warnings (str/trim (str w))]
-    {:text (str (:text r) (when (seq warnings) (str "\nmemo's warnings:\n" (clip warnings 1200))))
-     :kind (kind r) :repaired? (:repaired? r)}))
+        policy *repair-policy*
+        r (binding [*err* w] (session/eval! s code (hooks-for policy)))
+        warnings (str/trim (str w))
+        shown (when (and (:repaired? r) (= :indent-show policy))
+                (str "\nThe code as it ran, rebuilt:\n" (clip (repair code) 1500)))]
+    {:text (str (:text r) shown (when (seq warnings) (str "\nmemo's warnings:\n" (clip warnings 1200))))
+     :kind (kind r) :repaired? (:repaired? r) :repair-policy policy}))
 
 (defn table! [id call]
   (let [{s :session} (entry id)
