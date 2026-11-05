@@ -74,7 +74,8 @@
                 {:task task :n (count es) :correct (count correct)
                  :as-asked (r :as-asked 0) :shortcut (r :shortcut 0) :unchecked (r :unchecked 0)
                  :structure (when (some :structure es) (count (filter #(= :as-intended (:structure %)) correct)))
-                 :turns (median (map :turns es)) :tokens (median (map :tokens es))
+                 ;; a failed episode (cut in its thinking) has no token count
+                 :turns (median (keep :turns es)) :tokens (median (keep :tokens es))
                  :seconds (median (keep #(some-> (:wall-seconds %) double) es))}))
         groups (group-by :task entries)]
     (conj (vec (for [t (map :id tasks/all-tasks) :when (groups t)] (row t (groups t))))
