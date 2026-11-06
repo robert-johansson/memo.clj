@@ -13,8 +13,33 @@ dependency: a release is a tag, taken as `{:git/url … :git/tag "v1.1.0"
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-06
+
+On gen.clj 1.2.0: memo.clj 1.2 goes with gen.clj 1.2. Two error hints.
+memo.clj changes nothing 1.0 froze, but a memo's results are gen.array
+arrays, so gen.clj's changes to arrays since 1.0 reach memo.clj's users
+(below).
+
 ### Changed
 
+- **gen.clj 1.2.0, from 1.0.0** (memo.clj never pinned 1.1). What reaches
+  a memo's results:
+  - `get`, `nth` and `count` on an array throw (`:not-a-collection`),
+    where `get` answered nil (gen.clj 1.2, Breaking there). Read a result
+    with `gen.array/->clj` (numbers and nested vectors), `gen.array/item`
+    (one element) or `memo.core/rows`.
+  - `=` on a 0-d MLX array and a host number throws, where it answered
+    false (gen.clj 1.1): compare a memo's scalar result on MLX with
+    `array/==`, or read it with `->clj` first.
+  - An array prints as `#gen/array {:dtype …, :shape […], :data […]}`,
+    which reads back (gen.clj 1.1).
+  - MLX's native libraries are MLX 0.32.4 with mlx-c 0.8.0: rebuild
+    gen.clj's (`native/build-mlx.sh`, then `clojure -T:build java`);
+    gen.clj checks their versions at load.
+  - A project that depends on gen.clj directly as well (GenGDT, say) pins
+    gen.clj 1.2.0 too: its own pin silently wins over memo.clj's.
+  - The rest of gen.clj's changes (generative functions, inference, the
+    LLM layers) are in its CHANGELOG.
 - "Observation of unknown choice" has a hint that names the fix when the
   value observed is an enum member (`(bob :observes alice.c :is
   Coin.TAILS)`, which memo reads as agent `Coin`'s choice `TAILS`) or a

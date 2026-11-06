@@ -54,7 +54,9 @@ final since Java 22). Depend on it from a `deps.edn`:
                            :git/sha "430aaebe0c744c75e1129d0adc13f35c52077fef"}}}
 ```
 
-memo.clj pins its gen.clj. After the first download, run
+memo.clj pins its gen.clj, and memo.clj 1.2 goes with gen.clj 1.2. A
+project that depends on gen.clj directly as well pins the same gen.clj:
+its own pin silently wins over memo.clj's. After the first download, run
 `clojure -X:deps prep` once: gen.clj compiles its Java binding. Then load a
 file of models with `clojure -M -i models.clj`, or work at a REPL (`clj`).
 Models run on the JVM backend by default. MLX (Metal, or MLX's CPU) needs

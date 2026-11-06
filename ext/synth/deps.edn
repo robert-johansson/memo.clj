@@ -1,17 +1,19 @@
 ;; memo.synth: an LLM writing memo.clj models (memoclj-pcw0), a module
 ;; outside memo.clj's core (DESIGN §13.12: memo.clj has no LLM API and does
-;; not depend on gen.llm). gen.clj at the commit with codegen as a library
-;; (genclj-uw7w) and :each? (genclj-rman): gen.llm.sample, chat and agent from its core, and
-;; ext/codegen's session and process.
+;; not depend on gen.llm). gen.clj at its 1.2 release, as memo.clj: gen.llm.sample, chat
+;; (Qwen3.8's template too) and agent from its core, and ext/codegen's session and process.
+;; llama.cpp v0.9.0: runs need gen.clj 1.2's native build (memoclj-670y).
 ;;
 ;;   clojure -M:host -m memo.synth.tools     the tool host (the driver starts it)
 ;;   clojure -J-Dgen.llama.lib=… -J-Dsynth.model=… -M:driver -m memo.synth.agent
 {:paths ["src"]
  :deps {memo.clj/memo.clj {:local/root "../.."}
         gen.clj/gen.clj {:git/url "https://github.com/robert-johansson/gen.clj.git"
-                         :git/sha "3b45c5228542a247ae32b70dc34ff549ffccd6a2"}
+                         :git/tag "v1.2.0"
+                         :git/sha "c0fc80c7e653a2a3b0ec199dbdc2f6bc1cfd0bd6"}
         gen.clj/codegen {:git/url "https://github.com/robert-johansson/gen.clj.git"
-                         :git/sha "3b45c5228542a247ae32b70dc34ff549ffccd6a2"
+                         :git/tag "v1.2.0"
+                         :git/sha "c0fc80c7e653a2a3b0ec199dbdc2f6bc1cfd0bd6"
                          :deps/root "ext/codegen"}}
  :aliases {;; clojure -X:test   the grader and the tools, no LLM
            :test {:extra-paths ["test"]

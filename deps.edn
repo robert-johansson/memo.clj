@@ -1,12 +1,13 @@
 {:paths ["src"]
 
  :deps {org.clojure/clojure {:mvn/version "1.12.6"}
-        ;; gen.clj pinned to its 1.0 release. GenGDT depends on both projects
+        ;; gen.clj pinned to its 1.2 release (memo.clj 1.2 goes with gen.clj
+        ;; 1.2). GenGDT depends on both projects
         ;; and its own gen.clj pin wins, so a GenGDT that takes this commit
         ;; must pin the same gen.clj. :dev uses the working copy.
         gen.clj/gen.clj {:git/url "https://github.com/robert-johansson/gen.clj.git"
-                         :git/tag "v1.0.0"
-                         :git/sha "39b65bfef7093c97dff26c25c1a1f47192842a12"}}
+                         :git/tag "v1.2.0"
+                         :git/sha "c0fc80c7e653a2a3b0ec199dbdc2f6bc1cfd0bd6"}}
 
  :aliases
  {;; clojure -X:test          every test
@@ -20,8 +21,8 @@
                       ;; gen.clj's laws, a module of its repository at the same release as
                       ;; the gen.clj pinned above (which wins over the one it brings)
                       gen.clj/laws {:git/url "https://github.com/robert-johansson/gen.clj.git"
-                                    :git/tag "v1.0.0"
-                                    :git/sha "39b65bfef7093c97dff26c25c1a1f47192842a12"
+                                    :git/tag "v1.2.0"
+                                    :git/sha "c0fc80c7e653a2a3b0ec199dbdc2f6bc1cfd0bd6"
                                     :deps/root "ext/laws"}}
          :exec-fn cognitect.test-runner.api/test}
   :fast {:exec-args {:excludes [:slow]}}

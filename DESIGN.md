@@ -10,8 +10,9 @@ made while building M1 (§2.4, §5, §8); and §13.7 and §13.10. Everything
 marked (proposed) still awaits confirmation.*
 
 *Where it stands, 2026-11-04: M1, M2 and M3 are built, and so is M4's
-parity half. Released as 1.0.0 (tagged 2026-10-26), 1.0.1 (2026-11-01) and
-1.1.0 (2026-11-02). The research half has begun with
+parity half. Released as 1.0.0 (tagged 2026-10-26), 1.0.1 (2026-11-01),
+1.1.0 (2026-11-02) and 1.2.0 (2026-11-06, on gen.clj 1.2.0, the two
+released together). The research half has begun with
 synthesis, which lives outside the core (§13.12, §14.6). Where a (proposed)
 remains in the text, its section records the later decision; the open
 questions are in §13.*
