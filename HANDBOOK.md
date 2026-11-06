@@ -50,8 +50,8 @@ final since Java 22). Depend on it from a `deps.edn`:
 
 ```text
 {:deps {memo.clj/memo.clj {:git/url "https://github.com/robert-johansson/memo.clj.git"
-                           :git/tag "v1.1.0"
-                           :git/sha "430aaebe0c744c75e1129d0adc13f35c52077fef"}}}
+                           :git/tag "v1.2.0"
+                           :git/sha "e2f736d773ee2c4629e622a947d2b059429f00c7"}}}
 ```
 
 memo.clj pins its gen.clj, and memo.clj 1.2 goes with gen.clj 1.2. A
